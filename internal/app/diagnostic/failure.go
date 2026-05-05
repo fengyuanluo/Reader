@@ -1,0 +1,191 @@
+package diagnosticapp
+
+import (
+	"context"
+	"errors"
+	"strings"
+
+	bookapp "reader/internal/app/book"
+	contentapp "reader/internal/app/content"
+	"reader/internal/domain/fetch"
+)
+
+const (
+	FailureTimeout         = "timeout"
+	FailureJSFailed        = "js_failed"
+	FailureWebsiteFailed   = "website_failed"
+	FailureSearchFailed    = "search_failed"
+	FailureDiscoveryFailed = "discovery_failed"
+	FailureTocFailed       = "toc_failed"
+	FailureContentFailed   = "content_failed"
+)
+
+const (
+	FailureClassUnknown                    = "implementation_or_rule_failed"
+	FailureClassSecurityPolicyBlocked      = "security_policy_blocked"
+	FailureClassSourceAuthorizationFailed  = "source_authorization_failed"
+	FailureClassNetworkDNSFailure          = "network_dns_failure"
+	FailureClassNetworkTLSInvalid          = "network_tls_invalid"
+	FailureClassNetworkTimeout             = "network_timeout"
+	FailureClassNetworkConnectionReset     = "network_connection_reset"
+	FailureClassSourceUpstreamHTTP400      = "source_upstream_http_400"
+	FailureClassSourceUpstreamHTTP401      = "source_upstream_http_401"
+	FailureClassSourceUpstreamHTTP403      = "source_upstream_http_403"
+	FailureClassSourceUpstreamHTTP404      = "source_upstream_http_404"
+	FailureClassSourceUpstreamHTTP500      = "source_upstream_http_500"
+	FailureClassSourceUpstreamEmptyJSON    = "source_upstream_empty_json_response"
+	FailureClassSourceUpstreamNonJSON      = "source_upstream_non_json_response"
+	FailureClassSourceRuleScriptSyntax     = "source_rule_script_syntax_error"
+	FailureClassSourceRuleScriptFailed     = "source_rule_script_failed"
+	FailureClassSourceUnsupportedRule      = "source_unsupported_rule_feature"
+	FailureClassSourceSearchEmptyResult    = "source_search_empty_result"
+	FailureClassSourceDiscoveryEmptyResult = "source_discovery_empty_result"
+	FailureClassSourceTocEmpty             = "source_toc_empty"
+	FailureClassSourceContentEmpty         = "source_content_empty"
+)
+
+type FailureDetails struct {
+	Code    string
+	Class   string
+	Message string
+}
+
+func ClassifyFailure(err error, fallbackCode string) FailureDetails {
+	details := FailureDetails{
+		Code:  "",
+		Class: FailureClassUnknown,
+	}
+	if err == nil {
+		details.Code = fallbackOrWebsiteFailed(fallbackCode)
+		return details
+	}
+
+	message := strings.TrimSpace(err.Error())
+	details.Message = message
+
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		details.Code = FailureTimeout
+		details.Class = FailureClassNetworkTimeout
+		return details
+	case errors.Is(err, fetch.ErrBlocked):
+		details.Class = FailureClassSecurityPolicyBlocked
+		if details.Code == "" {
+			details.Code = FailureWebsiteFailed
+		}
+		return details
+	case errors.Is(err, bookapp.ErrTocEmpty):
+		details.Code = FailureTocFailed
+		details.Class = FailureClassSourceTocEmpty
+		return details
+	case errors.Is(err, contentapp.ErrContentEmpty):
+		details.Code = FailureContentFailed
+		details.Class = FailureClassSourceContentEmpty
+		return details
+	}
+
+	lower := strings.ToLower(message)
+	classifiedCode := ClassifyFailureCodeFromMessage(lower)
+	details.Code = chooseFailureCode(classifiedCode, fallbackCode)
+	details.Class = ClassifyFailureClassFromMessage(message, lower, details.Code)
+	if details.Code == "" {
+		details.Code = FailureWebsiteFailed
+	}
+	return details
+}
+
+func chooseFailureCode(classifiedCode string, fallbackCode string) string {
+	switch {
+	case classifiedCode != "" && classifiedCode != FailureWebsiteFailed:
+		return classifiedCode
+	case fallbackCode != "":
+		return fallbackCode
+	case classifiedCode != "":
+		return classifiedCode
+	default:
+		return FailureWebsiteFailed
+	}
+}
+
+func fallbackOrWebsiteFailed(fallbackCode string) string {
+	if fallbackCode != "" {
+		return fallbackCode
+	}
+	return FailureWebsiteFailed
+}
+
+func ClassifyFailureCodeFromMessage(lower string) string {
+	switch {
+	case strings.Contains(lower, "script_failed"),
+		strings.Contains(lower, "script_timeout"),
+		strings.Contains(lower, "syntaxerror"),
+		strings.Contains(lower, "referenceerror"),
+		strings.Contains(lower, "typeerror"):
+		return FailureJSFailed
+	case strings.HasPrefix(lower, "empty search result"):
+		return FailureSearchFailed
+	case strings.HasPrefix(lower, "empty discovery result"):
+		return FailureDiscoveryFailed
+	case strings.Contains(lower, "empty toc"), lower == "toc_empty":
+		return FailureTocFailed
+	case strings.Contains(lower, "empty content"), lower == "content_empty":
+		return FailureContentFailed
+	case strings.Contains(lower, "context deadline exceeded"),
+		strings.Contains(lower, "i/o timeout"),
+		strings.Contains(lower, "client.timeout exceeded while awaiting headers"):
+		return FailureTimeout
+	default:
+		return FailureWebsiteFailed
+	}
+}
+
+func ClassifyFailureClassFromMessage(message string, lower string, code string) string {
+	switch {
+	case strings.Contains(message, "认证失败") || strings.Contains(message, `"code":4005`) || strings.Contains(lower, "unexpected status: 401"):
+		return FailureClassSourceAuthorizationFailed
+	case strings.Contains(lower, "fetch blocked"):
+		return FailureClassSecurityPolicyBlocked
+	case strings.Contains(lower, "no such host") || strings.Contains(lower, "server misbehaving"):
+		return FailureClassNetworkDNSFailure
+	case strings.Contains(lower, "tls: failed to verify certificate") || strings.Contains(lower, "x509:"):
+		return FailureClassNetworkTLSInvalid
+	case strings.Contains(lower, "context deadline exceeded") || strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "client.timeout exceeded while awaiting headers"):
+		return FailureClassNetworkTimeout
+	case strings.Contains(lower, "connection reset by peer"):
+		return FailureClassNetworkConnectionReset
+	case strings.Contains(lower, "unexpected status: 400"):
+		return FailureClassSourceUpstreamHTTP400
+	case strings.Contains(lower, "unexpected status: 401"):
+		return FailureClassSourceUpstreamHTTP401
+	case strings.Contains(lower, "unexpected status: 403"):
+		return FailureClassSourceUpstreamHTTP403
+	case strings.Contains(lower, "unexpected status: 404"):
+		return FailureClassSourceUpstreamHTTP404
+	case strings.Contains(lower, "unexpected status: 500"):
+		return FailureClassSourceUpstreamHTTP500
+	case strings.Contains(lower, "unexpected end of json input"):
+		return FailureClassSourceUpstreamEmptyJSON
+	case strings.Contains(lower, "invalid character") && strings.Contains(lower, "looking for beginning of value at parse"):
+		return FailureClassSourceUpstreamNonJSON
+	case strings.Contains(lower, "script_failed:") && strings.Contains(lower, "syntaxerror"):
+		return FailureClassSourceRuleScriptSyntax
+	case strings.Contains(lower, "script_failed:"):
+		return FailureClassSourceRuleScriptFailed
+	case strings.Contains(lower, "unsupported url option") ||
+		strings.Contains(lower, "unsupported browser flow") ||
+		strings.Contains(lower, "unsupported_rule_feature"):
+		return FailureClassSourceUnsupportedRule
+	case code == FailureSearchFailed:
+		return FailureClassSourceSearchEmptyResult
+	case code == FailureDiscoveryFailed:
+		return FailureClassSourceDiscoveryEmptyResult
+	case code == FailureTocFailed:
+		return FailureClassSourceTocEmpty
+	case code == FailureContentFailed:
+		return FailureClassSourceContentEmpty
+	case code == FailureJSFailed:
+		return FailureClassSourceRuleScriptFailed
+	default:
+		return FailureClassUnknown
+	}
+}
