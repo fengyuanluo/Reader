@@ -1,0 +1,17 @@
+{
+  "payload": {
+    "sourceId": "src_minimal",
+    "bookSourceUrl": "https://example.test",
+    "bookSourceName": "Example Source",
+    "bookSourceType": 0,
+    "customOrder": 0,
+    "enabled": true,
+    "enabledExplore": true,
+    "enabledCookieJar": true,
+    "lastUpdateTime": 0
+  },
+  "options": {
+    "updatePolicy": "lastUpdateTime"
+  }
+}
+

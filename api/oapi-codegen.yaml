@@ -1,0 +1,8 @@
+package: generated
+generate:
+  chi-server: true
+  models: true
+  embedded-spec: true
+output: internal/api/generated/server.gen.go
+output-options:
+  skip-prune: true

@@ -1,0 +1,2286 @@
+openapi: 3.0.3
+info:
+  title: Reader API
+  version: 0.0.1
+  description: OpenAPI-first API for the Reader Go Web service.
+servers:
+  - url: /api/v1
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags:
+        - system
+      summary: Check service health.
+      responses:
+        "200":
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /version:
+    get:
+      operationId: getVersion
+      tags:
+        - system
+      summary: Get service version.
+      responses:
+        "200":
+          description: Service version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /openapi.yaml:
+    get:
+      operationId: getOpenAPI
+      tags:
+        - system
+      summary: Download the OpenAPI document.
+      responses:
+        "200":
+          description: OpenAPI document.
+          content:
+            application/yaml:
+              schema:
+                type: string
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /book-sources:
+    get:
+      operationId: listBookSources
+      tags:
+        - bookSources
+      summary: List book sources.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: keyword
+          in: query
+          schema:
+            type: string
+          description: Matches source name, group, URL, or comment.
+        - name: group
+          in: query
+          schema:
+            type: string
+        - name: enabled
+          in: query
+          schema:
+            type: boolean
+        - name: enabledExplore
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Book source page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookSourceListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createBookSource
+      tags:
+        - bookSources
+      summary: Create a book source.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookSource"
+            examples:
+              minimal:
+                $ref: "#/components/examples/MinimalBookSource"
+              complete:
+                $ref: "#/components/examples/CompleteBookSource"
+      responses:
+        "201":
+          description: Created book source.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /book-sources/import:
+    post:
+      operationId: importBookSources
+      tags:
+        - bookSources
+      summary: Import Legado-compatible book source JSON.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportBookSourcesRequest"
+            examples:
+              single:
+                $ref: "#/components/examples/ImportSingleBookSource"
+              array:
+                $ref: "#/components/examples/ImportBookSourceArray"
+              remote:
+                $ref: "#/components/examples/ImportRemoteBookSourceURL"
+              aggregate:
+                $ref: "#/components/examples/ImportSourceUrlsAggregate"
+      responses:
+        "200":
+          description: Import completed with itemized result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportBookSourcesResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /book-sources/{sourceId}:
+    get:
+      operationId: getBookSource
+      tags:
+        - bookSources
+      summary: Get one book source.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourceId"
+      responses:
+        "200":
+          description: Book source.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookSource"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: updateBookSource
+      tags:
+        - bookSources
+      summary: Update one book source.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookSource"
+      responses:
+        "200":
+          description: Updated book source.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteBookSource
+      tags:
+        - bookSources
+      summary: Delete one book source.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourceId"
+      responses:
+        "204":
+          description: Book source deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /book-sources/{sourceId}/enabled:
+    patch:
+      operationId: updateBookSourceEnabled
+      tags:
+        - bookSources
+      summary: Enable or disable one book source for search.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnabledUpdate"
+      responses:
+        "200":
+          description: Updated source summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookSourceSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /book-sources/{sourceId}/explore-enabled:
+    patch:
+      operationId: updateBookSourceExploreEnabled
+      tags:
+        - bookSources
+      summary: Enable or disable one book source for discovery.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnabledUpdate"
+      responses:
+        "200":
+          description: Updated source summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookSourceSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /book-sources/reorder:
+    patch:
+      operationId: reorderBookSources
+      tags:
+        - bookSources
+      summary: Reorder book sources.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookSourceReorderRequest"
+      responses:
+        "200":
+          description: Reordered sources.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookSourceListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /search:
+    post:
+      operationId: searchBooks
+      tags:
+        - webBook
+      summary: Search books across one or more enabled sources.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+            examples:
+              singleSource:
+                $ref: "#/components/examples/SearchSingleSource"
+              multiSource:
+                $ref: "#/components/examples/SearchMultiSource"
+      responses:
+        "200":
+          description: Search results and source warnings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /discovery:
+    post:
+      operationId: discoverBooks
+      tags:
+        - webBook
+      summary: Fetch discovery results from enabled discovery sources.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DiscoveryRequest"
+      responses:
+        "200":
+          description: Discovery results and source warnings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /books:
+    get:
+      operationId: listBooks
+      tags:
+        - books
+      summary: List bookshelf books.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Book list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createBook
+      tags:
+        - books
+      summary: Save a book to bookshelf.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Book"
+            examples:
+              fromSearch:
+                $ref: "#/components/examples/BookFromSearch"
+      responses:
+        "201":
+          description: Saved book.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /books/{bookId}:
+    get:
+      operationId: getBook
+      tags:
+        - books
+      summary: Get a book by ID.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: bookId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Book record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteBook
+      tags:
+        - books
+      summary: Delete a book.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: bookId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Book deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /books/{bookId}/refresh-info:
+    post:
+      operationId: refreshBookInfo
+      tags:
+        - books
+      summary: Refresh book information from source.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: bookId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Refreshed book.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /books/{bookId}/refresh-toc:
+    post:
+      operationId: refreshBookToc
+      tags:
+        - books
+      summary: Refresh chapter list from source.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: bookId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Refreshed chapters.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChapterListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /books/{bookId}/chapters:
+    get:
+      operationId: listBookChapters
+      tags:
+        - books
+      summary: List chapter metadata for a book.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: bookId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Chapter list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChapterListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /books/{bookId}/chapters/{index}/content:
+    get:
+      operationId: getBookChapterContent
+      tags:
+        - books
+      summary: Get a chapter content.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: bookId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: index
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Chapter content.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChapterContentResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /books/{bookId}/progress:
+    put:
+      operationId: updateBookProgress
+      tags:
+        - books
+      summary: Save reading progress.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: bookId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookProgress"
+      responses:
+        "200":
+          description: Progress updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /images/proxy:
+    get:
+      operationId: proxyImage
+      tags:
+        - books
+      summary: Proxy a cover or chapter image through the Reader fetcher.
+      description: Fetches an image URL with the same timeout, redirect, response-size and SSRF policy used by normal source fetching.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Absolute image URL to fetch.
+        - name: bookId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional bookshelf book id for future book-scoped image caching.
+        - name: sourceId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional source id used to resolve image decode context.
+        - name: decodeMode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - cover
+              - content
+          description: Optional decode mode. `cover` uses `coverDecodeJs`; `content` uses `ruleContent.imageDecode`.
+      responses:
+        "200":
+          description: Proxied image bytes.
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+            image/gif:
+              schema:
+                type: string
+                format: binary
+            image/svg+xml:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          description: Image fetch failed or was blocked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /replace-rules:
+    get:
+      operationId: listReplaceRules
+      tags:
+        - replaceRules
+      summary: List replace rules.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Replace rules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplaceRuleListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createReplaceRule
+      tags:
+        - replaceRules
+      summary: Create replace rule.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceRule"
+            examples:
+              plain:
+                $ref: "#/components/examples/PlainReplaceRule"
+              regex:
+                $ref: "#/components/examples/RegexReplaceRule"
+      responses:
+        "201":
+          description: Created replace rule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplaceRule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /replace-rules/{ruleId}:
+    put:
+      operationId: updateReplaceRule
+      tags:
+        - replaceRules
+      summary: Update replace rule.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: ruleId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceRule"
+      responses:
+        "200":
+          description: Updated replace rule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplaceRule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteReplaceRule
+      tags:
+        - replaceRules
+      summary: Delete replace rule.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: ruleId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "204":
+          description: Replace rule deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /replace-rules/test:
+    post:
+      operationId: testReplaceRule
+      tags:
+        - replaceRules
+      summary: Test a replace rule against text.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceRuleTestRequest"
+      responses:
+        "200":
+          description: Replacement result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplaceRuleTestResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /debug/book-source:
+    post:
+      operationId: createDebugSession
+      tags:
+        - debug
+      summary: Create a book source debug session.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DebugSessionCreateRequest"
+            examples:
+              keyword:
+                $ref: "#/components/examples/KeywordDebugSession"
+      responses:
+        "202":
+          description: Debug session accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DebugSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /debug/sessions/{sessionId}:
+    get:
+      operationId: getDebugSession
+      tags:
+        - debug
+      summary: Get debug session state.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Debug session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DebugSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: cancelDebugSession
+      tags:
+        - debug
+      summary: Cancel debug session.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Debug session cancellation requested.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DebugSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /debug/sessions/{sessionId}/events:
+    get:
+      operationId: streamDebugSessionEvents
+      tags:
+        - debug
+      summary: Stream debug session events as server-sent events.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Server-sent debug events.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /check/book-sources:
+    post:
+      operationId: createBookSourceCheckTask
+      tags:
+        - check
+      summary: Start an asynchronous book source check task.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckTaskCreateRequest"
+      responses:
+        "202":
+          description: Check task accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckTask"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /check/tasks/{taskId}:
+    get:
+      operationId: getCheckTask
+      tags:
+        - check
+      summary: Get check task state.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Check task.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckTask"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: cancelCheckTask
+      tags:
+        - check
+      summary: Cancel check task.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Check task cancellation requested.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckTask"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /check/tasks/{taskId}/events:
+    get:
+      operationId: streamCheckTaskEvents
+      tags:
+        - check
+      summary: Stream check task events as server-sent events.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Server-sent check events.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+components:
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: pageSize
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    SourceId:
+      name: sourceId
+      in: path
+      required: true
+      schema:
+        type: string
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  responses:
+    BadRequest:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: validation_failed
+            message: request body is invalid
+            details:
+              field: bookSourceUrl
+            traceId: trace-example
+    Unauthorized:
+      description: Bearer token is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: auth_required
+            message: missing bearer token
+            details: {}
+            traceId: trace-example
+    NotFound:
+      description: Requested resource was not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: source_not_found
+            message: book source was not found
+            details:
+              sourceId: src_123
+            traceId: trace-example
+    InternalError:
+      description: Internal server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: internal_error
+            message: internal server error
+            details: {}
+            traceId: trace-example
+  schemas:
+    Error:
+      type: object
+      required:
+        - code
+        - message
+        - traceId
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        traceId:
+          type: string
+    Trace:
+      type: object
+      required:
+        - traceId
+      properties:
+        traceId:
+          type: string
+    PageMeta:
+      type: object
+      required:
+        - page
+        - pageSize
+        - total
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          minimum: 1
+        total:
+          type: integer
+          minimum: 0
+    TaskStatus:
+      type: string
+      enum:
+        - pending
+        - running
+        - succeeded
+        - failed
+        - cancelled
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+    VersionResponse:
+      type: object
+      required:
+        - version
+      properties:
+        version:
+          type: string
+    RuleObject:
+      type: object
+      additionalProperties: true
+      description: Legado-compatible rule object. Unknown fields are preserved.
+    BookSourceSummary:
+      type: object
+      required:
+        - sourceId
+        - bookSourceUrl
+        - bookSourceName
+        - bookSourceType
+        - customOrder
+        - enabled
+        - enabledExplore
+      properties:
+        sourceId:
+          type: string
+        bookSourceUrl:
+          type: string
+        bookSourceName:
+          type: string
+        bookSourceGroup:
+          type: string
+          nullable: true
+        bookSourceType:
+          type: integer
+        customOrder:
+          type: integer
+        enabled:
+          type: boolean
+        enabledExplore:
+          type: boolean
+        respondTime:
+          type: integer
+          format: int64
+        weight:
+          type: integer
+    BookSource:
+      allOf:
+        - $ref: "#/components/schemas/BookSourceSummary"
+        - type: object
+          required:
+            - enabledCookieJar
+            - lastUpdateTime
+          properties:
+            bookUrlPattern:
+              type: string
+              nullable: true
+            jsLib:
+              type: string
+              nullable: true
+            enabledCookieJar:
+              type: boolean
+            concurrentRate:
+              type: string
+              nullable: true
+            header:
+              type: string
+              nullable: true
+            loginUrl:
+              type: string
+              nullable: true
+            loginUi:
+              type: string
+              nullable: true
+            loginCheckJs:
+              type: string
+              nullable: true
+            coverDecodeJs:
+              type: string
+              nullable: true
+            bookSourceComment:
+              type: string
+              nullable: true
+            variableComment:
+              type: string
+              nullable: true
+            lastUpdateTime:
+              type: integer
+              format: int64
+            exploreUrl:
+              type: string
+              nullable: true
+            exploreScreen:
+              type: string
+              nullable: true
+            ruleExplore:
+              $ref: "#/components/schemas/RuleObject"
+            searchUrl:
+              type: string
+              nullable: true
+            ruleSearch:
+              $ref: "#/components/schemas/RuleObject"
+            ruleBookInfo:
+              $ref: "#/components/schemas/RuleObject"
+            ruleToc:
+              $ref: "#/components/schemas/RuleObject"
+            ruleContent:
+              $ref: "#/components/schemas/RuleObject"
+            ruleReview:
+              nullable: true
+              oneOf:
+                - $ref: "#/components/schemas/RuleObject"
+                - type: string
+    BookSourceListResponse:
+      type: object
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookSourceSummary"
+        meta:
+          $ref: "#/components/schemas/PageMeta"
+    EnabledUpdate:
+      type: object
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+    BookSourceOrder:
+      type: object
+      required:
+        - sourceId
+        - customOrder
+      properties:
+        sourceId:
+          type: string
+        customOrder:
+          type: integer
+    BookSourceReorderRequest:
+      type: object
+      required:
+        - orders
+      properties:
+        orders:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/BookSourceOrder"
+    ImportBookSourcesRequest:
+      type: object
+      properties:
+        payload:
+          description: Single BookSource object, BookSource array, or sourceUrls aggregate document.
+          oneOf:
+            - $ref: "#/components/schemas/BookSource"
+            - type: array
+              items:
+                $ref: "#/components/schemas/BookSource"
+            - $ref: "#/components/schemas/SourceUrlsDocument"
+        remoteUrl:
+          type: string
+          description: Remote http/https URL that returns a Legado book source array. May end with #requestWithoutUA.
+        options:
+          $ref: "#/components/schemas/ImportOptions"
+      oneOf:
+        - required:
+            - payload
+        - required:
+            - remoteUrl
+    SourceUrlsDocument:
+      type: object
+      required:
+        - sourceUrls
+      properties:
+        sourceUrls:
+          type: array
+          minItems: 1
+          items:
+            type: string
+    ImportOptions:
+      type: object
+      properties:
+        keepExistingName:
+          type: boolean
+          default: false
+        keepExistingGroup:
+          type: boolean
+          default: false
+        keepExistingEnabled:
+          type: boolean
+          default: false
+        groupMode:
+          type: string
+          enum:
+            - replace
+            - append
+          default: replace
+        groupName:
+          type: string
+        updatePolicy:
+          type: string
+          enum:
+            - lastUpdateTime
+            - always
+            - skipExisting
+          default: lastUpdateTime
+    ImportBookSourcesResult:
+      type: object
+      required:
+        - added
+        - updated
+        - skipped
+        - failed
+        - items
+      properties:
+        added:
+          type: integer
+          minimum: 0
+        updated:
+          type: integer
+          minimum: 0
+        skipped:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImportBookSourceItemResult"
+        remoteErrors:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImportRemoteError"
+    ImportBookSourceItemResult:
+      type: object
+      required:
+        - status
+      properties:
+        sourceId:
+          type: string
+        bookSourceUrl:
+          type: string
+        bookSourceName:
+          type: string
+        status:
+          type: string
+          enum:
+            - added
+            - updated
+            - skipped
+            - failed
+        error:
+          $ref: "#/components/schemas/Error"
+    ImportRemoteError:
+      type: object
+      required:
+        - url
+        - error
+      properties:
+        url:
+          type: string
+        error:
+          $ref: "#/components/schemas/Error"
+    SearchBook:
+      type: object
+      required:
+        - bookUrl
+        - origin
+        - originName
+        - type
+        - name
+        - author
+        - originOrder
+        - origins
+      properties:
+        bookUrl:
+          type: string
+        origin:
+          type: string
+        originName:
+          type: string
+        type:
+          type: integer
+        name:
+          type: string
+        author:
+          type: string
+        kind:
+          type: string
+          nullable: true
+        coverUrl:
+          type: string
+          nullable: true
+        intro:
+          type: string
+          nullable: true
+        wordCount:
+          type: string
+          nullable: true
+        latestChapterTitle:
+          type: string
+          nullable: true
+        tocUrl:
+          type: string
+        time:
+          type: integer
+          format: int64
+        variable:
+          type: string
+          nullable: true
+        originOrder:
+          type: integer
+        chapterWordCountText:
+          type: string
+          nullable: true
+        chapterWordCount:
+          type: integer
+        respondTime:
+          type: integer
+        origins:
+          type: array
+          items:
+            type: string
+          description: All source URLs merged into this result by name and author.
+    SearchRequest:
+      type: object
+      required:
+        - keyword
+      properties:
+        keyword:
+          type: string
+          minLength: 1
+        page:
+          type: integer
+          minimum: 1
+          default: 1
+        sourceIds:
+          type: array
+          items:
+            type: string
+        group:
+          type: string
+        enabledOnly:
+          type: boolean
+          default: true
+        precision:
+          type: boolean
+          default: false
+    DiscoveryRequest:
+      type: object
+      properties:
+        sourceIds:
+          type: array
+          items:
+            type: string
+        group:
+          type: string
+        discoveryUrl:
+          type: string
+          description: Explicit discovery URL or category URL. If omitted, the source exploreUrl is used.
+        page:
+          type: integer
+          minimum: 1
+          default: 1
+    SourceWarning:
+      type: object
+      required:
+        - sourceId
+        - code
+        - message
+      properties:
+        sourceId:
+          type: string
+        bookSourceUrl:
+          type: string
+        bookSourceName:
+          type: string
+        code:
+          type: string
+        message:
+          type: string
+        traceId:
+          type: string
+    SearchResponse:
+      type: object
+      required:
+        - items
+        - warnings
+        - hasMore
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchBook"
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceWarning"
+        hasMore:
+          type: boolean
+    Book:
+      type: object
+      required:
+        - bookUrl
+        - origin
+        - originName
+        - name
+        - author
+        - type
+      properties:
+        bookUrl:
+          type: string
+        tocUrl:
+          type: string
+        origin:
+          type: string
+        originName:
+          type: string
+        name:
+          type: string
+        author:
+          type: string
+        kind:
+          type: string
+          nullable: true
+        customTag:
+          type: string
+          nullable: true
+        coverUrl:
+          type: string
+          nullable: true
+        customCoverUrl:
+          type: string
+          nullable: true
+        intro:
+          type: string
+          nullable: true
+        customIntro:
+          type: string
+          nullable: true
+        charset:
+          type: string
+          nullable: true
+        type:
+          type: integer
+        group:
+          type: integer
+          format: int64
+        latestChapterTitle:
+          type: string
+          nullable: true
+        latestChapterTime:
+          type: integer
+          format: int64
+        lastCheckTime:
+          type: integer
+          format: int64
+        lastCheckCount:
+          type: integer
+        totalChapterNum:
+          type: integer
+        durChapterTitle:
+          type: string
+          nullable: true
+        durChapterIndex:
+          type: integer
+        durChapterPos:
+          type: integer
+        durChapterTime:
+          type: integer
+          format: int64
+        wordCount:
+          type: string
+          nullable: true
+        downloadUrls:
+          type: array
+          items:
+            type: string
+          nullable: true
+        canUpdate:
+          type: boolean
+        order:
+          type: integer
+        originOrder:
+          type: integer
+        variable:
+          type: string
+          nullable: true
+        syncTime:
+          type: integer
+          format: int64
+    Chapter:
+      type: object
+      required:
+        - url
+        - title
+        - bookUrl
+        - index
+      properties:
+        url:
+          type: string
+        title:
+          type: string
+        isVolume:
+          type: boolean
+        baseUrl:
+          type: string
+        bookUrl:
+          type: string
+        index:
+          type: integer
+        isVip:
+          type: boolean
+        isPay:
+          type: boolean
+        resourceUrl:
+          type: string
+          nullable: true
+        tag:
+          type: string
+          nullable: true
+        wordCount:
+          type: string
+          nullable: true
+        variable:
+          type: string
+          nullable: true
+    ChapterListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Chapter"
+        book:
+          $ref: "#/components/schemas/Book"
+    ChapterContentResponse:
+      type: object
+      required:
+        - content
+      properties:
+        content:
+          type: string
+        title:
+          type: string
+          nullable: true
+        chapter:
+          $ref: "#/components/schemas/Chapter"
+        book:
+          $ref: "#/components/schemas/Book"
+    BookProgress:
+      type: object
+      required:
+        - name
+        - author
+      properties:
+        name:
+          type: string
+        author:
+          type: string
+        durChapterIndex:
+          type: integer
+        durChapterPos:
+          type: integer
+        durChapterTitle:
+          type: string
+          nullable: true
+        durChapterTime:
+          type: integer
+          format: int64
+    BookListResponse:
+      type: object
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Book"
+        meta:
+          $ref: "#/components/schemas/PageMeta"
+    ReplaceRule:
+      type: object
+      required:
+        - id
+        - name
+        - pattern
+        - replacement
+        - scopeTitle
+        - scopeContent
+        - isEnabled
+        - isRegex
+        - timeoutMillisecond
+        - order
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        group:
+          type: string
+          nullable: true
+        pattern:
+          type: string
+        replacement:
+          type: string
+        scope:
+          type: string
+          nullable: true
+        scopeTitle:
+          type: boolean
+        scopeContent:
+          type: boolean
+        excludeScope:
+          type: string
+          nullable: true
+        isEnabled:
+          type: boolean
+        isRegex:
+          type: boolean
+        timeoutMillisecond:
+          type: integer
+          format: int64
+        order:
+          type: integer
+    ReplaceRuleListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReplaceRule"
+    ReplaceRuleTestRequest:
+      type: object
+      required:
+        - rule
+        - text
+      properties:
+        rule:
+          oneOf:
+            - $ref: "#/components/schemas/ReplaceRule"
+            - type: string
+        text:
+          type: string
+    ReplaceRuleTestResponse:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+    DebugMode:
+      type: string
+      enum:
+        - keyword
+        - info_url
+        - toc_url
+        - content_url
+        - discovery_url
+    DebugSessionStatus:
+      type: string
+      enum:
+        - pending
+        - running
+        - succeeded
+        - failed
+        - cancelled
+    DebugSessionCreateRequest:
+      type: object
+      required:
+        - sourceId
+        - mode
+      properties:
+        sourceId:
+          type: string
+        mode:
+          $ref: "#/components/schemas/DebugMode"
+        keyword:
+          type: string
+        url:
+          type: string
+          description: Required for info_url, toc_url, content_url, or discovery_url modes.
+    DebugSession:
+      type: object
+      required:
+        - sessionId
+        - sourceId
+        - mode
+        - status
+        - createdAt
+      properties:
+        sessionId:
+          type: string
+        sourceId:
+          type: string
+        mode:
+          $ref: "#/components/schemas/DebugMode"
+        status:
+          $ref: "#/components/schemas/DebugSessionStatus"
+        keyword:
+          type: string
+          nullable: true
+        url:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        traceId:
+          type: string
+          nullable: true
+    DebugEventType:
+      type: string
+      enum:
+        - debug.started
+        - debug.stage_started
+        - debug.log
+        - debug.stage_completed
+        - debug.stage_failed
+        - debug.completed
+        - debug.cancelled
+    DebugEvent:
+      type: object
+      required:
+        - sessionId
+        - sourceId
+        - type
+        - level
+        - message
+        - elapsedMs
+        - traceId
+      properties:
+        sessionId:
+          type: string
+        sourceId:
+          type: string
+        type:
+          $ref: "#/components/schemas/DebugEventType"
+        stage:
+          type: string
+          nullable: true
+        level:
+          type: string
+          enum:
+            - debug
+            - info
+            - warn
+            - error
+        message:
+          type: string
+        elapsedMs:
+          type: integer
+          format: int64
+        traceId:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+    CheckOptions:
+      type: object
+      properties:
+        keyword:
+          type: string
+          default: 我的
+        timeoutMs:
+          type: integer
+          format: int64
+          default: 180000
+        checkSearch:
+          type: boolean
+          default: true
+        checkDiscovery:
+          type: boolean
+          default: true
+        checkInfo:
+          type: boolean
+          default: true
+        checkToc:
+          type: boolean
+          default: true
+        checkContent:
+          type: boolean
+          default: true
+    CheckTaskCreateRequest:
+      type: object
+      required:
+        - sourceIds
+      properties:
+        sourceIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        options:
+          $ref: "#/components/schemas/CheckOptions"
+    CheckTaskItemStatus:
+      type: string
+      enum:
+        - pending
+        - running
+        - passed
+        - failed
+        - skipped
+        - cancelled
+    CheckFailureCode:
+      type: string
+      enum:
+        - timeout
+        - js_failed
+        - website_failed
+        - search_failed
+        - discovery_failed
+        - info_failed
+        - toc_failed
+        - content_failed
+    CheckTaskItem:
+      type: object
+      required:
+        - sourceId
+        - status
+      properties:
+        sourceId:
+          type: string
+        bookSourceUrl:
+          type: string
+        bookSourceName:
+          type: string
+        status:
+          $ref: "#/components/schemas/CheckTaskItemStatus"
+        failureCode:
+          $ref: "#/components/schemas/CheckFailureCode"
+        failureClass:
+          type: string
+          nullable: true
+          description: More specific internal diagnostic classification retained for audits and debug correlation.
+        message:
+          type: string
+        respondTime:
+          type: integer
+          format: int64
+        traceId:
+          type: string
+    CheckTask:
+      type: object
+      required:
+        - taskId
+        - status
+        - total
+        - finished
+        - items
+        - createdAt
+      properties:
+        taskId:
+          type: string
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        total:
+          type: integer
+          minimum: 0
+        finished:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CheckTaskItem"
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        traceId:
+          type: string
+    CheckEvent:
+      type: object
+      required:
+        - taskId
+        - type
+        - message
+        - traceId
+      properties:
+        taskId:
+          type: string
+        sourceId:
+          type: string
+        type:
+          type: string
+          enum:
+            - check.started
+            - check.item_started
+            - check.item_passed
+            - check.item_failed
+            - check.completed
+            - check.cancelled
+        message:
+          type: string
+        item:
+          $ref: "#/components/schemas/CheckTaskItem"
+        traceId:
+          type: string
+  examples:
+    MinimalBookSource:
+      value:
+        sourceId: src_minimal
+        bookSourceUrl: https://example.test
+        bookSourceName: Example Source
+        bookSourceType: 0
+        customOrder: 0
+        enabled: true
+        enabledExplore: true
+        enabledCookieJar: true
+        lastUpdateTime: 0
+    CompleteBookSource:
+      value:
+        sourceId: src_complete
+        bookSourceUrl: https://example.test
+        bookSourceName: Example Source
+        bookSourceGroup: mock,default
+        bookSourceType: 0
+        bookUrlPattern: https://example.test/book/.*
+        customOrder: 1
+        enabled: true
+        enabledExplore: true
+        jsLib: ""
+        enabledCookieJar: true
+        concurrentRate: 2/1000
+        header: '{"User-Agent":"Reader-Test"}'
+        loginUrl: null
+        loginUi: null
+        loginCheckJs: null
+        coverDecodeJs: null
+        bookSourceComment: fixture source
+        variableComment: ""
+        lastUpdateTime: 0
+        respondTime: 0
+        weight: 0
+        exploreUrl: https://example.test/explore
+        exploreScreen: null
+        searchUrl: https://example.test/search?q={{key}}&page={{page}}
+        ruleSearch:
+          bookList: ".item"
+          name: ".name@text"
+          author: ".author@text"
+          bookUrl: "a@href"
+        ruleBookInfo:
+          name: "h1@text"
+        ruleToc:
+          chapterList: ".chapter"
+        ruleContent:
+          content: ".content@text"
+    ImportSingleBookSource:
+      value:
+        payload:
+          sourceId: src_minimal
+          bookSourceUrl: https://example.test
+          bookSourceName: Example Source
+          bookSourceType: 0
+          customOrder: 0
+          enabled: true
+          enabledExplore: true
+          enabledCookieJar: true
+          lastUpdateTime: 0
+        options:
+          updatePolicy: lastUpdateTime
+    ImportBookSourceArray:
+      value:
+        payload:
+          - sourceId: src_one
+            bookSourceUrl: https://one.example.test
+            bookSourceName: Source One
+            bookSourceType: 0
+            customOrder: 0
+            enabled: true
+            enabledExplore: true
+            enabledCookieJar: true
+            lastUpdateTime: 0
+          - sourceId: src_two
+            bookSourceUrl: https://two.example.test
+            bookSourceName: Source Two
+            bookSourceType: 0
+            customOrder: 1
+            enabled: true
+            enabledExplore: false
+            enabledCookieJar: true
+            lastUpdateTime: 0
+    ImportRemoteBookSourceURL:
+      value:
+        remoteUrl: https://example.test/sources.json#requestWithoutUA
+        options:
+          keepExistingEnabled: true
+    ImportSourceUrlsAggregate:
+      value:
+        payload:
+          sourceUrls:
+            - https://example.test/sources-a.json
+            - https://example.test/sources-b.json
+    SearchSingleSource:
+      value:
+        keyword: 斗破苍穹
+        page: 1
+        sourceIds:
+          - src_qidian
+        enabledOnly: true
+        precision: false
+    SearchMultiSource:
+      value:
+        keyword: 斗破苍穹
+        page: 1
+        group: 默认
+        enabledOnly: true
+        precision: true
+    BookFromSearch:
+      value:
+        bookUrl: https://example.test/book/1
+        tocUrl: https://example.test/book/1/toc
+        origin: https://example.test
+        originName: Example Source
+        name: Example Book
+        author: Example Author
+        kind: 玄幻
+        coverUrl: https://example.test/cover.jpg
+        intro: Example intro
+        type: 0
+        group: 0
+        latestChapterTitle: Chapter 100
+        latestChapterTime: 0
+        lastCheckTime: 0
+        lastCheckCount: 0
+        totalChapterNum: 100
+        durChapterTitle: Chapter 1
+        durChapterIndex: 1
+        durChapterPos: 0
+        durChapterTime: 0
+        wordCount: "1000000"
+        downloadUrls:
+          - https://example.test/book/1.epub
+          - https://cdn.example.test/book/1.epub
+        canUpdate: true
+        order: 0
+        originOrder: 0
+        variable: "{}"
+        syncTime: 0
+    PlainReplaceRule:
+      value:
+        id: 1
+        name: Plain Replace
+        group: default
+        pattern: foo
+        replacement: bar
+        scope: body
+        scopeTitle: false
+        scopeContent: true
+        excludeScope: null
+        isEnabled: true
+        isRegex: false
+        timeoutMillisecond: 3000
+        order: 0
+    RegexReplaceRule:
+      value:
+        id: 2
+        name: Regex Replace
+        group: default
+        pattern: "foo(\\d+)"
+        replacement: bar$1
+        scope: title
+        scopeTitle: true
+        scopeContent: false
+        excludeScope: null
+        isEnabled: true
+        isRegex: true
+        timeoutMillisecond: 3000
+        order: 1
+    KeywordDebugSession:
+      value:
+        sourceId: src_qidian
+        mode: keyword
+        keyword: 斗破苍穹

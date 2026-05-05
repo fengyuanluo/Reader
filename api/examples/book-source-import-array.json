@@ -1,0 +1,27 @@
+{
+  "payload": [
+    {
+      "sourceId": "src_one",
+      "bookSourceUrl": "https://one.example.test",
+      "bookSourceName": "Source One",
+      "bookSourceType": 0,
+      "customOrder": 0,
+      "enabled": true,
+      "enabledExplore": true,
+      "enabledCookieJar": true,
+      "lastUpdateTime": 0
+    },
+    {
+      "sourceId": "src_two",
+      "bookSourceUrl": "https://two.example.test",
+      "bookSourceName": "Source Two",
+      "bookSourceType": 0,
+      "customOrder": 1,
+      "enabled": true,
+      "enabledExplore": false,
+      "enabledCookieJar": true,
+      "lastUpdateTime": 0
+    }
+  ]
+}
+

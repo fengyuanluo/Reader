@@ -1,0 +1,7 @@
+{
+  "remoteUrl": "https://example.test/sources.json#requestWithoutUA",
+  "options": {
+    "keepExistingEnabled": true
+  }
+}
+

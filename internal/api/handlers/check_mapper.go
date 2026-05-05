@@ -1,0 +1,94 @@
+package handlers
+
+import (
+	"time"
+
+	"reader/internal/api/generated"
+	checkapp "reader/internal/app/check"
+	"reader/internal/domain/task"
+)
+
+func checkOptionsFromDTO(dto *generated.CheckOptions) checkapp.Options {
+	opts := checkapp.Options{Keyword: "我的", CheckSearch: true, CheckDiscovery: true, CheckInfo: true, CheckToc: true, CheckContent: true}
+	if dto == nil {
+		return opts
+	}
+	if dto.Keyword != nil {
+		opts.Keyword = *dto.Keyword
+	}
+	if dto.CheckSearch != nil {
+		opts.CheckSearch = *dto.CheckSearch
+	}
+	if dto.CheckDiscovery != nil {
+		opts.CheckDiscovery = *dto.CheckDiscovery
+	}
+	if dto.CheckInfo != nil {
+		opts.CheckInfo = *dto.CheckInfo
+	}
+	if dto.CheckToc != nil {
+		opts.CheckToc = *dto.CheckToc
+	}
+	if dto.CheckContent != nil {
+		opts.CheckContent = *dto.CheckContent
+	}
+	if dto.TimeoutMs != nil && *dto.TimeoutMs > 0 {
+		opts.Timeout = time.Duration(*dto.TimeoutMs) * time.Millisecond
+	}
+	return opts
+}
+
+func mapCheckTask(item *task.CheckTask) generated.CheckTask {
+	dto := generated.CheckTask{
+		CreatedAt: item.CreatedAt,
+		Finished:  item.Finished,
+		Items:     mapCheckItems(item.Items),
+		Status:    generated.TaskStatus(item.Status),
+		TaskId:    item.TaskID,
+		Total:     item.Total,
+	}
+	if item.TraceID != "" {
+		dto.TraceId = &item.TraceID
+	}
+	if item.CompletedAt != nil {
+		dto.CompletedAt = item.CompletedAt
+	}
+	return dto
+}
+
+func mapCheckItems(items []*task.CheckTaskItem) []generated.CheckTaskItem {
+	out := make([]generated.CheckTaskItem, 0, len(items))
+	for _, item := range items {
+		out = append(out, mapCheckItem(item))
+	}
+	return out
+}
+
+func mapCheckItem(item *task.CheckTaskItem) generated.CheckTaskItem {
+	dto := generated.CheckTaskItem{
+		SourceId: item.SourceID,
+		Status:   generated.CheckTaskItemStatus(item.Status),
+	}
+	if item.BookSourceURL != "" {
+		dto.BookSourceUrl = &item.BookSourceURL
+	}
+	if item.BookSourceName != "" {
+		dto.BookSourceName = &item.BookSourceName
+	}
+	if item.FailureCode != "" {
+		code := generated.CheckFailureCode(item.FailureCode)
+		dto.FailureCode = &code
+	}
+	if item.FailureClass != "" {
+		dto.FailureClass = &item.FailureClass
+	}
+	if item.Message != "" {
+		dto.Message = &item.Message
+	}
+	if item.RespondTime != 0 {
+		dto.RespondTime = &item.RespondTime
+	}
+	if item.TraceID != "" {
+		dto.TraceId = &item.TraceID
+	}
+	return dto
+}

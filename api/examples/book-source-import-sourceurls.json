@@ -1,0 +1,9 @@
+{
+  "payload": {
+    "sourceUrls": [
+      "https://example.test/sources-a.json",
+      "https://example.test/sources-b.json"
+    ]
+  }
+}
+
