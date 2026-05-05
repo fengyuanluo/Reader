@@ -1,0 +1,4362 @@
+{
+  "testTime": "2026-05-05T07:20:28Z",
+  "collectionUrl": "https://shuyuan-api.yiove.com/import/book-source-collection/a8adf570-e115-4b99-87e3-ccaf298ae361",
+  "httpStatus": 200,
+  "contentType": "application/json",
+  "responseBytes": 4849198,
+  "parsedCount": 459,
+  "importAdded": 459,
+  "importUpdated": 0,
+  "importSkipped": 0,
+  "importFailed": 0,
+  "candidateRule": "enabled=true, bookSourceType=0, http(s) bookSourceUrl, searchUrl/ruleSearch/ruleBookInfo/ruleToc/ruleContent present, explicit browser/webView search flows excluded per Requirement 3.2",
+  "maxCandidates": 100,
+  "timeoutSeconds": 1200,
+  "continueAfterSuccess": true,
+  "candidates": [
+    {
+      "sourceId": "src_ba56c1b5c646467e91a9e28a",
+      "bookSourceUrl": "https://api-x.shrtxs.cn/qd/",
+      "bookSourceName": "起点读书（优+++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_e13960f70d9807554ed4ae9f",
+      "bookSourceUrl": "https://reading.snssdk.com#lcs",
+      "bookSourceName": "番茄小说（优+++）",
+      "keywordUsed": "https://www.baidu.com/删书示例?book_id=7285555567827880975",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_51c98043d70b25c4cb428178",
+      "bookSourceUrl": "https://api-bc.wtzw.com",
+      "bookSourceName": "阅读助手（优+++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": true
+      }
+    },
+    {
+      "sourceId": "src_2e69e222325a50ab5fcacc3a",
+      "bookSourceUrl": "https://cn.ttkan.co/##@遇知",
+      "bookSourceName": "天天看书（优+++）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_4377e504b78dc41848314bf3",
+      "bookSourceUrl": "https://www.deqixs.co",
+      "bookSourceName": "得奇小说（优+++）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_e65b7afd81062e9b55ab40f1",
+      "bookSourceUrl": "https://www.deqibook.com",
+      "bookSourceName": "得奇小说（优+++）",
+      "keywordUsed": "传说",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": true,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_f4cb64d3ffc3a27ef0d0d39c",
+      "bookSourceUrl": "https://m.libahao.com",
+      "bookSourceName": "篱笆文学（优+++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_525b28d5f4d56bd8e94e9911",
+      "bookSourceUrl": "https://wodushu.com",
+      "bookSourceName": "我的书城（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": true,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_9e9340fd762b536ea8e2bf42",
+      "bookSourceUrl": "http://wap.80zw.la/",
+      "bookSourceName": "八零小说（优++）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_3c11912efc699c481e08bc12",
+      "bookSourceUrl": "https://ttks.tw/",
+      "bookSourceName": "天天小说（优++）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_a8ff7a48d495485f23808fc2",
+      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "我不是戏神",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
+      "bookSourceUrl": "http://download.yichnmedia.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "深空彼岸",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_7674446a9c59247cae736ae7",
+      "bookSourceUrl": "http://api.lfdapengu.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "开局圣人修为，女帝成了前妻",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_e86c92fc3572d5388ba96a75",
+      "bookSourceUrl": "http://api.lemiyigou.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_556c281e6af98e47021261b4",
+      "bookSourceUrl": "https://jyapi.jyacg.com",
+      "bookSourceName": "鲸云轻说（优++）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_acd7f6523e1a63a37769680b",
+      "bookSourceUrl": "http://www.shencou.com",
+      "bookSourceName": "神凑轻说（优++）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_a554dc47ce3ac7aad51243ca",
+      "bookSourceUrl": "https://www.linovel.net#yc1101",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_6a60f43b6a01c5cd426ee7dc",
+      "bookSourceUrl": "https://www.linovel.net",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_229c3dd3e195cc03d2216d1d",
+      "bookSourceUrl": "https://lnovel.tw",
+      "bookSourceName": "轻说百科（优++）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_2c85a0296d73fc923ae66d44",
+      "bookSourceUrl": "https://www.esjzone.cc",
+      "bookSourceName": "异轻纵然（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_227a51fd04b2d0e4534db5e5",
+      "bookSourceUrl": "https://www.chamabooks.net",
+      "bookSourceName": "茶马小说（优++）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_e80901f6c7a641a9c6e88eae",
+      "bookSourceUrl": "https://www.ihuaben.com/",
+      "bookSourceName": "话本小说（优++）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_2d8432c8ed692b633b5190b7",
+      "bookSourceUrl": "https://www.zhenhunxiaoshuo.com/chaxun.html",
+      "bookSourceName": "镇魂小说（优++）",
+      "keywordUsed": "淮上",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_1d2910b6b9aa99e5188a9965",
+      "bookSourceUrl": "http://119.45.176.116:5006",
+      "bookSourceName": "全本小说（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_7e57f5f88ef2b700654a3a49",
+      "bookSourceUrl": "https://vreader.vivo.com.cn/",
+      "bookSourceName": "趣悦小说（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_8c4cda972439a6c3e8125fbd",
+      "bookSourceUrl": "https://ggs.manmeng168.com",
+      "bookSourceName": "番薯小说（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_97ea92219cefb2b56d60e384",
+      "bookSourceUrl": "https://fiction.fengduxiaoshuo.com",
+      "bookSourceName": "疯读小说（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_802a30ceb32c39a84c74e34b",
+      "bookSourceUrl": "https://fanqie.hnxianxin.cn/＃妍希",
+      "bookSourceName": "番茄小说（优++）",
+      "keywordUsed": "7268620849496722495",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": true,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_d38a730ccbdfbba899b5221e",
+      "bookSourceUrl": "https://www.youduzw.com",
+      "bookSourceName": "有度中文（优++）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_226e9a79d6623f6145729ae8",
+      "bookSourceUrl": "https://api-bc.wtzw.com＃妍希",
+      "bookSourceName": "七猫小说（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_a973ad4b9b42e5e7f3da9735",
+      "bookSourceUrl": "https://api-bc.wtzw.com#md",
+      "bookSourceName": "七猫小说（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": true
+      }
+    },
+    {
+      "sourceId": "src_dfbd818e6f7415e487deca06",
+      "bookSourceUrl": "https://api-bc.wtzw.com#yc1101b",
+      "bookSourceName": "七猫小说（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": true
+      }
+    },
+    {
+      "sourceId": "src_69b9c71eff0060708b6ded3b",
+      "bookSourceUrl": "http://qmbook.taoyuewenhua.net/#@遇知",
+      "bookSourceName": "全免小说（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_497b90c6d494403d284f9e92",
+      "bookSourceUrl": "https://tybook.taoyuewenhua.net",
+      "bookSourceName": "爱淘小说（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_80760b824d3f4b7f19b9bebd",
+      "bookSourceUrl": "https://goway.reader.yueyouxs.com/",
+      "bookSourceName": "阅友小说（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_eb8d09652f35347c3db4b600",
+      "bookSourceUrl": "https://qcbook.taoyuewenhua.net",
+      "bookSourceName": "陶越文华（优++）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_f58fc1c12a7ca4f750da5232",
+      "bookSourceUrl": "https://kakuyomu.jp/",
+      "bookSourceName": "风扇枕说（日+）",
+      "keywordUsed": "僕",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_548b68eea2029ceef58f7a05",
+      "bookSourceUrl": "https://fq-book.netsite.cc",
+      "bookSourceName": "番茄小说（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_ae48dc2981afcd5dbeea4255",
+      "bookSourceUrl": "https://m.zym888.com",
+      "bookSourceName": "番茄小说（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_f8a3a2e7e8df8d9df945f590",
+      "bookSourceUrl": "https://reading.snssdk.com#mgz",
+      "bookSourceName": "番茄小说（优+）",
+      "keywordUsed": "https://www.baidu.com/删书示例?book_id=7285555567827880975",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_29718f3c3b17e293f15f0349",
+      "bookSourceUrl": "http://xiaoshuo.uc.cn",
+      "bookSourceName": "阿巴小说（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_818a053544bc9270a08fd51f",
+      "bookSourceUrl": "https://www.yodu.org/qingxiaoshuo",
+      "bookSourceName": "有度轻说（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_835ebbfd39f44f6aa68a2a63",
+      "bookSourceUrl": "https://n.novelia.cc",
+      "bookSourceName": "轻说机翻（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": true,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_dfc5e2c079ea84a464b13e25",
+      "bookSourceUrl": "https://m.ttshu8.com",
+      "bookSourceName": "天天书吧（优+）",
+      "keywordUsed": "剑来",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_1bb8d072276f4ad3708a5d1e",
+      "bookSourceUrl": "https://www.ttshu8.net",
+      "bookSourceName": "天天书吧（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_4019d1439b0b870ffaf8c606",
+      "bookSourceUrl": "http://m.suixkan.com",
+      "bookSourceName": "阅友小说（优+）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_be2d391cdcf230b310be3ecb",
+      "bookSourceUrl": "https://sma.yueyouxs.com/#♤pb",
+      "bookSourceName": "阅友小说（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": true,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_ac801be47fa01cdc3b57e02c",
+      "bookSourceUrl": "https://sma.yueyouxs.com/",
+      "bookSourceName": "阅友小说（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": true,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_3dc4f05a9d45df260c7ba98e",
+      "bookSourceUrl": "https://cxb-pro.cread.com/",
+      "bookSourceName": "中文书城（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_f3d1750edb38632a08acb5ff",
+      "bookSourceUrl": "https://app.kujiang.com",
+      "bookSourceName": "酷匠网吧（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": true
+      }
+    },
+    {
+      "sourceId": "src_fd0d561a90307d803dc40dca",
+      "bookSourceUrl": "https://book.mywebos.cn",
+      "bookSourceName": "国学書库（优+）",
+      "keywordUsed": "论语",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": true,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_f1ed7753d419f7b1c84c4aae",
+      "bookSourceUrl": "https://guoxue.wunpu.com",
+      "bookSourceName": "国学经典（优+）",
+      "keywordUsed": "论语",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_35b7e7ed637987d3126f0936",
+      "bookSourceUrl": "https://www.zhonghuadiancang.com/",
+      "bookSourceName": "中华典藏（优+）",
+      "keywordUsed": "论语",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_0b3ad25c91471566070ebddc",
+      "bookSourceUrl": "https://www.zhonghuadiancang.com",
+      "bookSourceName": "中华典藏（优+）",
+      "keywordUsed": "论语",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_fb904277e1befe2368640f00",
+      "bookSourceUrl": "https://www.diancang.xyz",
+      "bookSourceName": "中华典藏（优+）",
+      "keywordUsed": "修真",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_3a44ff1af921ceb89852f144",
+      "bookSourceUrl": "http://m.gulongbbs.com/wuxia",
+      "bookSourceName": "古龙武侠（优+）",
+      "keywordUsed": "天龙八部",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_a868a503411048c51d887329",
+      "bookSourceUrl": "https://www.jinyongwang.net#♤yc",
+      "bookSourceName": "金庸小说（优+）",
+      "keywordUsed": "雪山",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_a311aba6335e1e00f27d7d6a",
+      "bookSourceUrl": "https://www.jinyongwang.net",
+      "bookSourceName": "金庸小说（优+）",
+      "keywordUsed": "雪山",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_348a4f1ee3be6f78cfd14bd6",
+      "bookSourceUrl": "http://www.daomubiji.com",
+      "bookSourceName": "盗墓笔记（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_4c0843cc0b0f267bdd9802e6",
+      "bookSourceUrl": "https://www.6mj.com",
+      "bookSourceName": "民间故事（优+）",
+      "keywordUsed": "民间故事",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_324fefedd44d5637bb733eff",
+      "bookSourceUrl": "https://www.yanxuanwk.com#",
+      "bookSourceName": "盐选文库（优+）",
+      "keywordUsed": "回答",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_fe929c1e56fad544e2dee30d",
+      "bookSourceUrl": "https://www.yanxuanwk.com/",
+      "bookSourceName": "盐选文库（优+）",
+      "keywordUsed": "回答",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_a8a6f18201431abb598827b5",
+      "bookSourceUrl": "https://onehu.xyz",
+      "bookSourceName": "我是盐神（优+）",
+      "keywordUsed": "回答",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_6ee726b69dd2f237f65a17e9",
+      "bookSourceUrl": "https://m.zhonghuashici.com",
+      "bookSourceName": "中华诗词（优+）",
+      "keywordUsed": "蝶恋花",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_c9197e750ca5e16567fef941",
+      "bookSourceUrl": "https://m.zhonghuashici.com/",
+      "bookSourceName": "中华诗词（优+）",
+      "keywordUsed": "蝶恋花",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_a0345050588428ebb29f8b65",
+      "bookSourceUrl": "https://m.gushiwen.cn",
+      "bookSourceName": "古诗文网（优+）",
+      "keywordUsed": "菜根谭",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_8c754868647d40e20e00fcd6",
+      "bookSourceUrl": "https://m.gushici.net/",
+      "bookSourceName": "古诗词网（优+）",
+      "keywordUsed": "李白",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_5072a6eed2bf13219c7df90e",
+      "bookSourceUrl": "https://m.gushiwen.cn/",
+      "bookSourceName": "古诗文网（优+）",
+      "keywordUsed": "菜根谭",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_f00c3386f10eacbe690bbbc2",
+      "bookSourceUrl": "http://yz4.chaoxing.com",
+      "bookSourceName": "古典文学（优+）",
+      "keywordUsed": "论语",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_844c516e0716b6d1b0ae021d",
+      "bookSourceUrl": "http://3g.sbkk8.com#",
+      "bookSourceName": "天涯知识（优+）",
+      "keywordUsed": "的画像",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_85204b4c8ade867fdf3470e6",
+      "bookSourceUrl": "https://www.dxmwx.org",
+      "bookSourceName": "熊猫文学（优+）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_4c0af541a551d1445adec5e6",
+      "bookSourceUrl": "https://www.yamibo.com/site/novel",
+      "bookSourceName": "百合爱会（优+）",
+      "keywordUsed": "百合",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_371d847bd9e984de7bdbd525",
+      "bookSourceUrl": "https://m.qbxsba.com",
+      "bookSourceName": "全本小说（优+）",
+      "keywordUsed": "我的",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_be6bc224a0d554d82c4ddb39",
+      "bookSourceUrl": "https://m.xuribook.com",
+      "bookSourceName": "旭日小说（优+）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_8d028086f6809098b50c922c",
+      "bookSourceUrl": "https://api-bc.wtzw.com#♤ycb",
+      "bookSourceName": "七猫小说（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": true
+      }
+    },
+    {
+      "sourceId": "src_ee5993366c325da95d6c3528",
+      "bookSourceUrl": "https://api-bc.wtzw.com/",
+      "bookSourceName": "七猫小说（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": true
+      }
+    },
+    {
+      "sourceId": "src_56d458b28458d5c51447cfbc",
+      "bookSourceUrl": "https://fiction.fengduxiaoshuo.com/",
+      "bookSourceName": "疯读小说（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_763a2df9f7cf60e89cea3b04",
+      "bookSourceUrl": "https://www.dtxsw.com",
+      "bookSourceName": "大唐小说（优+）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_b28018fc62ce8d744ffcb9d8",
+      "bookSourceUrl": "https://www.limaogushi.com/",
+      "bookSourceName": "狸猫故事（优+）",
+      "keywordUsed": "民间故事",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_e35e1e2cd1f510c8bf994084",
+      "bookSourceUrl": "https://www.sxgread.com",
+      "bookSourceName": "书香阁子（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_efffd3d64d374730dc38dffb",
+      "bookSourceUrl": "https://m.nauqmf.com",
+      "bookSourceName": "风云小说（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_94ec0165cde467ca225d0db6",
+      "bookSourceUrl": "https://www.83zws.com",
+      "bookSourceName": "八三中文（优+）",
+      "keywordUsed": "剑来",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_8312a4da2e972018e6c1be17",
+      "bookSourceUrl": "http://www.yuedsk.com",
+      "bookSourceName": "阅读库子（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_b80cb5f33f6635be64c13a52",
+      "bookSourceUrl": "https://www.88haoshu.com/",
+      "bookSourceName": "安读书网（优+）",
+      "keywordUsed": "我的模拟长生路",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_c8bbeb93a87ca3e5cbac1c14",
+      "bookSourceUrl": "http://www.booksky.cc",
+      "bookSourceName": "快眼看书（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_9f08fac3a86bfc9bd08cbe91",
+      "bookSourceUrl": "http://www.xbotaodz.com",
+      "bookSourceName": "快眼看书（优+）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_5a3717c98dc35415a2e67187",
+      "bookSourceUrl": "https://reader.browser.miui.com/v2#",
+      "bookSourceName": "小米阅读（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_4afeb4b41076609e3a1281d1",
+      "bookSourceUrl": "https://api.midureader.com/#@遇知",
+      "bookSourceName": "米读小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": true,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_7956897ace18c66b4b8e5c47",
+      "bookSourceUrl": "https://reader.browser.miui.com",
+      "bookSourceName": "小米书城（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_ed5d11ff9ad445ffef371bc9",
+      "bookSourceUrl": "https://m.shencou.com",
+      "bookSourceName": "神凑轻说（优+）",
+      "keywordUsed": "欢迎来到实力至上",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_b6596506a24ff438c6dcd4ee",
+      "bookSourceUrl": "https://www.linovel.net:443/",
+      "bookSourceName": "轻之文库（优+）",
+      "keywordUsed": "刀剑神域",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_06780558c4d68fc08b92aa03",
+      "bookSourceUrl": "https://www.linovel.net#yc",
+      "bookSourceName": "轻之文库（优+）",
+      "keywordUsed": "刀剑神域",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": true,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_a38faf7e5285445cef87a57c",
+      "bookSourceUrl": "https://jyapi.jyacg.com#yc11",
+      "bookSourceName": "鲸云轻说（优+）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_ded92cad885a53cc49f5aacc",
+      "bookSourceUrl": "https://jyapi.jyacg.com#",
+      "bookSourceName": "鲸云轻说（优+）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_f6eb03cad223579556ead442",
+      "bookSourceUrl": "https://www.xdxss.com",
+      "bookSourceName": "炫动小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": true,
+        "searchUrlHasSourceRef": true,
+        "searchUrlHasJavaHelper": true,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_b737ce7afb3dddca373e755b",
+      "bookSourceUrl": "http://www.sfwx.com/",
+      "bookSourceName": "书法小说（优+）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_cf66bfeee51cfb09c24b1c4c",
+      "bookSourceUrl": "http://www.jjjxsw.com",
+      "bookSourceName": "爱久久网（优+）",
+      "features": {
+        "searchUrlRelative": true,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_c91c18f448f64e89aa7cb82a",
+      "bookSourceUrl": "https://m.juzhishuwu.com/",
+      "bookSourceName": "桔纸书屋（优+）",
+      "keywordUsed": "我的模拟长生路",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": true,
+        "ruleBookInfoHasJs": true,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_2ccb91753b7c52e0802265c3",
+      "bookSourceUrl": "https://www.yodu.org##破冰",
+      "bookSourceName": "有度中文（优+）",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": false,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": true,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    },
+    {
+      "sourceId": "src_07f2191f96e9e77274a19da2",
+      "bookSourceUrl": "https://www.17bxwx.com/",
+      "bookSourceName": "笔下文学（优+）",
+      "keywordUsed": "夜的命名术",
+      "features": {
+        "searchUrlRelative": false,
+        "searchUrlHasAtJs": true,
+        "searchUrlHasInlineExpr": false,
+        "searchUrlHasSourceRef": false,
+        "searchUrlHasJavaHelper": false,
+        "searchUrlHasUrlOptions": false,
+        "searchUrlRequestsWebView": false,
+        "headerHasJs": false,
+        "ruleSearchHasJs": false,
+        "ruleBookInfoHasJs": false,
+        "ruleTocHasJs": false,
+        "ruleContentHasJs": false,
+        "ruleContentHasJavaImporter": false
+      }
+    }
+  ],
+  "attemptedCandidates": 100,
+  "fullSuccessCount": 51,
+  "stageSummary": {
+    "content": {
+      "passed": 51,
+      "failed": 2
+    },
+    "info": {
+      "passed": 54,
+      "failed": 3
+    },
+    "search": {
+      "passed": 57,
+      "failed": 43
+    },
+    "toc": {
+      "passed": 53,
+      "failed": 1
+    }
+  },
+  "keyword": "斗破苍穹",
+  "stageResults": [
+    {
+      "sourceId": "src_ba56c1b5c646467e91a9e28a",
+      "bookSourceUrl": "https://api-x.shrtxs.cn/qd/",
+      "bookSourceName": "起点读书（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: unexpected status: 404",
+      "failureClass": "source_upstream_http_404"
+    },
+    {
+      "sourceId": "src_e13960f70d9807554ed4ae9f",
+      "bookSourceUrl": "https://reading.snssdk.com#lcs",
+      "bookSourceName": "番茄小说（优+++）",
+      "keywordUsed": "https://www.baidu.com/删书示例?book_id=7285555567827880975",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_e13960f70d9807554ed4ae9f",
+      "bookSourceUrl": "https://reading.snssdk.com#lcs",
+      "bookSourceName": "番茄小说（优+++）",
+      "keywordUsed": "https://www.baidu.com/删书示例?book_id=7285555567827880975",
+      "stage": "info",
+      "status": "failed",
+      "message": "script_failed: e2e: SyntaxError: Unexpected end of JSON input (EOF) at parse (native)",
+      "failureClass": "source_upstream_empty_json_response"
+    },
+    {
+      "sourceId": "src_51c98043d70b25c4cb428178",
+      "bookSourceUrl": "https://api-bc.wtzw.com",
+      "bookSourceName": "阅读助手（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_51c98043d70b25c4cb428178",
+      "bookSourceUrl": "https://api-bc.wtzw.com",
+      "bookSourceName": "阅读助手（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_51c98043d70b25c4cb428178",
+      "bookSourceUrl": "https://api-bc.wtzw.com",
+      "bookSourceName": "阅读助手（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_51c98043d70b25c4cb428178",
+      "bookSourceUrl": "https://api-bc.wtzw.com",
+      "bookSourceName": "阅读助手（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8452"
+    },
+    {
+      "sourceId": "src_2e69e222325a50ab5fcacc3a",
+      "bookSourceUrl": "https://cn.ttkan.co/##@遇知",
+      "bookSourceName": "天天看书（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://cn.ttkan.co/novel/search?q=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "failureClass": "network_timeout"
+    },
+    {
+      "sourceId": "src_4377e504b78dc41848314bf3",
+      "bookSourceUrl": "https://www.deqixs.co",
+      "bookSourceName": "得奇小说（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4377e504b78dc41848314bf3",
+      "bookSourceUrl": "https://www.deqixs.co",
+      "bookSourceName": "得奇小说（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4377e504b78dc41848314bf3",
+      "bookSourceUrl": "https://www.deqixs.co",
+      "bookSourceName": "得奇小说（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4377e504b78dc41848314bf3",
+      "bookSourceUrl": "https://www.deqixs.co",
+      "bookSourceName": "得奇小说（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=33"
+    },
+    {
+      "sourceId": "src_e65b7afd81062e9b55ab40f1",
+      "bookSourceUrl": "https://www.deqibook.com",
+      "bookSourceName": "得奇小说（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://www.deqibook.com/tag/?key=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\": tls: failed to verify certificate: x509: certificate is valid for *.freeshorttv.com, freeshorttv.com, not www.deqibook.com",
+      "failureClass": "network_tls_invalid"
+    },
+    {
+      "sourceId": "src_f4cb64d3ffc3a27ef0d0d39c",
+      "bookSourceUrl": "https://m.libahao.com",
+      "bookSourceName": "篱笆文学（优+++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_525b28d5f4d56bd8e94e9911",
+      "bookSourceUrl": "https://wodushu.com",
+      "bookSourceName": "我的书城（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Post \"https://wodushu.com/search/\": dial tcp: lookup wodushu.com on 172.20.65.146:53: server misbehaving",
+      "failureClass": "network_dns_failure"
+    },
+    {
+      "sourceId": "src_9e9340fd762b536ea8e2bf42",
+      "bookSourceUrl": "http://wap.80zw.la/",
+      "bookSourceName": "八零小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_9e9340fd762b536ea8e2bf42",
+      "bookSourceUrl": "http://wap.80zw.la/",
+      "bookSourceName": "八零小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_9e9340fd762b536ea8e2bf42",
+      "bookSourceUrl": "http://wap.80zw.la/",
+      "bookSourceName": "八零小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_9e9340fd762b536ea8e2bf42",
+      "bookSourceUrl": "http://wap.80zw.la/",
+      "bookSourceName": "八零小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8638"
+    },
+    {
+      "sourceId": "src_3c11912efc699c481e08bc12",
+      "bookSourceUrl": "https://ttks.tw/",
+      "bookSourceName": "天天小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: unexpected status: 403",
+      "failureClass": "source_upstream_http_403"
+    },
+    {
+      "sourceId": "src_a8ff7a48d495485f23808fc2",
+      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "我不是戏神",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a8ff7a48d495485f23808fc2",
+      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "我不是戏神",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a8ff7a48d495485f23808fc2",
+      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "我不是戏神",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a8ff7a48d495485f23808fc2",
+      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "我不是戏神",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=6642"
+    },
+    {
+      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
+      "bookSourceUrl": "http://download.yichnmedia.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "深空彼岸",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
+      "bookSourceUrl": "http://download.yichnmedia.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "深空彼岸",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
+      "bookSourceUrl": "http://download.yichnmedia.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "深空彼岸",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
+      "bookSourceUrl": "http://download.yichnmedia.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "深空彼岸",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=6875"
+    },
+    {
+      "sourceId": "src_7674446a9c59247cae736ae7",
+      "bookSourceUrl": "http://api.lfdapengu.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "开局圣人修为，女帝成了前妻",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_7674446a9c59247cae736ae7",
+      "bookSourceUrl": "http://api.lfdapengu.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "开局圣人修为，女帝成了前妻",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_7674446a9c59247cae736ae7",
+      "bookSourceUrl": "http://api.lfdapengu.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "开局圣人修为，女帝成了前妻",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_7674446a9c59247cae736ae7",
+      "bookSourceUrl": "http://api.lfdapengu.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "开局圣人修为，女帝成了前妻",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=7640"
+    },
+    {
+      "sourceId": "src_e86c92fc3572d5388ba96a75",
+      "bookSourceUrl": "http://api.lemiyigou.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_e86c92fc3572d5388ba96a75",
+      "bookSourceUrl": "http://api.lemiyigou.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_e86c92fc3572d5388ba96a75",
+      "bookSourceUrl": "http://api.lemiyigou.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "failed",
+      "message": "toc_empty",
+      "failureClass": "source_toc_empty"
+    },
+    {
+      "sourceId": "src_556c281e6af98e47021261b4",
+      "bookSourceUrl": "https://jyapi.jyacg.com",
+      "bookSourceName": "鲸云轻说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://jyapi.jyacg.com/web/search?name=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\u0026type=1\": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-05-05T15:21:40+08:00 is after 2026-02-10T15:32:03Z",
+      "failureClass": "network_tls_invalid"
+    },
+    {
+      "sourceId": "src_acd7f6523e1a63a37769680b",
+      "bookSourceUrl": "http://www.shencou.com",
+      "bookSourceName": "神凑轻说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: unexpected status: 403",
+      "failureClass": "source_upstream_http_403"
+    },
+    {
+      "sourceId": "src_a554dc47ce3ac7aad51243ca",
+      "bookSourceUrl": "https://www.linovel.net#yc1101",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a554dc47ce3ac7aad51243ca",
+      "bookSourceUrl": "https://www.linovel.net#yc1101",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a554dc47ce3ac7aad51243ca",
+      "bookSourceUrl": "https://www.linovel.net#yc1101",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a554dc47ce3ac7aad51243ca",
+      "bookSourceUrl": "https://www.linovel.net#yc1101",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=16787"
+    },
+    {
+      "sourceId": "src_6a60f43b6a01c5cd426ee7dc",
+      "bookSourceUrl": "https://www.linovel.net",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_6a60f43b6a01c5cd426ee7dc",
+      "bookSourceUrl": "https://www.linovel.net",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_6a60f43b6a01c5cd426ee7dc",
+      "bookSourceUrl": "https://www.linovel.net",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_6a60f43b6a01c5cd426ee7dc",
+      "bookSourceUrl": "https://www.linovel.net",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=16787"
+    },
+    {
+      "sourceId": "src_229c3dd3e195cc03d2216d1d",
+      "bookSourceUrl": "https://lnovel.tw",
+      "bookSourceName": "轻说百科（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_229c3dd3e195cc03d2216d1d",
+      "bookSourceUrl": "https://lnovel.tw",
+      "bookSourceName": "轻说百科（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_229c3dd3e195cc03d2216d1d",
+      "bookSourceUrl": "https://lnovel.tw",
+      "bookSourceName": "轻说百科（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_229c3dd3e195cc03d2216d1d",
+      "bookSourceUrl": "https://lnovel.tw",
+      "bookSourceName": "轻说百科（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=46"
+    },
+    {
+      "sourceId": "src_2c85a0296d73fc923ae66d44",
+      "bookSourceUrl": "https://www.esjzone.cc",
+      "bookSourceName": "异轻纵然（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_2c85a0296d73fc923ae66d44",
+      "bookSourceUrl": "https://www.esjzone.cc",
+      "bookSourceName": "异轻纵然（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_2c85a0296d73fc923ae66d44",
+      "bookSourceUrl": "https://www.esjzone.cc",
+      "bookSourceName": "异轻纵然（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_2c85a0296d73fc923ae66d44",
+      "bookSourceUrl": "https://www.esjzone.cc",
+      "bookSourceName": "异轻纵然（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=7294"
+    },
+    {
+      "sourceId": "src_227a51fd04b2d0e4534db5e5",
+      "bookSourceUrl": "https://www.chamabooks.net",
+      "bookSourceName": "茶马小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_227a51fd04b2d0e4534db5e5",
+      "bookSourceUrl": "https://www.chamabooks.net",
+      "bookSourceName": "茶马小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_227a51fd04b2d0e4534db5e5",
+      "bookSourceUrl": "https://www.chamabooks.net",
+      "bookSourceName": "茶马小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_227a51fd04b2d0e4534db5e5",
+      "bookSourceUrl": "https://www.chamabooks.net",
+      "bookSourceName": "茶马小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=25"
+    },
+    {
+      "sourceId": "src_e80901f6c7a641a9c6e88eae",
+      "bookSourceUrl": "https://www.ihuaben.com/",
+      "bookSourceName": "话本小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_2d8432c8ed692b633b5190b7",
+      "bookSourceUrl": "https://www.zhenhunxiaoshuo.com/chaxun.html",
+      "bookSourceName": "镇魂小说（优++）",
+      "keywordUsed": "淮上",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_2d8432c8ed692b633b5190b7",
+      "bookSourceUrl": "https://www.zhenhunxiaoshuo.com/chaxun.html",
+      "bookSourceName": "镇魂小说（优++）",
+      "keywordUsed": "淮上",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_2d8432c8ed692b633b5190b7",
+      "bookSourceUrl": "https://www.zhenhunxiaoshuo.com/chaxun.html",
+      "bookSourceName": "镇魂小说（优++）",
+      "keywordUsed": "淮上",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_2d8432c8ed692b633b5190b7",
+      "bookSourceUrl": "https://www.zhenhunxiaoshuo.com/chaxun.html",
+      "bookSourceName": "镇魂小说（优++）",
+      "keywordUsed": "淮上",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=2029"
+    },
+    {
+      "sourceId": "src_1d2910b6b9aa99e5188a9965",
+      "bookSourceUrl": "http://119.45.176.116:5006",
+      "bookSourceName": "全本小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_1d2910b6b9aa99e5188a9965",
+      "bookSourceUrl": "http://119.45.176.116:5006",
+      "bookSourceName": "全本小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_1d2910b6b9aa99e5188a9965",
+      "bookSourceUrl": "http://119.45.176.116:5006",
+      "bookSourceName": "全本小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_1d2910b6b9aa99e5188a9965",
+      "bookSourceUrl": "http://119.45.176.116:5006",
+      "bookSourceName": "全本小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=9863"
+    },
+    {
+      "sourceId": "src_7e57f5f88ef2b700654a3a49",
+      "bookSourceUrl": "https://vreader.vivo.com.cn/",
+      "bookSourceName": "趣悦小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_7e57f5f88ef2b700654a3a49",
+      "bookSourceUrl": "https://vreader.vivo.com.cn/",
+      "bookSourceName": "趣悦小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_7e57f5f88ef2b700654a3a49",
+      "bookSourceUrl": "https://vreader.vivo.com.cn/",
+      "bookSourceName": "趣悦小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_7e57f5f88ef2b700654a3a49",
+      "bookSourceUrl": "https://vreader.vivo.com.cn/",
+      "bookSourceName": "趣悦小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=103"
+    },
+    {
+      "sourceId": "src_8c4cda972439a6c3e8125fbd",
+      "bookSourceUrl": "https://ggs.manmeng168.com",
+      "bookSourceName": "番薯小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8c4cda972439a6c3e8125fbd",
+      "bookSourceUrl": "https://ggs.manmeng168.com",
+      "bookSourceName": "番薯小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8c4cda972439a6c3e8125fbd",
+      "bookSourceUrl": "https://ggs.manmeng168.com",
+      "bookSourceName": "番薯小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8c4cda972439a6c3e8125fbd",
+      "bookSourceUrl": "https://ggs.manmeng168.com",
+      "bookSourceName": "番薯小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=9835"
+    },
+    {
+      "sourceId": "src_97ea92219cefb2b56d60e384",
+      "bookSourceUrl": "https://fiction.fengduxiaoshuo.com",
+      "bookSourceName": "疯读小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_97ea92219cefb2b56d60e384",
+      "bookSourceUrl": "https://fiction.fengduxiaoshuo.com",
+      "bookSourceName": "疯读小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_97ea92219cefb2b56d60e384",
+      "bookSourceUrl": "https://fiction.fengduxiaoshuo.com",
+      "bookSourceName": "疯读小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_97ea92219cefb2b56d60e384",
+      "bookSourceUrl": "https://fiction.fengduxiaoshuo.com",
+      "bookSourceName": "疯读小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=6771"
+    },
+    {
+      "sourceId": "src_802a30ceb32c39a84c74e34b",
+      "bookSourceUrl": "https://fanqie.hnxianxin.cn/＃妍希",
+      "bookSourceName": "番茄小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://fanqie.hnxianxin.cn/search?query=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=0\u0026tab_type=3\": dial tcp: lookup fanqie.hnxianxin.cn on 172.20.65.146:53: no such host",
+      "failureClass": "network_dns_failure"
+    },
+    {
+      "sourceId": "src_d38a730ccbdfbba899b5221e",
+      "bookSourceUrl": "https://www.youduzw.com",
+      "bookSourceName": "有度中文（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: unexpected status: 403",
+      "failureClass": "source_upstream_http_403"
+    },
+    {
+      "sourceId": "src_226e9a79d6623f6145729ae8",
+      "bookSourceUrl": "https://api-bc.wtzw.com＃妍希",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_226e9a79d6623f6145729ae8",
+      "bookSourceUrl": "https://api-bc.wtzw.com＃妍希",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_226e9a79d6623f6145729ae8",
+      "bookSourceUrl": "https://api-bc.wtzw.com＃妍希",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_226e9a79d6623f6145729ae8",
+      "bookSourceUrl": "https://api-bc.wtzw.com＃妍希",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "failed",
+      "message": "script_failed: e2e: SyntaxError: invalid character 'G' looking for beginning of value at parse (native)",
+      "failureClass": "source_upstream_non_json_response"
+    },
+    {
+      "sourceId": "src_a973ad4b9b42e5e7f3da9735",
+      "bookSourceUrl": "https://api-bc.wtzw.com#md",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a973ad4b9b42e5e7f3da9735",
+      "bookSourceUrl": "https://api-bc.wtzw.com#md",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a973ad4b9b42e5e7f3da9735",
+      "bookSourceUrl": "https://api-bc.wtzw.com#md",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a973ad4b9b42e5e7f3da9735",
+      "bookSourceUrl": "https://api-bc.wtzw.com#md",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8452"
+    },
+    {
+      "sourceId": "src_dfbd818e6f7415e487deca06",
+      "bookSourceUrl": "https://api-bc.wtzw.com#yc1101b",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_dfbd818e6f7415e487deca06",
+      "bookSourceUrl": "https://api-bc.wtzw.com#yc1101b",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_dfbd818e6f7415e487deca06",
+      "bookSourceUrl": "https://api-bc.wtzw.com#yc1101b",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_dfbd818e6f7415e487deca06",
+      "bookSourceUrl": "https://api-bc.wtzw.com#yc1101b",
+      "bookSourceName": "七猫小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8452"
+    },
+    {
+      "sourceId": "src_69b9c71eff0060708b6ded3b",
+      "bookSourceUrl": "http://qmbook.taoyuewenhua.net/#@遇知",
+      "bookSourceName": "全免小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_69b9c71eff0060708b6ded3b",
+      "bookSourceUrl": "http://qmbook.taoyuewenhua.net/#@遇知",
+      "bookSourceName": "全免小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_69b9c71eff0060708b6ded3b",
+      "bookSourceUrl": "http://qmbook.taoyuewenhua.net/#@遇知",
+      "bookSourceName": "全免小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_69b9c71eff0060708b6ded3b",
+      "bookSourceUrl": "http://qmbook.taoyuewenhua.net/#@遇知",
+      "bookSourceName": "全免小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=7086"
+    },
+    {
+      "sourceId": "src_497b90c6d494403d284f9e92",
+      "bookSourceUrl": "https://tybook.taoyuewenhua.net",
+      "bookSourceName": "爱淘小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_497b90c6d494403d284f9e92",
+      "bookSourceUrl": "https://tybook.taoyuewenhua.net",
+      "bookSourceName": "爱淘小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_497b90c6d494403d284f9e92",
+      "bookSourceUrl": "https://tybook.taoyuewenhua.net",
+      "bookSourceName": "爱淘小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_497b90c6d494403d284f9e92",
+      "bookSourceUrl": "https://tybook.taoyuewenhua.net",
+      "bookSourceName": "爱淘小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=7086"
+    },
+    {
+      "sourceId": "src_80760b824d3f4b7f19b9bebd",
+      "bookSourceUrl": "https://goway.reader.yueyouxs.com/",
+      "bookSourceName": "阅友小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_80760b824d3f4b7f19b9bebd",
+      "bookSourceUrl": "https://goway.reader.yueyouxs.com/",
+      "bookSourceName": "阅友小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_80760b824d3f4b7f19b9bebd",
+      "bookSourceUrl": "https://goway.reader.yueyouxs.com/",
+      "bookSourceName": "阅友小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_80760b824d3f4b7f19b9bebd",
+      "bookSourceUrl": "https://goway.reader.yueyouxs.com/",
+      "bookSourceName": "阅友小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=13475"
+    },
+    {
+      "sourceId": "src_eb8d09652f35347c3db4b600",
+      "bookSourceUrl": "https://qcbook.taoyuewenhua.net",
+      "bookSourceName": "陶越文华（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_eb8d09652f35347c3db4b600",
+      "bookSourceUrl": "https://qcbook.taoyuewenhua.net",
+      "bookSourceName": "陶越文华（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_eb8d09652f35347c3db4b600",
+      "bookSourceUrl": "https://qcbook.taoyuewenhua.net",
+      "bookSourceName": "陶越文华（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_eb8d09652f35347c3db4b600",
+      "bookSourceUrl": "https://qcbook.taoyuewenhua.net",
+      "bookSourceName": "陶越文华（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=6181"
+    },
+    {
+      "sourceId": "src_f58fc1c12a7ca4f750da5232",
+      "bookSourceUrl": "https://kakuyomu.jp/",
+      "bookSourceName": "风扇枕说（日+）",
+      "keywordUsed": "僕",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f58fc1c12a7ca4f750da5232",
+      "bookSourceUrl": "https://kakuyomu.jp/",
+      "bookSourceName": "风扇枕说（日+）",
+      "keywordUsed": "僕",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f58fc1c12a7ca4f750da5232",
+      "bookSourceUrl": "https://kakuyomu.jp/",
+      "bookSourceName": "风扇枕说（日+）",
+      "keywordUsed": "僕",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f58fc1c12a7ca4f750da5232",
+      "bookSourceUrl": "https://kakuyomu.jp/",
+      "bookSourceName": "风扇枕说（日+）",
+      "keywordUsed": "僕",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=2949"
+    },
+    {
+      "sourceId": "src_548b68eea2029ceef58f7a05",
+      "bookSourceUrl": "https://fq-book.netsite.cc",
+      "bookSourceName": "番茄小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_548b68eea2029ceef58f7a05",
+      "bookSourceUrl": "https://fq-book.netsite.cc",
+      "bookSourceName": "番茄小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_548b68eea2029ceef58f7a05",
+      "bookSourceUrl": "https://fq-book.netsite.cc",
+      "bookSourceName": "番茄小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_548b68eea2029ceef58f7a05",
+      "bookSourceUrl": "https://fq-book.netsite.cc",
+      "bookSourceName": "番茄小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=993"
+    },
+    {
+      "sourceId": "src_ae48dc2981afcd5dbeea4255",
+      "bookSourceUrl": "https://m.zym888.com",
+      "bookSourceName": "番茄小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_f8a3a2e7e8df8d9df945f590",
+      "bookSourceUrl": "https://reading.snssdk.com#mgz",
+      "bookSourceName": "番茄小说（优+）",
+      "keywordUsed": "https://www.baidu.com/删书示例?book_id=7285555567827880975",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f8a3a2e7e8df8d9df945f590",
+      "bookSourceUrl": "https://reading.snssdk.com#mgz",
+      "bookSourceName": "番茄小说（优+）",
+      "keywordUsed": "https://www.baidu.com/删书示例?book_id=7285555567827880975",
+      "stage": "info",
+      "status": "failed",
+      "message": "script_failed: e2e: SyntaxError: Unexpected end of JSON input (EOF) at parse (native)",
+      "failureClass": "source_upstream_empty_json_response"
+    },
+    {
+      "sourceId": "src_29718f3c3b17e293f15f0349",
+      "bookSourceUrl": "http://xiaoshuo.uc.cn",
+      "bookSourceName": "阿巴小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_29718f3c3b17e293f15f0349",
+      "bookSourceUrl": "http://xiaoshuo.uc.cn",
+      "bookSourceName": "阿巴小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_29718f3c3b17e293f15f0349",
+      "bookSourceUrl": "http://xiaoshuo.uc.cn",
+      "bookSourceName": "阿巴小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_29718f3c3b17e293f15f0349",
+      "bookSourceUrl": "http://xiaoshuo.uc.cn",
+      "bookSourceName": "阿巴小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=9929"
+    },
+    {
+      "sourceId": "src_818a053544bc9270a08fd51f",
+      "bookSourceUrl": "https://www.yodu.org/qingxiaoshuo",
+      "bookSourceName": "有度轻说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://www.yodu.org/sa/all-%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9-1.html\": read tcp 172.20.65.119:56108-\u003e64.185.228.38:443: read: connection reset by peer",
+      "failureClass": "network_connection_reset"
+    },
+    {
+      "sourceId": "src_835ebbfd39f44f6aa68a2a63",
+      "bookSourceUrl": "https://n.novelia.cc",
+      "bookSourceName": "轻说机翻（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://n.novelia.cc/api/novel?page=0\u0026pageSize=20\u0026query=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026provider=kakuyomu%2Csyosetu%2Cnovelup%2Chameln%2Cpixiv%2Calphapolis\u0026type=0\u0026level=0\u0026translate=0\u0026sort=1\": read tcp [2001:da8:9000:a362:68b7:4cff:fed9:e31]:39986-\u003e[2606:4700:3033::ac43:c558]:443: read: connection reset by peer",
+      "failureClass": "network_connection_reset"
+    },
+    {
+      "sourceId": "src_dfc5e2c079ea84a464b13e25",
+      "bookSourceUrl": "https://m.ttshu8.com",
+      "bookSourceName": "天天书吧（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: unexpected status: 500",
+      "failureClass": "source_upstream_http_500"
+    },
+    {
+      "sourceId": "src_1bb8d072276f4ad3708a5d1e",
+      "bookSourceUrl": "https://www.ttshu8.net",
+      "bookSourceName": "天天书吧（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: fetch blocked: unsupported scheme",
+      "failureClass": "security_policy_blocked"
+    },
+    {
+      "sourceId": "src_4019d1439b0b870ffaf8c606",
+      "bookSourceUrl": "http://m.suixkan.com",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4019d1439b0b870ffaf8c606",
+      "bookSourceUrl": "http://m.suixkan.com",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4019d1439b0b870ffaf8c606",
+      "bookSourceUrl": "http://m.suixkan.com",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4019d1439b0b870ffaf8c606",
+      "bookSourceUrl": "http://m.suixkan.com",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=9417"
+    },
+    {
+      "sourceId": "src_be2d391cdcf230b310be3ecb",
+      "bookSourceUrl": "https://sma.yueyouxs.com/#♤pb",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_be2d391cdcf230b310be3ecb",
+      "bookSourceUrl": "https://sma.yueyouxs.com/#♤pb",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_be2d391cdcf230b310be3ecb",
+      "bookSourceUrl": "https://sma.yueyouxs.com/#♤pb",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_be2d391cdcf230b310be3ecb",
+      "bookSourceUrl": "https://sma.yueyouxs.com/#♤pb",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=9417"
+    },
+    {
+      "sourceId": "src_ac801be47fa01cdc3b57e02c",
+      "bookSourceUrl": "https://sma.yueyouxs.com/",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_ac801be47fa01cdc3b57e02c",
+      "bookSourceUrl": "https://sma.yueyouxs.com/",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_ac801be47fa01cdc3b57e02c",
+      "bookSourceUrl": "https://sma.yueyouxs.com/",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_ac801be47fa01cdc3b57e02c",
+      "bookSourceUrl": "https://sma.yueyouxs.com/",
+      "bookSourceName": "阅友小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=9417"
+    },
+    {
+      "sourceId": "src_3dc4f05a9d45df260c7ba98e",
+      "bookSourceUrl": "https://cxb-pro.cread.com/",
+      "bookSourceName": "中文书城（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_3dc4f05a9d45df260c7ba98e",
+      "bookSourceUrl": "https://cxb-pro.cread.com/",
+      "bookSourceName": "中文书城（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_3dc4f05a9d45df260c7ba98e",
+      "bookSourceUrl": "https://cxb-pro.cread.com/",
+      "bookSourceName": "中文书城（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_3dc4f05a9d45df260c7ba98e",
+      "bookSourceUrl": "https://cxb-pro.cread.com/",
+      "bookSourceName": "中文书城（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=7701"
+    },
+    {
+      "sourceId": "src_f3d1750edb38632a08acb5ff",
+      "bookSourceUrl": "https://app.kujiang.com",
+      "bookSourceName": "酷匠网吧（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f3d1750edb38632a08acb5ff",
+      "bookSourceUrl": "https://app.kujiang.com",
+      "bookSourceName": "酷匠网吧（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f3d1750edb38632a08acb5ff",
+      "bookSourceUrl": "https://app.kujiang.com",
+      "bookSourceName": "酷匠网吧（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f3d1750edb38632a08acb5ff",
+      "bookSourceUrl": "https://app.kujiang.com",
+      "bookSourceName": "酷匠网吧（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=6994"
+    },
+    {
+      "sourceId": "src_fd0d561a90307d803dc40dca",
+      "bookSourceUrl": "https://book.mywebos.cn",
+      "bookSourceName": "国学書库（优+）",
+      "keywordUsed": "论语",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_fd0d561a90307d803dc40dca",
+      "bookSourceUrl": "https://book.mywebos.cn",
+      "bookSourceName": "国学書库（优+）",
+      "keywordUsed": "论语",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_fd0d561a90307d803dc40dca",
+      "bookSourceUrl": "https://book.mywebos.cn",
+      "bookSourceName": "国学書库（优+）",
+      "keywordUsed": "论语",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_fd0d561a90307d803dc40dca",
+      "bookSourceUrl": "https://book.mywebos.cn",
+      "bookSourceName": "国学書库（优+）",
+      "keywordUsed": "论语",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=2013"
+    },
+    {
+      "sourceId": "src_f1ed7753d419f7b1c84c4aae",
+      "bookSourceUrl": "https://guoxue.wunpu.com",
+      "bookSourceName": "国学经典（优+）",
+      "keywordUsed": "论语",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f1ed7753d419f7b1c84c4aae",
+      "bookSourceUrl": "https://guoxue.wunpu.com",
+      "bookSourceName": "国学经典（优+）",
+      "keywordUsed": "论语",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f1ed7753d419f7b1c84c4aae",
+      "bookSourceUrl": "https://guoxue.wunpu.com",
+      "bookSourceName": "国学经典（优+）",
+      "keywordUsed": "论语",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f1ed7753d419f7b1c84c4aae",
+      "bookSourceUrl": "https://guoxue.wunpu.com",
+      "bookSourceName": "国学经典（优+）",
+      "keywordUsed": "论语",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=10533"
+    },
+    {
+      "sourceId": "src_35b7e7ed637987d3126f0936",
+      "bookSourceUrl": "https://www.zhonghuadiancang.com/",
+      "bookSourceName": "中华典藏（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Post \"https://www.zhonghuadiancang.com/e/search/index.php\": dial tcp [2a03:2880:f134:83:face:b00c:0:25de]:443: i/o timeout (Client.Timeout exceeded while awaiting headers)",
+      "failureClass": "network_timeout"
+    },
+    {
+      "sourceId": "src_0b3ad25c91471566070ebddc",
+      "bookSourceUrl": "https://www.zhonghuadiancang.com",
+      "bookSourceName": "中华典藏（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Post \"https://www.zhonghuadiancang.com/e/search/index.php\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "failureClass": "network_timeout"
+    },
+    {
+      "sourceId": "src_fb904277e1befe2368640f00",
+      "bookSourceUrl": "https://www.diancang.xyz",
+      "bookSourceName": "中华典藏（优+）",
+      "keywordUsed": "修真",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_fb904277e1befe2368640f00",
+      "bookSourceUrl": "https://www.diancang.xyz",
+      "bookSourceName": "中华典藏（优+）",
+      "keywordUsed": "修真",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_fb904277e1befe2368640f00",
+      "bookSourceUrl": "https://www.diancang.xyz",
+      "bookSourceName": "中华典藏（优+）",
+      "keywordUsed": "修真",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_fb904277e1befe2368640f00",
+      "bookSourceUrl": "https://www.diancang.xyz",
+      "bookSourceName": "中华典藏（优+）",
+      "keywordUsed": "修真",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=937"
+    },
+    {
+      "sourceId": "src_3a44ff1af921ceb89852f144",
+      "bookSourceUrl": "http://m.gulongbbs.com/wuxia",
+      "bookSourceName": "古龙武侠（优+）",
+      "keywordUsed": "天龙八部",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_3a44ff1af921ceb89852f144",
+      "bookSourceUrl": "http://m.gulongbbs.com/wuxia",
+      "bookSourceName": "古龙武侠（优+）",
+      "keywordUsed": "天龙八部",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_3a44ff1af921ceb89852f144",
+      "bookSourceUrl": "http://m.gulongbbs.com/wuxia",
+      "bookSourceName": "古龙武侠（优+）",
+      "keywordUsed": "天龙八部",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_3a44ff1af921ceb89852f144",
+      "bookSourceUrl": "http://m.gulongbbs.com/wuxia",
+      "bookSourceName": "古龙武侠（优+）",
+      "keywordUsed": "天龙八部",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=4676"
+    },
+    {
+      "sourceId": "src_a868a503411048c51d887329",
+      "bookSourceUrl": "https://www.jinyongwang.net#♤yc",
+      "bookSourceName": "金庸小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://www.jinyongwang.net/search/%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9/\": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-05-05T15:26:36+08:00 is after 2026-04-10T13:04:24Z",
+      "failureClass": "network_tls_invalid"
+    },
+    {
+      "sourceId": "src_a311aba6335e1e00f27d7d6a",
+      "bookSourceUrl": "https://www.jinyongwang.net",
+      "bookSourceName": "金庸小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://www.jinyongwang.net/search/%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9/\": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-05-05T15:26:36+08:00 is after 2026-04-10T13:04:24Z",
+      "failureClass": "network_tls_invalid"
+    },
+    {
+      "sourceId": "src_348a4f1ee3be6f78cfd14bd6",
+      "bookSourceUrl": "http://www.daomubiji.com",
+      "bookSourceName": "盗墓笔记（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: unexpected status: 404",
+      "failureClass": "source_upstream_http_404"
+    },
+    {
+      "sourceId": "src_4c0843cc0b0f267bdd9802e6",
+      "bookSourceUrl": "https://www.6mj.com",
+      "bookSourceName": "民间故事（优+）",
+      "keywordUsed": "民间故事",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4c0843cc0b0f267bdd9802e6",
+      "bookSourceUrl": "https://www.6mj.com",
+      "bookSourceName": "民间故事（优+）",
+      "keywordUsed": "民间故事",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4c0843cc0b0f267bdd9802e6",
+      "bookSourceUrl": "https://www.6mj.com",
+      "bookSourceName": "民间故事（优+）",
+      "keywordUsed": "民间故事",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4c0843cc0b0f267bdd9802e6",
+      "bookSourceUrl": "https://www.6mj.com",
+      "bookSourceName": "民间故事（优+）",
+      "keywordUsed": "民间故事",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=11902"
+    },
+    {
+      "sourceId": "src_324fefedd44d5637bb733eff",
+      "bookSourceUrl": "https://www.yanxuanwk.com#",
+      "bookSourceName": "盐选文库（优+）",
+      "keywordUsed": "回答",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_324fefedd44d5637bb733eff",
+      "bookSourceUrl": "https://www.yanxuanwk.com#",
+      "bookSourceName": "盐选文库（优+）",
+      "keywordUsed": "回答",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_324fefedd44d5637bb733eff",
+      "bookSourceUrl": "https://www.yanxuanwk.com#",
+      "bookSourceName": "盐选文库（优+）",
+      "keywordUsed": "回答",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_324fefedd44d5637bb733eff",
+      "bookSourceUrl": "https://www.yanxuanwk.com#",
+      "bookSourceName": "盐选文库（优+）",
+      "keywordUsed": "回答",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=49578"
+    },
+    {
+      "sourceId": "src_fe929c1e56fad544e2dee30d",
+      "bookSourceUrl": "https://www.yanxuanwk.com/",
+      "bookSourceName": "盐选文库（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: unexpected status: 404",
+      "failureClass": "source_upstream_http_404"
+    },
+    {
+      "sourceId": "src_a8a6f18201431abb598827b5",
+      "bookSourceUrl": "https://onehu.xyz",
+      "bookSourceName": "我是盐神（优+）",
+      "keywordUsed": "回答",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a8a6f18201431abb598827b5",
+      "bookSourceUrl": "https://onehu.xyz",
+      "bookSourceName": "我是盐神（优+）",
+      "keywordUsed": "回答",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a8a6f18201431abb598827b5",
+      "bookSourceUrl": "https://onehu.xyz",
+      "bookSourceName": "我是盐神（优+）",
+      "keywordUsed": "回答",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_a8a6f18201431abb598827b5",
+      "bookSourceUrl": "https://onehu.xyz",
+      "bookSourceName": "我是盐神（优+）",
+      "keywordUsed": "回答",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=118863"
+    },
+    {
+      "sourceId": "src_6ee726b69dd2f237f65a17e9",
+      "bookSourceUrl": "https://m.zhonghuashici.com",
+      "bookSourceName": "中华诗词（优+）",
+      "keywordUsed": "蝶恋花",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_6ee726b69dd2f237f65a17e9",
+      "bookSourceUrl": "https://m.zhonghuashici.com",
+      "bookSourceName": "中华诗词（优+）",
+      "keywordUsed": "蝶恋花",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_6ee726b69dd2f237f65a17e9",
+      "bookSourceUrl": "https://m.zhonghuashici.com",
+      "bookSourceName": "中华诗词（优+）",
+      "keywordUsed": "蝶恋花",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_6ee726b69dd2f237f65a17e9",
+      "bookSourceUrl": "https://m.zhonghuashici.com",
+      "bookSourceName": "中华诗词（优+）",
+      "keywordUsed": "蝶恋花",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=1221"
+    },
+    {
+      "sourceId": "src_c9197e750ca5e16567fef941",
+      "bookSourceUrl": "https://m.zhonghuashici.com/",
+      "bookSourceName": "中华诗词（优+）",
+      "keywordUsed": "蝶恋花",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_c9197e750ca5e16567fef941",
+      "bookSourceUrl": "https://m.zhonghuashici.com/",
+      "bookSourceName": "中华诗词（优+）",
+      "keywordUsed": "蝶恋花",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_c9197e750ca5e16567fef941",
+      "bookSourceUrl": "https://m.zhonghuashici.com/",
+      "bookSourceName": "中华诗词（优+）",
+      "keywordUsed": "蝶恋花",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_c9197e750ca5e16567fef941",
+      "bookSourceUrl": "https://m.zhonghuashici.com/",
+      "bookSourceName": "中华诗词（优+）",
+      "keywordUsed": "蝶恋花",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=1221"
+    },
+    {
+      "sourceId": "src_a0345050588428ebb29f8b65",
+      "bookSourceUrl": "https://m.gushiwen.cn",
+      "bookSourceName": "古诗文网（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_8c754868647d40e20e00fcd6",
+      "bookSourceUrl": "https://m.gushici.net/",
+      "bookSourceName": "古诗词网（优+）",
+      "keywordUsed": "李白",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8c754868647d40e20e00fcd6",
+      "bookSourceUrl": "https://m.gushici.net/",
+      "bookSourceName": "古诗词网（优+）",
+      "keywordUsed": "李白",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8c754868647d40e20e00fcd6",
+      "bookSourceUrl": "https://m.gushici.net/",
+      "bookSourceName": "古诗词网（优+）",
+      "keywordUsed": "李白",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8c754868647d40e20e00fcd6",
+      "bookSourceUrl": "https://m.gushici.net/",
+      "bookSourceName": "古诗词网（优+）",
+      "keywordUsed": "李白",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=27123"
+    },
+    {
+      "sourceId": "src_5072a6eed2bf13219c7df90e",
+      "bookSourceUrl": "https://m.gushiwen.cn/",
+      "bookSourceName": "古诗文网（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_f00c3386f10eacbe690bbbc2",
+      "bookSourceUrl": "http://yz4.chaoxing.com",
+      "bookSourceName": "古典文学（优+）",
+      "keywordUsed": "论语",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f00c3386f10eacbe690bbbc2",
+      "bookSourceUrl": "http://yz4.chaoxing.com",
+      "bookSourceName": "古典文学（优+）",
+      "keywordUsed": "论语",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f00c3386f10eacbe690bbbc2",
+      "bookSourceUrl": "http://yz4.chaoxing.com",
+      "bookSourceName": "古典文学（优+）",
+      "keywordUsed": "论语",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_f00c3386f10eacbe690bbbc2",
+      "bookSourceUrl": "http://yz4.chaoxing.com",
+      "bookSourceName": "古典文学（优+）",
+      "keywordUsed": "论语",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=3576"
+    },
+    {
+      "sourceId": "src_844c516e0716b6d1b0ae021d",
+      "bookSourceUrl": "http://3g.sbkk8.com#",
+      "bookSourceName": "天涯知识（优+）",
+      "keywordUsed": "的画像",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_844c516e0716b6d1b0ae021d",
+      "bookSourceUrl": "http://3g.sbkk8.com#",
+      "bookSourceName": "天涯知识（优+）",
+      "keywordUsed": "的画像",
+      "stage": "info",
+      "status": "failed",
+      "message": "Get \"http://m.sbkk8.com/gudai/zhongguogudaishenhuagushi/217763.html\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "failureClass": "network_timeout"
+    },
+    {
+      "sourceId": "src_85204b4c8ade867fdf3470e6",
+      "bookSourceUrl": "https://www.dxmwx.org",
+      "bookSourceName": "熊猫文学（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://www.dxmwx.org/list/%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9.html\": read tcp [2001:da8:9000:a362:68b7:4cff:fed9:e31]:33712-\u003e[2606:4700:3033::ac43:b2ac]:443: read: connection reset by peer",
+      "failureClass": "network_connection_reset"
+    },
+    {
+      "sourceId": "src_4c0af541a551d1445adec5e6",
+      "bookSourceUrl": "https://www.yamibo.com/site/novel",
+      "bookSourceName": "百合爱会（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_371d847bd9e984de7bdbd525",
+      "bookSourceUrl": "https://m.qbxsba.com",
+      "bookSourceName": "全本小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Post \"https://m.qbxsba.com/modules/article/search.php\": http: server gave HTTP response to HTTPS client",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_be6bc224a0d554d82c4ddb39",
+      "bookSourceUrl": "https://m.xuribook.com",
+      "bookSourceName": "旭日小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: unexpected status: 401",
+      "failureClass": "source_authorization_failed"
+    },
+    {
+      "sourceId": "src_8d028086f6809098b50c922c",
+      "bookSourceUrl": "https://api-bc.wtzw.com#♤ycb",
+      "bookSourceName": "七猫小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8d028086f6809098b50c922c",
+      "bookSourceUrl": "https://api-bc.wtzw.com#♤ycb",
+      "bookSourceName": "七猫小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8d028086f6809098b50c922c",
+      "bookSourceUrl": "https://api-bc.wtzw.com#♤ycb",
+      "bookSourceName": "七猫小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8d028086f6809098b50c922c",
+      "bookSourceUrl": "https://api-bc.wtzw.com#♤ycb",
+      "bookSourceName": "七猫小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8452"
+    },
+    {
+      "sourceId": "src_ee5993366c325da95d6c3528",
+      "bookSourceUrl": "https://api-bc.wtzw.com/",
+      "bookSourceName": "七猫小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_ee5993366c325da95d6c3528",
+      "bookSourceUrl": "https://api-bc.wtzw.com/",
+      "bookSourceName": "七猫小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_ee5993366c325da95d6c3528",
+      "bookSourceUrl": "https://api-bc.wtzw.com/",
+      "bookSourceName": "七猫小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_ee5993366c325da95d6c3528",
+      "bookSourceUrl": "https://api-bc.wtzw.com/",
+      "bookSourceName": "七猫小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8452"
+    },
+    {
+      "sourceId": "src_56d458b28458d5c51447cfbc",
+      "bookSourceUrl": "https://fiction.fengduxiaoshuo.com/",
+      "bookSourceName": "疯读小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_56d458b28458d5c51447cfbc",
+      "bookSourceUrl": "https://fiction.fengduxiaoshuo.com/",
+      "bookSourceName": "疯读小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_56d458b28458d5c51447cfbc",
+      "bookSourceUrl": "https://fiction.fengduxiaoshuo.com/",
+      "bookSourceName": "疯读小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_56d458b28458d5c51447cfbc",
+      "bookSourceUrl": "https://fiction.fengduxiaoshuo.com/",
+      "bookSourceName": "疯读小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=6771"
+    },
+    {
+      "sourceId": "src_763a2df9f7cf60e89cea3b04",
+      "bookSourceUrl": "https://www.dtxsw.com",
+      "bookSourceName": "大唐小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_763a2df9f7cf60e89cea3b04",
+      "bookSourceUrl": "https://www.dtxsw.com",
+      "bookSourceName": "大唐小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_763a2df9f7cf60e89cea3b04",
+      "bookSourceUrl": "https://www.dtxsw.com",
+      "bookSourceName": "大唐小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_763a2df9f7cf60e89cea3b04",
+      "bookSourceUrl": "https://www.dtxsw.com",
+      "bookSourceName": "大唐小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8577"
+    },
+    {
+      "sourceId": "src_b28018fc62ce8d744ffcb9d8",
+      "bookSourceUrl": "https://www.limaogushi.com/",
+      "bookSourceName": "狸猫故事（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: unexpected status: 403",
+      "failureClass": "source_upstream_http_403"
+    },
+    {
+      "sourceId": "src_e35e1e2cd1f510c8bf994084",
+      "bookSourceUrl": "https://www.sxgread.com",
+      "bookSourceName": "书香阁子（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://www.sxgread.com/s/?sword=%B6%B7%C6%C6%B2%D4%F1%B7\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "failureClass": "network_timeout"
+    },
+    {
+      "sourceId": "src_efffd3d64d374730dc38dffb",
+      "bookSourceUrl": "https://m.nauqmf.com",
+      "bookSourceName": "风云小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_94ec0165cde467ca225d0db6",
+      "bookSourceUrl": "https://www.83zws.com",
+      "bookSourceName": "八三中文（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Post \"https://www.83zws.com/soso/\": read tcp 172.20.65.119:49226-\u003e154.17.237.105:443: read: connection reset by peer",
+      "failureClass": "network_connection_reset"
+    },
+    {
+      "sourceId": "src_8312a4da2e972018e6c1be17",
+      "bookSourceUrl": "http://www.yuedsk.com",
+      "bookSourceName": "阅读库子（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8312a4da2e972018e6c1be17",
+      "bookSourceUrl": "http://www.yuedsk.com",
+      "bookSourceName": "阅读库子（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8312a4da2e972018e6c1be17",
+      "bookSourceUrl": "http://www.yuedsk.com",
+      "bookSourceName": "阅读库子（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_8312a4da2e972018e6c1be17",
+      "bookSourceUrl": "http://www.yuedsk.com",
+      "bookSourceName": "阅读库子（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=10190"
+    },
+    {
+      "sourceId": "src_b80cb5f33f6635be64c13a52",
+      "bookSourceUrl": "https://www.88haoshu.com/",
+      "bookSourceName": "安读书网（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_c8bbeb93a87ca3e5cbac1c14",
+      "bookSourceUrl": "http://www.booksky.cc",
+      "bookSourceName": "快眼看书（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_c8bbeb93a87ca3e5cbac1c14",
+      "bookSourceUrl": "http://www.booksky.cc",
+      "bookSourceName": "快眼看书（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_c8bbeb93a87ca3e5cbac1c14",
+      "bookSourceUrl": "http://www.booksky.cc",
+      "bookSourceName": "快眼看书（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_c8bbeb93a87ca3e5cbac1c14",
+      "bookSourceUrl": "http://www.booksky.cc",
+      "bookSourceName": "快眼看书（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8452"
+    },
+    {
+      "sourceId": "src_9f08fac3a86bfc9bd08cbe91",
+      "bookSourceUrl": "http://www.xbotaodz.com",
+      "bookSourceName": "快眼看书（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_9f08fac3a86bfc9bd08cbe91",
+      "bookSourceUrl": "http://www.xbotaodz.com",
+      "bookSourceName": "快眼看书（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_9f08fac3a86bfc9bd08cbe91",
+      "bookSourceUrl": "http://www.xbotaodz.com",
+      "bookSourceName": "快眼看书（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_9f08fac3a86bfc9bd08cbe91",
+      "bookSourceUrl": "http://www.xbotaodz.com",
+      "bookSourceName": "快眼看书（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8452"
+    },
+    {
+      "sourceId": "src_5a3717c98dc35415a2e67187",
+      "bookSourceUrl": "https://reader.browser.miui.com/v2#",
+      "bookSourceName": "小米阅读（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://reader.browser.miui.com/api/v2/search/word?query=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026size=100\": dial tcp: lookup reader.browser.miui.com on 172.20.65.146:53: no such host",
+      "failureClass": "network_dns_failure"
+    },
+    {
+      "sourceId": "src_4afeb4b41076609e3a1281d1",
+      "bookSourceUrl": "https://api.midureader.com/#@遇知",
+      "bookSourceName": "米读小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4afeb4b41076609e3a1281d1",
+      "bookSourceUrl": "https://api.midureader.com/#@遇知",
+      "bookSourceName": "米读小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4afeb4b41076609e3a1281d1",
+      "bookSourceUrl": "https://api.midureader.com/#@遇知",
+      "bookSourceName": "米读小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_4afeb4b41076609e3a1281d1",
+      "bookSourceUrl": "https://api.midureader.com/#@遇知",
+      "bookSourceName": "米读小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8452"
+    },
+    {
+      "sourceId": "src_7956897ace18c66b4b8e5c47",
+      "bookSourceUrl": "https://reader.browser.miui.com",
+      "bookSourceName": "小米书城（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://reader.browser.miui.com/api/v2/search/word?query=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026size=100\": dial tcp: lookup reader.browser.miui.com on 172.20.65.146:53: no such host",
+      "failureClass": "network_dns_failure"
+    },
+    {
+      "sourceId": "src_ed5d11ff9ad445ffef371bc9",
+      "bookSourceUrl": "https://m.shencou.com",
+      "bookSourceName": "神凑轻说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: unexpected status: 403",
+      "failureClass": "source_upstream_http_403"
+    },
+    {
+      "sourceId": "src_b6596506a24ff438c6dcd4ee",
+      "bookSourceUrl": "https://www.linovel.net:443/",
+      "bookSourceName": "轻之文库（优+）",
+      "keywordUsed": "刀剑神域",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_b6596506a24ff438c6dcd4ee",
+      "bookSourceUrl": "https://www.linovel.net:443/",
+      "bookSourceName": "轻之文库（优+）",
+      "keywordUsed": "刀剑神域",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_b6596506a24ff438c6dcd4ee",
+      "bookSourceUrl": "https://www.linovel.net:443/",
+      "bookSourceName": "轻之文库（优+）",
+      "keywordUsed": "刀剑神域",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_b6596506a24ff438c6dcd4ee",
+      "bookSourceUrl": "https://www.linovel.net:443/",
+      "bookSourceName": "轻之文库（优+）",
+      "keywordUsed": "刀剑神域",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=21653"
+    },
+    {
+      "sourceId": "src_06780558c4d68fc08b92aa03",
+      "bookSourceUrl": "https://www.linovel.net#yc",
+      "bookSourceName": "轻之文库（优+）",
+      "keywordUsed": "刀剑神域",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_06780558c4d68fc08b92aa03",
+      "bookSourceUrl": "https://www.linovel.net#yc",
+      "bookSourceName": "轻之文库（优+）",
+      "keywordUsed": "刀剑神域",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_06780558c4d68fc08b92aa03",
+      "bookSourceUrl": "https://www.linovel.net#yc",
+      "bookSourceName": "轻之文库（优+）",
+      "keywordUsed": "刀剑神域",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_06780558c4d68fc08b92aa03",
+      "bookSourceUrl": "https://www.linovel.net#yc",
+      "bookSourceName": "轻之文库（优+）",
+      "keywordUsed": "刀剑神域",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=16787"
+    },
+    {
+      "sourceId": "src_a38faf7e5285445cef87a57c",
+      "bookSourceUrl": "https://jyapi.jyacg.com#yc11",
+      "bookSourceName": "鲸云轻说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://jyapi.jyacg.com/web/search?name=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\u0026type=1\": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-05-05T15:28:27+08:00 is after 2026-02-10T15:32:03Z",
+      "failureClass": "network_tls_invalid"
+    },
+    {
+      "sourceId": "src_ded92cad885a53cc49f5aacc",
+      "bookSourceUrl": "https://jyapi.jyacg.com#",
+      "bookSourceName": "鲸云轻说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"https://jyapi.jyacg.com/web/search?name=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\u0026type=1\": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-05-05T15:28:27+08:00 is after 2026-02-10T15:32:03Z",
+      "failureClass": "network_tls_invalid"
+    },
+    {
+      "sourceId": "src_f6eb03cad223579556ead442",
+      "bookSourceUrl": "https://www.xdxss.com",
+      "bookSourceName": "炫动小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_b737ce7afb3dddca373e755b",
+      "bookSourceUrl": "http://www.sfwx.com/",
+      "bookSourceName": "书法小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_cf66bfeee51cfb09c24b1c4c",
+      "bookSourceUrl": "http://www.jjjxsw.com",
+      "bookSourceName": "爱久久网（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    },
+    {
+      "sourceId": "src_c91c18f448f64e89aa7cb82a",
+      "bookSourceUrl": "https://m.juzhishuwu.com/",
+      "bookSourceName": "桔纸书屋（优+）",
+      "keywordUsed": "我的模拟长生路",
+      "stage": "search",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_c91c18f448f64e89aa7cb82a",
+      "bookSourceUrl": "https://m.juzhishuwu.com/",
+      "bookSourceName": "桔纸书屋（优+）",
+      "keywordUsed": "我的模拟长生路",
+      "stage": "info",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_c91c18f448f64e89aa7cb82a",
+      "bookSourceUrl": "https://m.juzhishuwu.com/",
+      "bookSourceName": "桔纸书屋（优+）",
+      "keywordUsed": "我的模拟长生路",
+      "stage": "toc",
+      "status": "passed"
+    },
+    {
+      "sourceId": "src_c91c18f448f64e89aa7cb82a",
+      "bookSourceUrl": "https://m.juzhishuwu.com/",
+      "bookSourceName": "桔纸书屋（优+）",
+      "keywordUsed": "我的模拟长生路",
+      "stage": "content",
+      "status": "failed",
+      "message": "content_empty",
+      "failureClass": "source_content_empty"
+    },
+    {
+      "sourceId": "src_2ccb91753b7c52e0802265c3",
+      "bookSourceUrl": "https://www.yodu.org##破冰",
+      "bookSourceName": "有度中文（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Post \"https://www.yodu.org/sa\": read tcp 172.20.65.119:56200-\u003e64.185.228.38:443: read: connection reset by peer",
+      "failureClass": "network_connection_reset"
+    },
+    {
+      "sourceId": "src_07f2191f96e9e77274a19da2",
+      "bookSourceUrl": "https://www.17bxwx.com/",
+      "bookSourceName": "笔下文学（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result"
+    }
+  ],
+  "failureSummary": {
+    "network_connection_reset": 5,
+    "network_dns_failure": 4,
+    "network_timeout": 5,
+    "network_tls_invalid": 6,
+    "security_policy_blocked": 1,
+    "source_authorization_failed": 1,
+    "source_content_empty": 1,
+    "source_search_empty_result": 13,
+    "source_toc_empty": 1,
+    "source_upstream_empty_json_response": 2,
+    "source_upstream_http_403": 5,
+    "source_upstream_http_404": 3,
+    "source_upstream_http_500": 1,
+    "source_upstream_non_json_response": 1
+  },
+  "releaseAllowed": true
+}
