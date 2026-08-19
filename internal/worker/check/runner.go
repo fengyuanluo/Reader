@@ -93,9 +93,6 @@ func (r *Runner) run(ctx context.Context, checkTask *task.CheckTask, sources []*
 				item.Status = task.CheckItemCancelled
 				item.Message = ctx.Err().Error()
 			}
-			if item.Status == task.CheckItemFailed {
-				hasFailure = true
-			}
 			if err := r.repo.SaveItem(context.Background(), item); err != nil {
 				mu.Lock()
 				persistFailure = true
@@ -103,8 +100,17 @@ func (r *Runner) run(ctx context.Context, checkTask *task.CheckTask, sources []*
 				return
 			}
 			mu.Lock()
+			if item.Status == task.CheckItemFailed {
+				hasFailure = true
+			}
 			finished++
+			currentFinished := finished
 			mu.Unlock()
+			if err := r.repo.UpdateTaskProgress(context.Background(), checkTask.TaskID, currentFinished); err != nil {
+				mu.Lock()
+				persistFailure = true
+				mu.Unlock()
+			}
 			if r.diagnostics != nil {
 				if err := r.diagnostics.Apply(context.Background(), item); err != nil {
 					mu.Lock()
@@ -119,11 +125,16 @@ func (r *Runner) run(ctx context.Context, checkTask *task.CheckTask, sources []*
 	delete(r.cancels, checkTask.TaskID)
 	r.mu.Unlock()
 	completedAt := time.Now().UTC()
+	mu.Lock()
+	finalFinished := finished
+	finalHasFailure := hasFailure
+	finalPersistFailure := persistFailure
+	mu.Unlock()
 	status := task.CheckTaskSucceeded
 	if ctx.Err() != nil {
 		status = task.CheckTaskCancelled
-	} else if persistFailure || hasFailure {
+	} else if finalPersistFailure || finalHasFailure {
 		status = task.CheckTaskFailed
 	}
-	_ = r.repo.UpdateTaskStatus(context.Background(), checkTask.TaskID, status, finished, &completedAt)
+	_ = r.repo.UpdateTaskStatus(context.Background(), checkTask.TaskID, status, finalFinished, &completedAt)
 }

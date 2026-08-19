@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,17 +33,18 @@ import (
 
 type SourceHandler struct {
 	generated.Unimplemented
-	manager   *sourceapp.Manager
-	importer  *sourceapp.Importer
-	searcher  Searcher
-	discovery DiscoveryService
-	books     *bookapp.Service
-	content   *contentapp.AppService
-	images    *contentapp.ImageProxy
-	replace   *replaceapp.Manager
-	debugSvc  *debugapp.Service
-	debug     *debugapp.Publisher
-	check     *checkapp.Manager
+	manager          *sourceapp.Manager
+	importer         *sourceapp.Importer
+	searcher         Searcher
+	discovery        DiscoveryService
+	books            *bookapp.Service
+	content          *contentapp.AppService
+	images           *contentapp.ImageProxy
+	replace          *replaceapp.Manager
+	debugSvc         *debugapp.Service
+	debug            *debugapp.Publisher
+	check            *checkapp.Manager
+	checkConcurrency int
 }
 
 func NewSourceHandler(manager *sourceapp.Manager) *SourceHandler {
@@ -91,8 +96,12 @@ func (h *SourceHandler) WithDebug(service *debugapp.Service, publisher *debugapp
 	return h
 }
 
-func (h *SourceHandler) WithCheck(check *checkapp.Manager) *SourceHandler {
+func (h *SourceHandler) WithCheck(check *checkapp.Manager, concurrency ...int) *SourceHandler {
 	h.check = check
+	h.checkConcurrency = 1
+	if len(concurrency) > 0 && concurrency[0] > 0 {
+		h.checkConcurrency = concurrency[0]
+	}
 	return h
 }
 
@@ -115,12 +124,12 @@ func (h *SourceHandler) CreateBookSourceCheckTask(w http.ResponseWriter, r *http
 		TraceID:   middleware.TraceIDFromContext(r.Context()),
 		CreatedAt: time.Now().UTC(),
 	}
-	created, err := h.check.Start(r.Context(), checkTask, body.SourceIds, checkOptionsFromDTO(body.Options), 4)
+	created, err := h.check.Start(r.Context(), checkTask, body.SourceIds, checkOptionsFromDTO(body.Options), h.checkConcurrency)
 	if err != nil {
 		writeCheckError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, mapCheckTask(created))
+	writeJSON(w, http.StatusAccepted, mapCheckTask(created))
 }
 
 func (h *SourceHandler) GetCheckTask(w http.ResponseWriter, r *http.Request, taskId string) {
@@ -146,7 +155,7 @@ func (h *SourceHandler) CancelCheckTask(w http.ResponseWriter, r *http.Request, 
 		writeCheckError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, mapCheckTask(checkTask))
+	writeJSON(w, http.StatusAccepted, mapCheckTask(checkTask))
 }
 
 func (h *SourceHandler) StreamCheckTaskEvents(w http.ResponseWriter, r *http.Request, taskId string) {
@@ -161,12 +170,22 @@ func (h *SourceHandler) StreamCheckTaskEvents(w http.ResponseWriter, r *http.Req
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)
-	eventType := generated.CheckCompleted
-	if checkTask.Status == task.CheckTaskCancelled {
-		eventType = generated.CheckCancelled
-	}
+	eventType := checkEventType(checkTask.Status)
 	encoded, _ := json.Marshal(generated.CheckEvent{TaskId: checkTask.TaskID, Type: eventType, Message: string(checkTask.Status), TraceId: checkTask.TraceID})
 	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, encoded)
+}
+
+func checkEventType(status task.CheckTaskStatus) generated.CheckEventType {
+	switch status {
+	case task.CheckTaskPending:
+		return generated.CheckStarted
+	case task.CheckTaskSucceeded, task.CheckTaskFailed:
+		return generated.CheckCompleted
+	case task.CheckTaskCancelled:
+		return generated.CheckCancelled
+	default:
+		return generated.CheckProgress
+	}
 }
 
 func (h *SourceHandler) ImportBookSources(w http.ResponseWriter, r *http.Request) {
@@ -514,6 +533,75 @@ func (h *SourceHandler) GetBookChapterContent(w http.ResponseWriter, r *http.Req
 	})
 }
 
+func (h *SourceHandler) ExportBookTxt(w http.ResponseWriter, r *http.Request, bookId string) {
+	if h.books == nil || h.content == nil {
+		writeNotConfigured(w, r, "book or content service is not configured")
+		return
+	}
+	b, err := h.books.Get(r.Context(), bookId)
+	if err != nil {
+		writeBookError(w, r, err)
+		return
+	}
+	tmp, err := os.CreateTemp("", "reader-export-*.txt")
+	if err != nil {
+		writeBookError(w, r, err)
+		return
+	}
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}()
+	stats, err := h.content.ExportTXT(r.Context(), bookId, tmp)
+	if err != nil {
+		writeBookError(w, r, err)
+		return
+	}
+	if err := tmp.Sync(); err != nil {
+		writeBookError(w, r, err)
+		return
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		writeBookError(w, r, err)
+		return
+	}
+	filename := exportFilename(b.Name)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", exportContentDisposition(filename))
+	w.Header().Set("Content-Length", strconv.FormatInt(stats.Bytes, 10))
+	http.ServeContent(w, r, filename, time.Time{}, tmp)
+}
+
+func exportFilename(name string) string {
+	name = strings.TrimSpace(name)
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r < 0x20 || strings.ContainsRune(`\\/:*?"<>|`, r):
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	name = strings.TrimSpace(b.String())
+	if name == "" {
+		name = "book"
+	}
+	return name + ".txt"
+}
+
+func exportContentDisposition(filename string) string {
+	var fallback strings.Builder
+	for _, r := range filename {
+		if r >= 0x20 && r <= 0x7e && r != '"' && r != '\\' {
+			fallback.WriteRune(r)
+		} else {
+			fallback.WriteByte('_')
+		}
+	}
+	return `attachment; filename="` + fallback.String() + `"; filename*=UTF-8''` + url.PathEscape(filename)
+}
+
 func (h *SourceHandler) ProxyImage(w http.ResponseWriter, r *http.Request, params generated.ProxyImageParams) {
 	if h.images == nil {
 		writeNotConfigured(w, r, "image proxy service is not configured")
@@ -840,6 +928,10 @@ func writeBookError(w http.ResponseWriter, r *http.Request, err error) {
 		middleware.WriteError(w, r, http.StatusInternalServerError, "content_empty", "content is empty", nil)
 	case errors.Is(err, contentapp.ErrUnsupportedContentBrowserFlow):
 		middleware.WriteError(w, r, http.StatusBadRequest, "unsupported_rule_feature", err.Error(), nil)
+	case errors.Is(err, contentapp.ErrExportFileSource):
+		middleware.WriteError(w, r, http.StatusBadRequest, "export_unsupported", err.Error(), nil)
+	case errors.Is(err, contentapp.ErrExportTocEmpty):
+		middleware.WriteError(w, r, http.StatusInternalServerError, "toc_empty", "toc is empty", nil)
 	case errors.Is(err, bookapp.ErrTocEmpty):
 		middleware.WriteError(w, r, http.StatusInternalServerError, "toc_empty", "toc is empty", nil)
 	default:

@@ -55,7 +55,7 @@ func (s *TocService) RefreshToc(ctx context.Context, input TocInput) ([]*book.Bo
 		if err != nil {
 			return nil, err
 		}
-		resp, err := s.fetcher.Fetch(ctx, req)
+		resp, err := executeBookFetchRequest(ctx, s.fetcher, req, src, &b, s.script)
 		if err != nil {
 			return nil, err
 		}
@@ -107,11 +107,11 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 			break
 		}
 		seenPages[next] = struct{}{}
-		req, err := buildBookFetchRequest(ctx, next, src, s.script)
+		req, err := buildBookFetchRequest(ctx, next, src, b, s.script)
 		if err != nil {
 			return nil, err
 		}
-		resp, err := s.fetcher.Fetch(ctx, req)
+		resp, err := executeBookFetchRequest(ctx, s.fetcher, req, src, b, s.script)
 		if err != nil {
 			return nil, err
 		}
@@ -136,11 +136,11 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 			if _, ok := seenPages[next]; ok {
 				continue
 			}
-			req, err := buildBookFetchRequest(ctx, next, src, s.script)
+			req, err := buildBookFetchRequest(ctx, next, src, b, s.script)
 			if err != nil {
 				return nil, err
 			}
-			resp, err := s.fetcher.Fetch(ctx, req)
+			resp, err := executeBookFetchRequest(ctx, s.fetcher, req, src, b, s.script)
 			if err != nil {
 				return nil, err
 			}
@@ -179,14 +179,12 @@ func parseTocPage(ctx context.Context, src *source.BookSource, b *book.Book, bas
 	}
 	nextURLs := []string{}
 	if getNextURL && strings.TrimSpace(tocRule.NextTocURL) != "" {
-		values, err := analyzer.GetStringList(ctx, tocRule.NextTocURL, body)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, value := range values {
-			value = strings.TrimSpace(urlrule.Absolute(redirectURL, value))
-			if value != "" && value != redirectURL {
-				nextURLs = append(nextURLs, value)
+		if values, err := analyzer.GetStringList(ctx, tocRule.NextTocURL, body); err == nil {
+			for _, value := range values {
+				value = strings.TrimSpace(urlrule.Absolute(redirectURL, value))
+				if value != "" && value != redirectURL {
+					nextURLs = append(nextURLs, value)
+				}
 			}
 		}
 	}

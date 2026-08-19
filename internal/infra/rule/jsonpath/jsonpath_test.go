@@ -53,6 +53,13 @@ func TestAdapterSupportsFallbackAndInterleave(t *testing.T) {
 	if !reflect.DeepEqual(fallback, []string{"第一本", "第二本"}) {
 		t.Fatalf("fallback = %#v", fallback)
 	}
+	legacyFallback, err := adapter.Strings("$.id.resultDiv@tr||$.books[*].name")
+	if err != nil {
+		t.Fatalf("legacy fallback error = %v", err)
+	}
+	if !reflect.DeepEqual(legacyFallback, []string{"第一本", "第二本"}) {
+		t.Fatalf("legacy fallback = %#v", legacyFallback)
+	}
 	interleaved, err := adapter.Strings("$.books[*].name%%$.books[*].author")
 	if err != nil {
 		t.Fatalf("interleaved error = %v", err)
@@ -83,6 +90,48 @@ func TestAdapterTreatsScalarTraversalAsEmptyResult(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	got, err := adapter.Strings("$.data.search")
+	if err != nil {
+		t.Fatalf("Strings() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got = %#v, want empty", got)
+	}
+}
+
+func TestAdapterTreatsMissingFieldAsEmptyResult(t *testing.T) {
+	adapter, err := New(`{"name":"第一本"}`)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	got, err := adapter.Strings("$.missing")
+	if err != nil {
+		t.Fatalf("Strings() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got = %#v, want empty", got)
+	}
+}
+
+func TestAdapterSupportsSingleQuotedFilterValues(t *testing.T) {
+	adapter, err := New(`{"data":{"state":[{"dataName":"other","items":[{"name":"乙"}]},{"dataName":"novel_search_list","items":[{"name":"甲"}]}]}}`)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	got, err := adapter.Strings(`$.data.state[?(@.dataName == 'novel_search_list')].items[*].name`)
+	if err != nil {
+		t.Fatalf("Strings() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"甲"}) {
+		t.Fatalf("got = %#v", got)
+	}
+}
+
+func TestAdapterTreatsNilTraversalAsEmptyResult(t *testing.T) {
+	adapter, err := New(`{"data":null}`)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	got, err := adapter.Strings(`$.data.items[*]`)
 	if err != nil {
 		t.Fatalf("Strings() error = %v", err)
 	}

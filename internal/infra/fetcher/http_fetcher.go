@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -27,6 +28,7 @@ type HTTPFetcher struct {
 	allowPrivate     bool
 	resolver         func(string) ([]net.IP, error)
 	cookies          *CookieManager
+	rateLimiter      *sourceRateLimiter
 }
 
 type Option func(*HTTPFetcher)
@@ -45,6 +47,7 @@ func NewHTTPFetcher(opts ...Option) *HTTPFetcher {
 		defaultUserAgent: "Reader/0.0.1",
 		maxBodyBytes:     10 * 1024 * 1024,
 		resolver:         net.LookupIP,
+		rateLimiter:      newSourceRateLimiter(),
 	}
 	for _, opt := range opts {
 		opt(f)
@@ -111,6 +114,14 @@ func WithAllowPrivateNetwork(allow bool) Option {
 }
 
 func (f *HTTPFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
+	if req.WebViewFallback {
+		slog.WarnContext(ctx, "Legado webView request is using plain HTTP fallback")
+	}
+	if !req.SkipRateLimit && f.rateLimiter != nil {
+		if err := f.rateLimiter.wait(ctx, req.SourceKey, req.ConcurrentRate); err != nil {
+			return nil, err
+		}
+	}
 	attempts := req.Retry + 1
 	if attempts < 1 {
 		attempts = 1

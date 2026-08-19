@@ -31,8 +31,18 @@ func TestCheckRepositoryCreatesUpdatesAndFindsTask(t *testing.T) {
 		t.Fatalf("task = %#v", got)
 	}
 
-	if err := repo.UpdateTaskStatus(ctx, checkTask.TaskID, task.CheckTaskRunning, 1, nil); err != nil {
+	if err := repo.UpdateTaskStatus(ctx, checkTask.TaskID, task.CheckTaskRunning, 0, nil); err != nil {
 		t.Fatalf("UpdateTaskStatus(running) error = %v", err)
+	}
+	if err := repo.UpdateTaskProgress(ctx, checkTask.TaskID, 1); err != nil {
+		t.Fatalf("UpdateTaskProgress(1) error = %v", err)
+	}
+	if err := repo.UpdateTaskProgress(ctx, checkTask.TaskID, 0); err != nil {
+		t.Fatalf("UpdateTaskProgress(0) error = %v", err)
+	}
+	got, err = repo.FindTask(ctx, checkTask.TaskID)
+	if err != nil || got.Finished != 1 {
+		t.Fatalf("progress task = %#v, error = %v", got, err)
 	}
 	completedAt := createdAt.Add(time.Second)
 	if err := repo.UpdateTaskStatus(ctx, checkTask.TaskID, task.CheckTaskSucceeded, 2, &completedAt); err != nil {
@@ -85,6 +95,9 @@ func TestCheckRepositorySavesAndListsItems(t *testing.T) {
 	item.FailureClass = "source_search_empty_result"
 	item.Message = "empty search"
 	item.RespondTime = 180000
+	item.KeywordUsed = "源关键词"
+	item.TimeoutMS = 180000
+	item.Stages = []task.CheckStageResult{{Flow: task.CheckFlowSearch, Stage: task.CheckStageSearch, Status: task.CheckItemFailed, FailureCode: "search_failed", FailureClass: "source_search_empty_result", Message: "empty search"}}
 	if err := repo.SaveItem(ctx, item); err != nil {
 		t.Fatalf("SaveItem(failed) error = %v", err)
 	}
@@ -92,7 +105,7 @@ func TestCheckRepositorySavesAndListsItems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListItems() error = %v", err)
 	}
-	if len(items) != 1 || items[0].Status != task.CheckItemFailed || items[0].FailureCode != "search_failed" || items[0].FailureClass != "source_search_empty_result" || items[0].RespondTime != 180000 {
+	if len(items) != 1 || items[0].Status != task.CheckItemFailed || items[0].FailureCode != "search_failed" || items[0].FailureClass != "source_search_empty_result" || items[0].RespondTime != 180000 || items[0].KeywordUsed != "源关键词" || items[0].TimeoutMS != 180000 || len(items[0].Stages) != 1 {
 		t.Fatalf("items = %#v", items)
 	}
 	got, err := repo.FindTask(ctx, checkTask.TaskID)

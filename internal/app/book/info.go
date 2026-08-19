@@ -56,7 +56,7 @@ func (s *InfoService) RefreshInfo(ctx context.Context, input InfoInput) (book.Bo
 		if err != nil {
 			return book.Book{}, err
 		}
-		resp, err := s.fetcher.Fetch(ctx, req)
+		resp, err := executeBookFetchRequest(ctx, s.fetcher, req, src, &b, s.script)
 		if err != nil {
 			return book.Book{}, err
 		}
@@ -145,14 +145,14 @@ func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseUR
 		b.TocHTML = body
 	}
 	if src.BookSourceType == 3 && strings.TrimSpace(infoRule.DownloadURLs) != "" {
-		if values, err := analyzer.GetStringList(ctx, infoRule.DownloadURLs, content); err == nil {
+		if values, err := analyzer.GetStringListRaw(ctx, infoRule.DownloadURLs, content); err == nil {
 			downloads := make([]string, 0, len(values))
 			for _, value := range values {
 				value = strings.TrimSpace(value)
 				if value == "" {
 					continue
 				}
-				if absolute := urlrule.Absolute(redirectURL, value); absolute != "" {
+				if absolute := urlrule.AbsolutePreservingOptions(redirectURL, value); absolute != "" {
 					value = absolute
 				}
 				downloads = append(downloads, value)
@@ -182,6 +182,9 @@ func firstNonEmptyURLValue(ctx context.Context, analyzer *ruleinfra.Analyzer, ru
 }
 
 func PreviewSearchBookFromInfo(ctx context.Context, src *source.BookSource, redirectURL string, body string, seed book.SearchBook, scriptRuntime *script.Runtime) (book.SearchBook, error) {
+	if src == nil || src.RuleBookInfo.Value == nil {
+		return seed, ErrBookInfoRuleMissing
+	}
 	b := seed.ToBook()
 	if b.BookURL == "" {
 		b.BookURL = redirectURL

@@ -17,6 +17,21 @@ func Migrate(db *sql.DB) error {
 	if err := ensureColumn(db, "check_task_items", "failure_class", `ALTER TABLE check_task_items ADD COLUMN failure_class TEXT`); err != nil {
 		return fmt.Errorf("ensure check_task_items.failure_class: %w", err)
 	}
+	if err := ensureColumn(db, "book_sources", "event_listener", `ALTER TABLE book_sources ADD COLUMN event_listener INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("ensure book_sources.event_listener: %w", err)
+	}
+	if err := ensureColumn(db, "book_sources", "custom_button", `ALTER TABLE book_sources ADD COLUMN custom_button INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("ensure book_sources.custom_button: %w", err)
+	}
+	if err := ensureColumn(db, "check_task_items", "keyword_used", `ALTER TABLE check_task_items ADD COLUMN keyword_used TEXT`); err != nil {
+		return fmt.Errorf("ensure check_task_items.keyword_used: %w", err)
+	}
+	if err := ensureColumn(db, "check_task_items", "timeout_ms", `ALTER TABLE check_task_items ADD COLUMN timeout_ms INTEGER`); err != nil {
+		return fmt.Errorf("ensure check_task_items.timeout_ms: %w", err)
+	}
+	if err := ensureColumn(db, "check_task_items", "stages_json", `ALTER TABLE check_task_items ADD COLUMN stages_json TEXT`); err != nil {
+		return fmt.Errorf("ensure check_task_items.stages_json: %w", err)
+	}
 	return nil
 }
 
@@ -38,6 +53,8 @@ CREATE TABLE IF NOT EXISTS book_sources (
   custom_order INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
   enabled_explore INTEGER NOT NULL DEFAULT 1,
+  event_listener INTEGER NOT NULL DEFAULT 0,
+  custom_button INTEGER NOT NULL DEFAULT 0,
   js_lib TEXT,
   enabled_cookie_jar INTEGER NOT NULL DEFAULT 1,
   concurrent_rate TEXT,
@@ -232,6 +249,9 @@ CREATE TABLE IF NOT EXISTS check_task_items (
   failure_class TEXT,
   message TEXT,
   respond_time INTEGER,
+  keyword_used TEXT,
+  timeout_ms INTEGER,
+  stages_json TEXT,
   trace_id TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -31,6 +31,8 @@ func TestBookSourceRepositoryCRUD(t *testing.T) {
 	ctx := context.Background()
 	repo := NewBookSourceRepository(openRepoTestDB(t))
 	src := testSource("https://example.test", "Example")
+	src.EventListener = true
+	src.CustomButton = true
 
 	if err := repo.Save(ctx, src); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -39,7 +41,7 @@ func TestBookSourceRepositoryCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindByID() error = %v", err)
 	}
-	if byID.BookSourceURL != src.BookSourceURL || byID.BookSourceName != src.BookSourceName {
+	if byID.BookSourceURL != src.BookSourceURL || byID.BookSourceName != src.BookSourceName || !byID.EventListener || !byID.CustomButton {
 		t.Fatalf("FindByID() = %#v", byID)
 	}
 	byURL, err := repo.FindByURL(ctx, src.BookSourceURL)

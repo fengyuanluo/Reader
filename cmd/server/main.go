@@ -149,7 +149,7 @@ func newRuntimeServer(cfg config.Config) (*http.Server, func(), error) {
 	checker := checkapp.NewChecker(multiSearcher, discoveryService, bookService, contentApp)
 	checkRunner := checkworker.NewRunner(checkRepo, checker).WithDiagnostics(checkapp.NewDiagnosticsUpdater(repo))
 	checkManager := checkapp.NewManager(checkRepo, repo, checkRunner)
-	apiHandler := handlers.NewSourceHandler(manager).WithImporter(importer).WithSearcher(multiSearcher).WithDiscovery(discoveryService).WithBooks(bookService, contentApp).WithImages(imageProxy).WithReplace(replaceManager).WithDebug(debugService, debugPublisher).WithCheck(checkManager)
+	apiHandler := handlers.NewSourceHandler(manager).WithImporter(importer).WithSearcher(multiSearcher).WithDiscovery(discoveryService).WithBooks(bookService, contentApp).WithImages(imageProxy).WithReplace(replaceManager).WithDebug(debugService, debugPublisher).WithCheck(checkManager, cfg.GlobalConcurrency)
 	router := chi.NewRouter()
 	generated.HandlerFromMuxWithBaseURL(apiHandler, router, "/api/v1")
 	handler := middleware.Trace(middleware.Auth(cfg.Token)(router))

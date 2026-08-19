@@ -103,6 +103,25 @@ func TestContentServiceRejectsSourceRegexBrowserFlow(t *testing.T) {
 	}
 }
 
+func TestContentServiceContinuesWhenOptionalContentExtensionsAreConfigured(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.SubContent = ".note@text"
+	src.RuleContent.Value.CallBackJS = `throw new Error("must not run")`
+	chapter := testContentChapter()
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL: {URL: chapter.URL, Body: []byte(`<div class="content">正文</div><div class="note">注释</div>`)},
+	}}
+	service := NewService(&fakeChapterRepo{}, fetcher, script.NewRuntime(script.Policy{Timeout: time.Second}))
+
+	got, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Content != "正文" {
+		t.Fatalf("content = %q", got.Content)
+	}
+}
+
 func TestContentServiceAppliesProcessorBeforeCaching(t *testing.T) {
 	src := testContentSource()
 	src.RuleContent.Value.ReplaceRegex = ""
@@ -193,7 +212,7 @@ func TestContentServiceAppliesChapterURLOptions(t *testing.T) {
 	if got.Content != "第一段" {
 		t.Fatalf("content = %q", got.Content)
 	}
-	if fetcher.lastReq.Method != "POST" || string(fetcher.lastReq.Body) != `{"chapter_ids":"1","novelId":7}` || fetcher.lastReq.Headers["Content-Type"] != "application/json" || fetcher.lastReq.Headers["User-Agent"] != "Reader-Test" {
+	if fetcher.lastReq.Method != "POST" || string(fetcher.lastReq.Body) != `{"chapter_ids":"1","novelId":7}` || fetcher.lastReq.Headers["Content-Type"] != "application/json; charset=UTF-8" || fetcher.lastReq.Headers["User-Agent"] != "Reader-Test" {
 		t.Fatalf("last request = %#v", fetcher.lastReq)
 	}
 	if !fetcher.lastReq.UseCookieJar {

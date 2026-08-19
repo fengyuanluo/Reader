@@ -37,6 +37,20 @@ func TestClassifyFailureCoversCommonFailureFamilies(t *testing.T) {
 			wantClass: FailureClassNetworkTLSInvalid,
 		},
 		{
+			name:      "tls handshake timeout",
+			err:       errors.New(`Get "https://x": net/http: TLS handshake timeout`),
+			fallback:  FailureSearchFailed,
+			wantCode:  FailureTimeout,
+			wantClass: FailureClassNetworkTimeout,
+		},
+		{
+			name:      "standalone eof",
+			err:       errors.New("EOF"),
+			fallback:  FailureSearchFailed,
+			wantCode:  FailureSearchFailed,
+			wantClass: FailureClassNetworkTransient,
+		},
+		{
 			name:      "upstream 404",
 			err:       errors.New("unexpected status: 404"),
 			wantCode:  FailureWebsiteFailed,
@@ -46,7 +60,7 @@ func TestClassifyFailureCoversCommonFailureFamilies(t *testing.T) {
 			name:      "unsupported browser flow option",
 			err:       errors.New("unsupported url option: webView"),
 			wantCode:  FailureWebsiteFailed,
-			wantClass: FailureClassSourceUnsupportedRule,
+			wantClass: FailureClassUnsupportedBrowser,
 		},
 		{
 			name:      "search empty",
@@ -105,7 +119,38 @@ func TestClassifyFailureAllowsStageFallbackWhenMessageIsGenericWebsiteFailure(t 
 	if details.Code != FailureSearchFailed {
 		t.Fatalf("code = %q, want %q", details.Code, FailureSearchFailed)
 	}
-	if details.Class != FailureClassSourceUnsupportedRule {
-		t.Fatalf("class = %q, want %q", details.Class, FailureClassSourceUnsupportedRule)
+	if details.Class != FailureClassUnsupportedBrowser {
+		t.Fatalf("class = %q, want %q", details.Class, FailureClassUnsupportedBrowser)
+	}
+}
+
+func TestClassifyFailureDoesNotTreatGenericStageFailureAsEmpty(t *testing.T) {
+	tests := []struct {
+		name     string
+		fallback string
+	}{
+		{name: "search", fallback: FailureSearchFailed},
+		{name: "discovery", fallback: FailureDiscoveryFailed},
+		{name: "toc", fallback: FailureTocFailed},
+		{name: "content", fallback: FailureContentFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			details := ClassifyFailure(errors.New("upstream rule failed"), tt.fallback)
+			if details.Class != FailureClassUnknown {
+				t.Fatalf("class = %q, want %q", details.Class, FailureClassUnknown)
+			}
+		})
+	}
+}
+
+func TestClassifyFailurePreservesAnyUpstreamHTTPStatus(t *testing.T) {
+	for _, status := range []string{"405", "410", "429", "444", "451", "502", "503", "504", "520", "521", "522"} {
+		t.Run(status, func(t *testing.T) {
+			details := ClassifyFailure(errors.New("unexpected status: "+status), FailureSearchFailed)
+			if details.Class != "source_upstream_http_"+status {
+				t.Fatalf("class = %q", details.Class)
+			}
+		})
 	}
 }

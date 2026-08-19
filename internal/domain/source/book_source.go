@@ -26,6 +26,8 @@ type BookSource struct {
 	CustomOrder       int                              `json:"customOrder"`
 	Enabled           bool                             `json:"enabled"`
 	EnabledExplore    bool                             `json:"enabledExplore"`
+	EventListener     bool                             `json:"eventListener"`
+	CustomButton      bool                             `json:"customButton"`
 	JSLib             string                           `json:"jsLib,omitempty"`
 	EnabledCookieJar  bool                             `json:"enabledCookieJar"`
 	ConcurrentRate    string                           `json:"concurrentRate,omitempty"`
@@ -49,6 +51,22 @@ type BookSource struct {
 	RuleContent       rule.Flexible[rule.ContentRule]  `json:"ruleContent,omitempty"`
 	RuleReview        json.RawMessage                  `json:"ruleReview,omitempty"`
 	RawJSON           json.RawMessage                  `json:"-"`
+}
+
+type bookSourceJSON BookSource
+
+func (s *BookSource) UnmarshalJSON(data []byte) error {
+	decoded := bookSourceJSON{
+		Enabled:          true,
+		EnabledExplore:   true,
+		EnabledCookieJar: true,
+		RespondTime:      180000,
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*s = BookSource(decoded)
+	return nil
 }
 
 func (s *BookSource) Validate() error {

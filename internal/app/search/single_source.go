@@ -15,6 +15,7 @@ import (
 	"reader/internal/domain/fetch"
 	domainrule "reader/internal/domain/rule"
 	"reader/internal/domain/source"
+	"reader/internal/infra/requestoption"
 	ruleinfra "reader/internal/infra/rule"
 	urlrule "reader/internal/infra/rule/url"
 	"reader/internal/infra/script"
@@ -50,7 +51,10 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 	if err != nil {
 		return nil, err
 	}
-	resp, err := s.fetcher.Fetch(ctx, req)
+	evaluator := sourceapp.RequestEvaluator(s.script, src, script.Bindings{
+		"key": input.Keyword, "page": input.Page, "baseUrl": req.URL,
+	})
+	resp, err := requestoption.Fetch(ctx, s.fetcher, req, evaluator)
 	if err != nil {
 		return nil, err
 	}
@@ -204,22 +208,27 @@ func buildSearchRequest(ctx context.Context, runtime *script.Runtime, src *sourc
 	if strings.Contains(custom.URL, "{{") || strings.Contains(custom.URL, "}}") {
 		return fetch.Request{}, fmt.Errorf("%w: unresolved expression in %q", ErrUnsupportedSearchURL, src.SearchURL)
 	}
-	if err := sourceapp.ValidateSupportedURLOptions(custom.Attribute, "method", "body", "headers", "type", "charset", "origin", "retry"); err != nil {
-		return fetch.Request{}, fmt.Errorf("%w: %v", ErrUnsupportedSearchURL, err)
+	req := fetch.Request{
+		Method:         "GET",
+		Headers:        map[string]string{},
+		UseCookieJar:   src.EnabledCookieJar,
+		SourceKey:      src.BookSourceURL,
+		ConcurrentRate: src.ConcurrentRate,
 	}
-	targetURL := urlrule.Absolute(sourceRequestBase(src.BookSourceURL), custom.URL)
-	if targetURL == "" {
-		targetURL = custom.URL
-	}
-	req := fetch.Request{URL: targetURL, Method: "GET", Headers: map[string]string{}, UseCookieJar: src.EnabledCookieJar}
-	if headers, err := parseSearchHeaders(ctx, runtime, src, keyword, page); err != nil {
+	if headers, err := sourceapp.NewScriptIntegration(runtime).HeaderMapWithBindings(ctx, src, script.Bindings{"key": keyword, "page": page}); err != nil {
 		return fetch.Request{}, err
 	} else {
 		for key, value := range headers {
 			req.Headers[key] = value
 		}
 	}
-	applySearchURLOptions(&req, custom.Attribute)
+	evaluator := sourceapp.RequestEvaluator(runtime, src, script.Bindings{
+		"key": keyword, "page": page, "baseUrl": sourceRequestBase(src.BookSourceURL),
+	})
+	req, err = requestoption.Build(ctx, out, sourceRequestBase(src.BookSourceURL), req, evaluator)
+	if err != nil {
+		return fetch.Request{}, fmt.Errorf("%w: %v", ErrUnsupportedSearchURL, err)
+	}
 	return req, nil
 }
 
@@ -409,6 +418,7 @@ func searchURLBindings(src *source.BookSource, keyword string, page int) script.
 	return script.Bindings{
 		"key":      keyword,
 		"page":     page,
+		"result":   nil,
 		"source":   script.SourceBindings(src),
 		"__source": src,
 		"baseUrl":  sourceRequestBase(src.BookSourceURL),
@@ -467,144 +477,6 @@ func sourceRequestBase(bookSourceURL string) string {
 		base = base[:i]
 	}
 	return base
-}
-
-func parseSearchHeaders(ctx context.Context, runtime *script.Runtime, src *source.BookSource, keyword string, page int) (map[string]string, error) {
-	raw := strings.TrimSpace(src.Header)
-	if raw == "" || strings.HasPrefix(strings.ToLower(raw), "@js:") || strings.HasPrefix(strings.ToLower(raw), "<js>") {
-		if raw == "" {
-			return map[string]string{}, nil
-		}
-		if runtime == nil {
-			return map[string]string{}, nil
-		}
-		scriptText := strings.TrimSpace(raw)
-		if strings.HasPrefix(strings.ToLower(scriptText), "@js:") {
-			scriptText = strings.TrimSpace(scriptText[4:])
-		} else if strings.HasPrefix(strings.ToLower(scriptText), "<js>") && strings.HasSuffix(strings.ToLower(scriptText), "</js>") {
-			scriptText = strings.TrimSpace(scriptText[4 : len(scriptText)-5])
-		}
-		value, err := runtime.EvalWithBindings(ctx, scriptText, searchURLBindings(src, keyword, page))
-		if err != nil {
-			return nil, err
-		}
-		return parseSearchHeaderValue(value)
-	}
-	headers := map[string]string{}
-	if err := json.Unmarshal([]byte(raw), &headers); err != nil {
-		loose := urlrule.ParseAttributeObject(raw)
-		if len(loose) == 0 {
-			return nil, err
-		}
-		for key, value := range loose {
-			headers[key] = fmt.Sprint(value)
-		}
-	}
-	return headers, nil
-}
-
-func parseSearchHeaderValue(value any) (map[string]string, error) {
-	var raw []byte
-	switch typed := value.(type) {
-	case string:
-		raw = []byte(typed)
-	default:
-		encoded, err := json.Marshal(typed)
-		if err != nil {
-			return nil, err
-		}
-		raw = encoded
-	}
-	headers := map[string]string{}
-	if err := json.Unmarshal(raw, &headers); err != nil {
-		loose := urlrule.ParseAttributeObject(string(raw))
-		if len(loose) == 0 {
-			return nil, err
-		}
-		for key, value := range loose {
-			headers[key] = fmt.Sprint(value)
-		}
-	}
-	return headers, nil
-}
-
-func applySearchURLOptions(req *fetch.Request, opts map[string]any) {
-	var (
-		charsetName string
-		rawFormBody string
-	)
-	for key, value := range opts {
-		switch strings.ToLower(key) {
-		case "method":
-			if method, ok := value.(string); ok && strings.TrimSpace(method) != "" {
-				req.Method = strings.ToUpper(strings.TrimSpace(method))
-			}
-		case "body":
-			switch body := value.(type) {
-			case string:
-				rawFormBody = body
-				if looksLikeFormBody(body) {
-					req.Body = []byte(urlrule.EncodeFormString(body, ""))
-				} else {
-					req.Body = []byte(body)
-				}
-				if req.Headers["Content-Type"] == "" && looksLikeFormBody(body) {
-					req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
-				}
-			case map[string]any, []any:
-				if raw, err := json.Marshal(body); err == nil {
-					req.Body = raw
-					if req.Headers["Content-Type"] == "" {
-						req.Headers["Content-Type"] = "application/json"
-					}
-				}
-			}
-		case "headers":
-			mergeSearchHeaders(req.Headers, value)
-		case "type":
-			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-				req.EncodeBodyAsHex = true
-			}
-		case "charset":
-			if text, ok := value.(string); ok {
-				charsetName = strings.TrimSpace(text)
-			}
-		case "retry":
-			switch typed := value.(type) {
-			case float64:
-				if typed > 0 {
-					req.Retry = int(typed)
-				}
-			case int:
-				if typed > 0 {
-					req.Retry = typed
-				}
-			case int64:
-				if typed > 0 {
-					req.Retry = int(typed)
-				}
-			case string:
-				if parsed, err := strconv.Atoi(strings.TrimSpace(typed)); err == nil && parsed > 0 {
-					req.Retry = parsed
-				}
-			}
-		}
-	}
-	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
-	if rawFormBody != "" && looksLikeFormBody(rawFormBody) {
-		req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
-	}
-}
-
-func looksLikeFormBody(body string) bool {
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return false
-	}
-	if strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[") || strings.HasPrefix(body, "<") {
-		return false
-	}
-	return strings.Contains(body, "=") || strings.Contains(body, "&")
 }
 
 func normalizeListRule(rule string) (string, bool) {

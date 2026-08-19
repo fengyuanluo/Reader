@@ -27,9 +27,12 @@ func (u *DiagnosticsUpdater) Apply(ctx context.Context, item *task.CheckTaskItem
 		return err
 	}
 	src.RespondTime = item.RespondTime
-	src.BookSourceComment = removeErrorComment(src.BookSourceComment)
-	src.BookSourceGroup = removeFailureGroups(src.BookSourceGroup)
-	if item.Status == task.CheckItemFailed {
+	if item.Status == task.CheckItemPassed {
+		src.BookSourceComment = removeErrorComment(src.BookSourceComment)
+		src.BookSourceGroup = removeFailureGroups(src.BookSourceGroup)
+	} else if item.Status == task.CheckItemFailed && isDefinitiveSourceFailure(item.FailureClass) {
+		src.BookSourceComment = removeErrorComment(src.BookSourceComment)
+		src.BookSourceGroup = removeFailureGroups(src.BookSourceGroup)
 		group := groupForFailure(item.FailureCode)
 		src.BookSourceGroup = addGroup(src.BookSourceGroup, group)
 		if item.Message != "" {
@@ -49,12 +52,32 @@ func groupForFailure(code string) string {
 		return "搜索失效"
 	case FailureDiscoveryFailed:
 		return "发现失效"
+	case FailureInfoFailed:
+		return "详情失效"
 	case FailureTocFailed:
 		return "目录失效"
 	case FailureContentFailed:
 		return "正文失效"
 	default:
 		return "网站失效"
+	}
+}
+
+func isDefinitiveSourceFailure(class string) bool {
+	if class == "" {
+		return true
+	}
+	switch class {
+	case "source_search_empty_result",
+		"source_discovery_empty_result",
+		"source_toc_empty",
+		"source_content_empty",
+		"source_download_urls_empty",
+		"source_rule_script_syntax_error",
+		"source_rule_script_failed":
+		return true
+	default:
+		return false
 	}
 }
 

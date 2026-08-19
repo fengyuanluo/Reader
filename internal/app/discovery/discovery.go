@@ -14,8 +14,8 @@ import (
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/rule"
 	"reader/internal/domain/source"
+	"reader/internal/infra/requestoption"
 	ruleinfra "reader/internal/infra/rule"
-	urlrule "reader/internal/infra/rule/url"
 	"reader/internal/infra/script"
 )
 
@@ -134,14 +134,25 @@ func (s *Service) discoverSource(ctx context.Context, src *source.BookSource, in
 		}
 	}
 	discoveryURL = buildPageURL(discoveryURL, input.Page)
-	discoveryURL = urlrule.Absolute(src.BookSourceURL, discoveryURL)
-	req := fetch.Request{URL: discoveryURL, UseCookieJar: src.EnabledCookieJar}
 	headers, err := sourceapp.NewScriptIntegration(s.script).HeaderMap(ctx, src)
 	if err != nil {
 		return nil, err
 	}
-	req.Headers = headers
-	resp, err := s.fetcher.Fetch(ctx, req)
+	evaluator := sourceapp.RequestEvaluator(s.script, src, script.Bindings{
+		"page": input.Page, "baseUrl": src.BookSourceURL,
+	})
+	req, err := requestoption.Build(ctx, discoveryURL, src.BookSourceURL, fetch.Request{
+		Headers:        headers,
+		UseCookieJar:   src.EnabledCookieJar,
+		SourceKey:      src.BookSourceURL,
+		ConcurrentRate: src.ConcurrentRate,
+	}, evaluator)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := requestoption.Fetch(ctx, s.fetcher, req, sourceapp.RequestEvaluator(s.script, src, script.Bindings{
+		"page": input.Page, "baseUrl": req.URL,
+	}))
 	if err != nil {
 		return nil, err
 	}
@@ -189,31 +200,31 @@ func (s *Service) categoriesForSource(ctx context.Context, src *source.BookSourc
 		}
 		if err := json.Unmarshal([]byte(raw), &values); err != nil {
 			return nil, err
-			}
-			out := make([]Category, 0, len(values))
-			for _, value := range values {
-				if strings.TrimSpace(value.Title) == "" && strings.TrimSpace(value.URL) == "" {
-					continue
-			}
-					out = append(out, Category{Title: strings.TrimSpace(value.Title), URL: strings.TrimSpace(value.URL)})
-				}
-			s.storeCategoryCache(src, strings.TrimSpace(src.ExploreURL), out)
-			return out, nil
 		}
-		parts := splitExploreKinds(raw)
-		out := make([]Category, 0, len(parts))
+		out := make([]Category, 0, len(values))
+		for _, value := range values {
+			if strings.TrimSpace(value.Title) == "" && strings.TrimSpace(value.URL) == "" {
+				continue
+			}
+			out = append(out, Category{Title: strings.TrimSpace(value.Title), URL: strings.TrimSpace(value.URL)})
+		}
+		s.storeCategoryCache(src, strings.TrimSpace(src.ExploreURL), out)
+		return out, nil
+	}
+	parts := splitExploreKinds(raw)
+	out := make([]Category, 0, len(parts))
 	for _, part := range parts {
 		cfg := strings.SplitN(part, "::", 2)
 		category := Category{Title: strings.TrimSpace(cfg[0])}
 		if len(cfg) > 1 {
 			category.URL = strings.TrimSpace(cfg[1])
 		}
-			if category.Title != "" || category.URL != "" {
-				out = append(out, category)
-			}
+		if category.Title != "" || category.URL != "" {
+			out = append(out, category)
 		}
-		s.storeCategoryCache(src, strings.TrimSpace(src.ExploreURL), out)
-		return out, nil
+	}
+	s.storeCategoryCache(src, strings.TrimSpace(src.ExploreURL), out)
+	return out, nil
 }
 
 func listRuleForSource(src *source.BookSource) (rule.SearchRule, error) {
@@ -240,68 +251,68 @@ func listRuleForSource(src *source.BookSource) (rule.SearchRule, error) {
 
 func parseBookList(ctx context.Context, src *source.BookSource, listRule rule.SearchRule, redirectURL string, body string, scriptRuntime *script.Runtime) ([]book.SearchBook, error) {
 	ruleText, reverse := normalizeDiscoveryListRule(listRule.BookList)
-		analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
+	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
+		RedirectURL: redirectURL,
+		SourceURL:   src.BookSourceURL,
+		Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, src: body},
+		Source:      script.SourceBindings(src),
+	})
+	elements, err := analyzer.GetElements(ctx, ruleText, body)
+	if err != nil {
+		return nil, err
+	}
+	out := []book.SearchBook{}
+	seen := map[string]struct{}{}
+	baseVars := analyzer.Variables()
+	for _, element := range elements {
+		searchBook := book.SearchBook{
+			Origin:      src.BookSourceURL,
+			OriginName:  src.BookSourceName,
+			Type:        src.BookSourceType,
+			OriginOrder: src.CustomOrder,
+			Origins:     []string{src.BookSourceURL},
+			Variable:    encodeDiscoveryVariables(baseVars),
+		}
+		itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
 			RedirectURL: redirectURL,
 			SourceURL:   src.BookSourceURL,
-			Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, src: body},
+			Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, src: body, book: &searchBook},
+			Book:        &searchBook,
 			Source:      script.SourceBindings(src),
 		})
-		elements, err := analyzer.GetElements(ctx, ruleText, body)
-		if err != nil {
-			return nil, err
+		itemAnalyzer.SetVariables(baseVars)
+		name, _ := itemAnalyzer.GetString(ctx, listRule.Name, element)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
 		}
-		out := []book.SearchBook{}
-		seen := map[string]struct{}{}
-		baseVars := analyzer.Variables()
-		for _, element := range elements {
-			searchBook := book.SearchBook{
-				Origin:      src.BookSourceURL,
-				OriginName:  src.BookSourceName,
-				Type:        src.BookSourceType,
-				OriginOrder: src.CustomOrder,
-				Origins:     []string{src.BookSourceURL},
-				Variable:    encodeDiscoveryVariables(baseVars),
-			}
-			itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
-				RedirectURL: redirectURL,
-				SourceURL:   src.BookSourceURL,
-				Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, src: body, book: &searchBook},
-				Book:        &searchBook,
-				Source:      script.SourceBindings(src),
-			})
-			itemAnalyzer.SetVariables(baseVars)
-			name, _ := itemAnalyzer.GetString(ctx, listRule.Name, element)
-			name = strings.TrimSpace(name)
-			if name == "" {
-				continue
-			}
-			author, _ := itemAnalyzer.GetString(ctx, listRule.Author, element)
-			bookURL, _ := itemAnalyzer.GetString(ctx, listRule.BookURL, element)
-			if bookURL == "" {
-				bookURL = redirectURL
-			}
-			if _, ok := seen[bookURL]; ok {
-				continue
-			}
-			seen[bookURL] = struct{}{}
-			kind, _ := itemAnalyzer.GetString(ctx, listRule.Kind, element)
-			intro, _ := itemAnalyzer.GetString(ctx, listRule.Intro, element)
-			cover, _ := itemAnalyzer.GetString(ctx, listRule.CoverURL, element)
-			wordCount, _ := itemAnalyzer.GetString(ctx, listRule.WordCount, element)
-			lastChapter, _ := itemAnalyzer.GetString(ctx, listRule.LastChapter, element)
-			searchBook.BookURL = bookURL
-			searchBook.Name = name
-			searchBook.Author = strings.TrimSpace(author)
-			searchBook.Kind = strings.TrimSpace(kind)
-			searchBook.CoverURL = cover
-			searchBook.Intro = strings.TrimSpace(intro)
-			searchBook.WordCount = strings.TrimSpace(wordCount)
-			searchBook.LatestChapterTitle = strings.TrimSpace(lastChapter)
-			if variable := itemAnalyzer.VariablesJSON(); variable != "" {
-				searchBook.Variable = variable
-			}
-			out = append(out, searchBook)
+		author, _ := itemAnalyzer.GetString(ctx, listRule.Author, element)
+		bookURL, _ := itemAnalyzer.GetString(ctx, listRule.BookURL, element)
+		if bookURL == "" {
+			bookURL = redirectURL
 		}
+		if _, ok := seen[bookURL]; ok {
+			continue
+		}
+		seen[bookURL] = struct{}{}
+		kind, _ := itemAnalyzer.GetString(ctx, listRule.Kind, element)
+		intro, _ := itemAnalyzer.GetString(ctx, listRule.Intro, element)
+		cover, _ := itemAnalyzer.GetString(ctx, listRule.CoverURL, element)
+		wordCount, _ := itemAnalyzer.GetString(ctx, listRule.WordCount, element)
+		lastChapter, _ := itemAnalyzer.GetString(ctx, listRule.LastChapter, element)
+		searchBook.BookURL = bookURL
+		searchBook.Name = name
+		searchBook.Author = strings.TrimSpace(author)
+		searchBook.Kind = strings.TrimSpace(kind)
+		searchBook.CoverURL = cover
+		searchBook.Intro = strings.TrimSpace(intro)
+		searchBook.WordCount = strings.TrimSpace(wordCount)
+		searchBook.LatestChapterTitle = strings.TrimSpace(lastChapter)
+		if variable := itemAnalyzer.VariablesJSON(); variable != "" {
+			searchBook.Variable = variable
+		}
+		out = append(out, searchBook)
+	}
 	if reverse {
 		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 			out[i], out[j] = out[j], out[i]

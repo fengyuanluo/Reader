@@ -20,6 +20,11 @@ type Request struct {
 	AllowNonSuccess  bool
 	EncodeBodyAsHex  bool
 	Retry            int
+	SourceKey        string
+	ConcurrentRate   string
+	SkipRateLimit    bool
+	BodyJS           string
+	WebViewFallback  bool
 }
 
 type Response struct {

@@ -43,9 +43,59 @@ func (a *Adapter) Object(rule string) (any, error) {
 
 func normalizeRule(rule string) string {
 	if strings.HasPrefix(rule, "$.[") {
-		return "$" + strings.TrimPrefix(rule, "$.")
+		rule = "$" + strings.TrimPrefix(rule, "$.")
 	}
-	return rule
+	return normalizeSingleQuotedStrings(rule)
+}
+
+func normalizeSingleQuotedStrings(rule string) string {
+	if !strings.Contains(rule, "'") {
+		return rule
+	}
+	var out strings.Builder
+	for i := 0; i < len(rule); {
+		if rule[i] != '\'' {
+			out.WriteByte(rule[i])
+			i++
+			continue
+		}
+		i++
+		var value strings.Builder
+		closed := false
+		for i < len(rule) {
+			if rule[i] == '\'' {
+				i++
+				closed = true
+				break
+			}
+			if rule[i] == '\\' && i+1 < len(rule) {
+				next := rule[i+1]
+				switch next {
+				case '\'', '\\':
+					value.WriteByte(next)
+				case 'n':
+					value.WriteByte('\n')
+				case 'r':
+					value.WriteByte('\r')
+				case 't':
+					value.WriteByte('\t')
+				default:
+					value.WriteByte('\\')
+					value.WriteByte(next)
+				}
+				i += 2
+				continue
+			}
+			value.WriteByte(rule[i])
+			i++
+		}
+		if !closed {
+			return rule
+		}
+		encoded, _ := json.Marshal(value.String())
+		out.Write(encoded)
+	}
+	return out.String()
 }
 
 func (a *Adapter) List(rule string) ([]any, error) {
@@ -85,8 +135,8 @@ func (a *Adapter) values(rule string) ([]any, error) {
 	for _, step := range chain.Steps {
 		value, err := a.Object(step.Raw)
 		if err != nil {
-			if isScalarTraversalError(err) {
-				return nil, nil
+			if isEmptyTraversalError(err) || len(chain.Steps) > 1 {
+				continue
 			}
 			return nil, err
 		}
@@ -108,14 +158,17 @@ func (a *Adapter) values(rule string) ([]any, error) {
 	return out, nil
 }
 
-func isScalarTraversalError(err error) bool {
+func isEmptyTraversalError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "unsupported value type string for select") ||
+	return strings.Contains(msg, "unknown key ") ||
+		strings.Contains(msg, " out of bounds") ||
+		strings.Contains(msg, "unsupported value type string for select") ||
 		strings.Contains(msg, "unsupported value type number for select") ||
-		strings.Contains(msg, "unsupported value type bool for select")
+		strings.Contains(msg, "unsupported value type bool for select") ||
+		strings.Contains(msg, "unsupported value type <nil> for select")
 }
 
 func flatten(value any) []any {

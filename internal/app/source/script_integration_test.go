@@ -3,6 +3,7 @@ package sourceapp
 import (
 	"context"
 	"errors"
+	"net/http"
 	"reflect"
 	"testing"
 	"time"
@@ -32,6 +33,23 @@ func TestScriptIntegrationParsesHeaderJS(t *testing.T) {
 	}
 	if headers["X-Token"] != "abc" {
 		t.Fatalf("headers = %#v", headers)
+	}
+}
+
+func TestScriptIntegrationHandlesUnsupportedSourceProxyExplicitly(t *testing.T) {
+	integration := NewScriptIntegration(script.NewRuntime(script.Policy{}))
+
+	headers, err := integration.HeaderMap(context.Background(), &domainsource.BookSource{Header: `@js:JSON.stringify({"User-Agent":"Reader","proxy":""})`})
+	if err != nil {
+		t.Fatalf("HeaderMap(empty proxy) error = %v", err)
+	}
+	if len(headers) != 1 || headers["User-Agent"] != "Reader" {
+		t.Fatalf("headers = %#v", headers)
+	}
+
+	_, err = integration.HeaderMap(context.Background(), &domainsource.BookSource{Header: `@js:JSON.stringify({"proxy":"http://127.0.0.1:8080"})`})
+	if !errors.Is(err, ErrUnsupportedSourceProxy) {
+		t.Fatalf("HeaderMap(proxy) error = %v", err)
 	}
 }
 
@@ -87,5 +105,33 @@ func TestScriptIntegrationLoginCheckTimeout(t *testing.T) {
 	_, err := integration.LoginCheck(context.Background(), src, resp)
 	if !errors.Is(err, script.ErrScriptTimeout) {
 		t.Fatalf("error = %v, want ErrScriptTimeout", err)
+	}
+}
+
+func TestScriptIntegrationLoginCheckExposesResponseBaseURLAndCache(t *testing.T) {
+	integration := NewScriptIntegration(script.NewRuntime(script.Policy{Timeout: time.Second, Stage: "login_check_js"}))
+	src := &domainsource.BookSource{
+		BookSourceURL: "https://source.example.test/#group",
+		LoginCheckJS: `
+cache.put("temporary", "value", 600);
+var checked = [baseUrl, result.code(), result.url(), result.body(), java.getResponse().headers().get("x-userid"), java.getStrResponse(null, null).body()].join("|");
+cache.deleteMemory("temporary");
+checked + "|" + String(cache.getFromMemory("temporary"))
+`,
+	}
+	resp := &fetch.Response{
+		StatusCode: http.StatusAccepted,
+		URL:        "https://source.example.test/search?q=test",
+		Headers:    http.Header{"X-Userid": {"42"}},
+		Body:       []byte("body"),
+	}
+
+	got, err := integration.LoginCheck(context.Background(), src, resp)
+	if err != nil {
+		t.Fatalf("LoginCheck() error = %v", err)
+	}
+	want := "https://source.example.test/|202|https://source.example.test/search?q=test|body|42|body|null"
+	if string(got.Body) != want {
+		t.Fatalf("body = %q, want %q", got.Body, want)
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	domainbook "reader/internal/domain/book"
 	domainsource "reader/internal/domain/source"
+	"reader/internal/infra/rule/jsonpath"
 )
 
 func TestAnalyzerGetsHTMLStrings(t *testing.T) {
@@ -267,6 +268,14 @@ func TestAnalyzerTreatsBareRuleAsJSONPathWhenInputIsJSON(t *testing.T) {
 	}
 	if got != "第一段" {
 		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestAnalyzerDoesNotFallbackToCSSAfterJSONPathFailure(t *testing.T) {
+	analyzer := NewAnalyzer(Context{})
+	_, err := analyzer.GetElements(context.Background(), "$.[?(", `{"items":[]}`)
+	if !errors.Is(err, jsonpath.ErrRuleParse) {
+		t.Fatalf("error = %v, want JSONPath parse error", err)
 	}
 }
 

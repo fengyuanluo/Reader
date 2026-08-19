@@ -98,6 +98,21 @@ func Absolute(baseURL string, raw string) string {
 	return parsed.String()
 }
 
+func AbsolutePreservingOptions(baseURL string, raw string) string {
+	raw = strings.TrimSpace(raw)
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != ',' || !strings.HasPrefix(strings.TrimSpace(raw[i+1:]), "{") {
+			continue
+		}
+		absolute := absolutePlain(baseURL, raw[:i])
+		if absolute == "" {
+			return ""
+		}
+		return absolute + raw[i:]
+	}
+	return absolutePlain(baseURL, raw)
+}
+
 func absolutePlain(baseURL string, raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

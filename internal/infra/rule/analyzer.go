@@ -95,6 +95,14 @@ func (a *Analyzer) ExpandString(ctx context.Context, text string, input any) (st
 }
 
 func (a *Analyzer) GetStringList(ctx context.Context, rule string, input any) ([]string, error) {
+	return a.getStringList(ctx, rule, input, true)
+}
+
+func (a *Analyzer) GetStringListRaw(ctx context.Context, rule string, input any) ([]string, error) {
+	return a.getStringList(ctx, rule, input, false)
+}
+
+func (a *Analyzer) getStringList(ctx context.Context, rule string, input any, normalizeURLs bool) ([]string, error) {
 	if strings.TrimSpace(rule) == "" {
 		return nil, nil
 	}
@@ -106,7 +114,7 @@ func (a *Analyzer) GetStringList(ctx context.Context, rule string, input any) ([
 		if value == "" {
 			return nil, nil
 		}
-		return toStringList(value), nil
+		return stringList(value, normalizeURLs), nil
 	}
 	if strings.Contains(rule, "{$.") && !strings.Contains(rule, "{{") {
 		value, err := a.renderJSONPathTemplate(ctx, rule, input)
@@ -116,7 +124,7 @@ func (a *Analyzer) GetStringList(ctx context.Context, rule string, input any) ([
 		if value == "" {
 			return nil, nil
 		}
-		return toStringList(value), nil
+		return stringList(value, normalizeURLs), nil
 	}
 	steps := splitSourceRules(rule, false)
 	var current any = input
@@ -127,8 +135,8 @@ func (a *Analyzer) GetStringList(ctx context.Context, rule string, input any) ([
 		}
 		current = collapseScalarResult(value)
 	}
-	values := toStringList(current)
-	if a.ctx.RedirectURL != "" {
+	values := stringList(current, normalizeURLs)
+	if normalizeURLs && a.ctx.RedirectURL != "" {
 		for i, value := range values {
 			if shouldNormalizeURL(value) {
 				values[i] = urlrule.Absolute(a.ctx.RedirectURL, value)
@@ -233,17 +241,16 @@ func (a *Analyzer) evalStep(ctx context.Context, step sourceRule, input any, wan
 	default:
 		if isJSONInput(input) {
 			adapter, e := jsonpath.New(asString(input))
-			if e == nil {
-				jsonRule := normalizeJSONRule(step.rule)
-				if wantElements {
-					result, err = adapter.List(jsonRule)
-				} else {
-					result, err = adapter.Strings(jsonRule)
-				}
-				if err == nil {
-					break
-				}
+			if e != nil {
+				return nil, e
 			}
+			jsonRule := normalizeJSONRule(step.rule)
+			if wantElements {
+				result, err = adapter.List(jsonRule)
+			} else {
+				result, err = adapter.Strings(jsonRule)
+			}
+			break
 		}
 		adapter, e := newCSSAdapter(input)
 		if e != nil {
@@ -876,6 +883,10 @@ func collapseScalarResult(input any) any {
 }
 
 func toStringList(input any) []string {
+	return stringList(input, true)
+}
+
+func stringList(input any, normalizeCustomURL bool) []string {
 	switch value := input.(type) {
 	case nil:
 		return nil
@@ -886,8 +897,10 @@ func toStringList(input any) []string {
 		if trimmed == "" {
 			return nil
 		}
-		if parsed := urlrule.ParseCustom(trimmed); len(parsed.Attribute) > 0 {
-			return []string{parsed.String()}
+		if normalizeCustomURL {
+			if parsed := urlrule.ParseCustom(trimmed); len(parsed.Attribute) > 0 {
+				return []string{parsed.String()}
+			}
 		}
 		return strings.Split(value, "\n")
 	case []any:

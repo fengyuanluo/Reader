@@ -237,6 +237,8 @@ BookSource
   customOrder: int
   enabled: bool
   enabledExplore: bool
+  eventListener: bool
+  customButton: bool
   jsLib: string?
   enabledCookieJar: bool
   concurrentRate: string?
@@ -522,6 +524,7 @@ URL 归一化必须参考：
 
 - 规则提取 URL 时，以 redirect URL 优先作为 base。
 - 如果 URL 带自定义属性，属性必须被保留。
+- 文件源 `downloadUrls` 只绝对化逗号前的 URL，逗号后的 option 文本逐字保留。
 - 空 URL 不应 panic，应返回空值或明确错误，取决于调用场景。
 
 ## 10. HTTP Fetcher 设计
@@ -540,6 +543,8 @@ Fetcher 必须支持：
 - Cookie 持久化与合并。
 - 登录 Header。
 - `loginCheckJs` 响应处理。
+- 统一解析 `method/body/headers/type/charset/origin/retry/js/bodyJs`。
+- `webView:true` 使用普通 HTTP 降级并写告警日志；`webJs`、代理、DNS 和其他浏览器专属 option 明确拒绝。
 
 ### 10.2 安全策略
 
@@ -555,7 +560,7 @@ Fetcher 必须支持：
 - 最大 redirect 次数默认 5。
 - 响应大小默认限制，例如 10 MiB。
 - 请求超时默认 30 秒。
-- 每源并发默认由 `concurrentRate` 或全局配置控制。
+- `concurrentRate` 按 `bookSourceUrl` 使用固定窗口限速，等待服从 context 取消；未配置时使用全局策略。
 
 ### 10.3 Cookie 策略
 
@@ -589,6 +594,8 @@ Go 实现建议：
 - `cache.get`、`cache.put`：受命名空间限制的键值缓存。
 - `log`：调试日志输出。
 - `url.resolve`：URL 解析。
+- `java.ajax` / `ajaxTestAll` / `getCookie` 等网络与 Cookie helper：只能经受控 Fetcher/CookieStore 执行。
+- `timeFormat`、`toNumChapter`、`getStringList`、`getElement`、`setContent`、摘要/base64/User-Agent 等纯 helper。
 - `JSON`、`String`、`Math`、`Date` 等 JS 内建能力。
 
 ### 11.3 禁止能力
@@ -597,7 +604,7 @@ Go 实现建议：
 
 - 文件系统。
 - 进程执行。
-- 任意网络请求。
+- 绕过受控 Fetcher 的任意网络请求。
 - Go 指针或反射。
 - 环境变量。
 - 未脱敏 Cookie 和 Token。
@@ -650,7 +657,9 @@ Import request
 load source
   -> validate enabled or debug override
   -> build AnalyzeUrl from searchUrl
+  -> run request js
   -> fetch response
+  -> run bodyJs
   -> run loginCheckJs if configured
   -> check redirect/direct detail pattern
   -> parse BookList
@@ -687,6 +696,7 @@ load source and book
   -> run BookInfoRule.init
   -> extract fields
   -> normalize coverUrl and tocUrl
+  -> for type=3, extract downloadUrls while preserving option text
   -> save/update book
 ```
 
@@ -714,7 +724,7 @@ load source and book
 ```text
 check chapter content cache
   -> load source, book, chapter
-  -> fetch chapter URL
+  -> build/fetch chapter request and run js/bodyJs
   -> parse content and nextContentUrl
   -> fetch next content pages
   -> apply contentRule.replaceRegex
@@ -722,6 +732,24 @@ check chapter content cache
   -> save cache
   -> return content
 ```
+
+`subContent` 与 `callBackJs` 可导入和持久化，但当前不执行；检测到配置时写内部诊断日志并继续主 `content` 规则。`sourceRegex` 仍因需要浏览器流而明确返回不支持。
+
+### 12.7 全书 TXT 导出
+
+```text
+load book and ordered chapters
+  -> create temporary UTF-8 text file
+  -> write book metadata
+  -> for each chapter in order:
+       volume: write volume title
+       content: reuse cache or execute GetChapterContent
+       write chapter title and normalized body
+  -> on any error: discard temporary file
+  -> on success: return attachment and remove temporary file after response
+```
+
+导出按目录顺序串行执行，避免改变书源脚本、Cookie 和限速语义；正文失败时不发送部分结果，已成功章节仍保留正文缓存。
 
 ## 13. 替换净化设计
 
@@ -827,28 +855,36 @@ cancelled
 
 ```text
 start checking
-  -> remove invalid groups and stale error comments equivalent
-  -> search check if enabled
-  -> discovery check if enabled and configured
-  -> info check
-  -> toc check
-  -> content check
+  -> choose valid ruleSearch.checkKeyWord or request/default fallback
+  -> apply the effective 180s default timeout
+  -> search check if enabled -> its own info/toc/content stages
+  -> discovery check if enabled and configured -> its own info/toc/content stages
+  -> for file source: info/downloadUrls only; toc/content not applicable
   -> classify failures
-  -> record respondTime
-  -> persist result
+  -> persist item, keywordUsed, timeoutMs and stage results
+  -> monotonically persist task progress
 ```
 
-失败分类：
+搜索或发现服务返回 per-source warning 时，校验器使用 warning 原文；只有没有 warning 且列表确实为空时才生成空结果。搜索和发现即使同时启用也分别执行后续阶段，不能用一条链路的结果替代另一条。
+
+`failureCode` 保留阶段兼容值，`failureClass` 表达根因：
 
 | 分类 | 触发 |
 |---|---|
-| `timeout` | context deadline exceeded |
-| `js_failed` | JS runtime error |
-| `website_failed` | fetch error or unclassified runtime error |
-| `search_failed` | 搜索空结果 |
-| `discovery_failed` | 发现空结果 |
-| `toc_failed` | 目录为空或目录解析失败 |
-| `content_failed` | 正文为空或正文解析失败 |
+| `source_*_empty*` | 明确的搜索、发现、目录、正文或文件下载地址为空 |
+| `source_upstream_*` | 上游 HTTP、空 JSON 或非 JSON 响应 |
+| `network_*` | DNS、TLS、超时、重置和瞬态传输失败 |
+| `source_rule_*` | 规则脚本语法或执行失败 |
+| `unsupported_runtime_api` | 受限 JS runtime 尚未支持的确定性 API |
+| `unsupported_browser_capability` | WebView/浏览器专属能力 |
+| `implementation_or_rule_failed` | 证据不足，保留原文等待同请求 A/B |
+
+### 15.3 任务与诊断持久化
+
+- `finished` 使用仓储层单调更新，不能被乱序并发写回较小值。
+- worker 的失败状态与计数在同一同步域内更新，必须通过 race detector。
+- 只有确定性的源空结果或规则失败可更新“失效”分组和 `// Error:`；网络、HTTP、安全策略、浏览器边界和未确认错误只保留任务诊断。
+- 创建/取消异步任务返回 202；pending/running SSE 使用 `check.progress`，终态才使用 completed/cancelled 事件。
 
 ## 16. SOLID 设计约束
 
@@ -909,6 +945,7 @@ start checking
 - URL 归一化。
 - 替换净化。
 - JS 沙箱。
+- 文件源 `downloadUrls` option 原文保留。
 - 错误分类。
 
 ### 17.2 Repository 测试
@@ -960,6 +997,8 @@ import source
 ```
 
 mock E2E 的目的，是在不访问真实外网的情况下稳定覆盖导入、搜索、详情、目录、正文、替换、书架、进度、调试和校验闭环。mock E2E 必须进入默认 CI。
+
+另有轻量兼容关键路径：文本书源的搜索和正文请求执行 `js/bodyJs` 后完成搜索 -> 详情 -> 目录 -> 正文；文件型书源从详情规则提取 TXT `downloadUrls` 并保留其请求 option 原文。
 
 ### 17.6 真实远程书源集合 E2E
 

@@ -137,7 +137,7 @@ func TestInfoParserExtractsDownloadURLsForFileSource(t *testing.T) {
 
 	got, err := service.RefreshInfo(context.Background(), InfoInput{
 		Source:   src,
-		InfoHTML: `{"name":"文件书","author":"作者","downloads":["/a.epub","https://cdn.example.test/b.epub"]}`,
+		InfoHTML: `{"name":"文件书","author":"作者","downloads":["/a.txt, {\"headers\": {\"X-Test\": \"ok\"}, \"type\": \"txt\"}","https://cdn.example.test/b.epub"]}`,
 		Book: domainbook.Book{
 			BookURL:    "https://site.example.test/book/file",
 			Origin:     src.BookSourceURL,
@@ -148,7 +148,7 @@ func TestInfoParserExtractsDownloadURLsForFileSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RefreshInfo() error = %v", err)
 	}
-	if len(got.DownloadURLs) != 2 || got.DownloadURLs[0] != "https://site.example.test/a.epub" || got.DownloadURLs[1] != "https://cdn.example.test/b.epub" {
+	if len(got.DownloadURLs) != 2 || got.DownloadURLs[0] != `https://site.example.test/a.txt, {"headers": {"X-Test": "ok"}, "type": "txt"}` || got.DownloadURLs[1] != "https://cdn.example.test/b.epub" {
 		t.Fatalf("download urls = %#v", got.DownloadURLs)
 	}
 }
@@ -378,21 +378,22 @@ func TestInfoServiceAppliesOriginOptionAsHeaders(t *testing.T) {
 	}
 }
 
-func TestInfoServiceRejectsUnsupportedURLOption(t *testing.T) {
+func TestPrepareBookFetchRequestMarksWebViewHTTPFallback(t *testing.T) {
 	src := testInfoSource()
-	repo := &fakeBookRepo{}
-	fetcher := &fakeInfoFetcher{}
-	service := NewInfoService(repo, fetcher, nil)
+	b := domainbook.Book{BookURL: `https://site.example.test/api/detail,{"webView":true}`}
+	req, err := prepareBookFetchRequest(context.Background(), b.BookURL, src, &b, nil)
+	if err != nil {
+		t.Fatalf("prepareBookFetchRequest() error = %v", err)
+	}
+	if !req.WebViewFallback {
+		t.Fatalf("request = %#v", req)
+	}
+}
 
-	_, err := service.RefreshInfo(context.Background(), InfoInput{
-		Source: src,
-		Book: domainbook.Book{
-			BookURL:    `https://site.example.test/api/detail,{"webView":true}`,
-			Origin:     src.BookSourceURL,
-			OriginName: src.BookSourceName,
-		},
-		CanRename: true,
-	})
+func TestPrepareBookFetchRequestRejectsWebJSURLOption(t *testing.T) {
+	src := testInfoSource()
+	b := domainbook.Book{BookURL: `https://site.example.test/api/detail,{"webView":true,"webJs":"document.body.innerText"}`}
+	_, err := prepareBookFetchRequest(context.Background(), b.BookURL, src, &b, nil)
 	if err == nil || !strings.Contains(err.Error(), "unsupported url option") {
 		t.Fatalf("err = %v", err)
 	}

@@ -30,6 +30,12 @@ func bookSourceFromDTO(dto generated.BookSource) (*source.BookSource, error) {
 		RuleToc:          flexibleFromRuleObject[rule.TocRule](dto.RuleToc),
 		RuleContent:      flexibleFromRuleObject[rule.ContentRule](dto.RuleContent),
 	}
+	if dto.EventListener != nil {
+		src.EventListener = *dto.EventListener
+	}
+	if dto.CustomButton != nil {
+		src.CustomButton = *dto.CustomButton
+	}
 	src.BookSourceGroup = stringValue(dto.BookSourceGroup)
 	src.BookURLPattern = stringValue(dto.BookUrlPattern)
 	src.ConcurrentRate = stringValue(dto.ConcurrentRate)
@@ -72,6 +78,8 @@ func mapBookSource(src *source.BookSource) generated.BookSource {
 		Enabled:          src.Enabled,
 		EnabledExplore:   src.EnabledExplore,
 		EnabledCookieJar: src.EnabledCookieJar,
+		EventListener:    boolPtr(src.EventListener),
+		CustomButton:     boolPtr(src.CustomButton),
 		LastUpdateTime:   src.LastUpdateTime,
 		RuleExplore:      ruleObjectFromFlexible(src.RuleExplore),
 		RuleSearch:       ruleObjectFromFlexible(src.RuleSearch),
