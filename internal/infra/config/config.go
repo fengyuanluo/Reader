@@ -67,7 +67,7 @@ func Load(source Source) (Config, error) {
 		DataDir:                     "data",
 		SQLiteDSN:                   "data/reader.db",
 		Env:                         EnvDevelopment,
-		DefaultUserAgent:            "Reader/0.0.1",
+		DefaultUserAgent:            "Reader/0.1.0",
 		FetchTimeout:                30 * time.Second,
 		FetchMaxBodyBytes:           10 * 1024 * 1024,
 		FetchMaxRedirects:           5,

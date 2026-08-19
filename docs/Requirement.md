@@ -528,6 +528,16 @@
 - 验收标准：每个 API 响应有 traceId；抓取和 JS 错误能关联 sourceId；健康检查不需要认证。
 - 优先级：P0
 
+### R-092：容器化发布
+
+- 来源依据：用户确认的 GitHub 与 GHCR 发布模型。
+- 需求描述：项目提供非 root、双架构的 OCI 镜像，通过 GHCR 发布并支持 Docker Compose 部署。
+- 输入：`READER_TOKEN` 及其他可选环境变量。
+- 输出：`linux/amd64`、`linux/arm64` 镜像和可持久化 SQLite 的单服务部署。
+- 边界：数据固定持久化到 `/data`，临时 TXT 使用 `/tmp`；不提交凭据，不增加自动清理、签名或额外发布系统。
+- 验收标准：容器健康检查通过；Bearer 鉴权有效；SQLite 写入在容器重启后保留；公开 GHCR 标签可匿名拉取。
+- 优先级：P0
+
 ## 15. 总体验收标准
 
 一期完成时，必须通过以下端到端验收：
@@ -541,4 +551,5 @@
 - 能应用标题替换和正文替换规则。
 - 能启动调试 session 并看到搜索、详情、目录、正文阶段事件。
 - 能启动批量校验任务并得到每个书源的分类结果。
+- 能通过 Docker 或 Compose 以非 root 用户运行，并在 `/data` 持久化 SQLite。
 - 能通过 `go generate ./...`、`go test ./...`、`go vet ./...`、OpenAPI 校验和 SQLite migration 测试。

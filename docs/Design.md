@@ -1087,6 +1087,15 @@ READER_REAL_E2E_MAX_CANDIDATES
 
 生产模式缺少 `READER_TOKEN` 必须拒绝启动。
 
+### 18.1 容器与发布
+
+- 构建阶段使用 Go 1.26 Alpine，通过 `CGO_ENABLED=0` 交叉构建静态二进制。
+- 运行阶段使用 Alpine，安装 CA 证书和时区数据，以非 root `reader` 用户启动。
+- 容器监听 8080，SQLite DSN 固定为 `/data/reader.db`，`/data` 由命名卷持久化，TXT 导出临时文件使用 `/tmp`。
+- GitHub Action 在 `master`、`v*` 和手动触发时先运行测试与 vet，再向 GHCR 发布 `linux/amd64`、`linux/arm64` 镜像。
+- `master` 生成 `latest`，版本标签生成完整 SemVer 和 `major.minor`，所有发布生成短提交 SHA 标签。
+- 发布权限仅包含读取仓库和写入 Packages；不使用额外 PAT，不启用自动清理或签名。
+
 ## 19. 未来扩展
 
 以下能力不进入一期，但设计应避免阻塞：

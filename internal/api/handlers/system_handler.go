@@ -11,7 +11,7 @@ func (h *SourceHandler) GetHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *SourceHandler) GetVersion(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, generated.VersionResponse{Version: "0.0.1"})
+	writeJSON(w, http.StatusOK, generated.VersionResponse{Version: "0.1.0"})
 }
 
 func (h *SourceHandler) GetOpenAPI(w http.ResponseWriter, _ *http.Request) {

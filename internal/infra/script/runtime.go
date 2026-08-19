@@ -869,7 +869,7 @@ func sourceUserAgent(src *domainsource.BookSource) string {
 			}
 		}
 	}
-	return "Reader/0.0.1"
+	return "Reader/0.1.0"
 }
 
 func scriptCallContext(parent context.Context, call goja.FunctionCall, timeoutIndex int) (context.Context, context.CancelFunc) {

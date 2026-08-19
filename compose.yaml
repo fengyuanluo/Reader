@@ -1,0 +1,16 @@
+services:
+  reader:
+    image: ghcr.io/fengyuanluo/reader:latest
+    ports:
+      - "8080:8080"
+    environment:
+      READER_ENV: production
+      READER_TOKEN: ${READER_TOKEN:?READER_TOKEN is required}
+      READER_DATA_DIR: /data
+      READER_SQLITE_DSN: /data/reader.db
+    volumes:
+      - reader-data:/data
+    restart: unless-stopped
+
+volumes:
+  reader-data:

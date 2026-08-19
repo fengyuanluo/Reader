@@ -44,7 +44,7 @@ func NewHTTPFetcher(opts ...Option) *HTTPFetcher {
 				return nil
 			},
 		},
-		defaultUserAgent: "Reader/0.0.1",
+		defaultUserAgent: "Reader/0.1.0",
 		maxBodyBytes:     10 * 1024 * 1024,
 		resolver:         net.LookupIP,
 		rateLimiter:      newSourceRateLimiter(),
