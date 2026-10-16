@@ -29,6 +29,44 @@ const (
 	CheckItemCancelled CheckTaskItemStatus = "cancelled"
 )
 
+// CheckItemPath 标记条目检查发生在上游的搜索链路还是发现链路。
+// 校验按 Legado CheckSourceService 的语义生成分组名（如“搜索目录失效”与“发现目录失效”），
+// 因此条目需要携带自己的来源链路。该字段仅用于诊断分组，不落库、不对外暴露。
+type CheckItemPath string
+
+const (
+	CheckPathSearch    CheckItemPath = "search"
+	CheckPathDiscovery CheckItemPath = "discovery"
+)
+
+// CheckEventType 是校验任务事件流的类型，取值与 OpenAPI CheckEvent 枚举一致。
+type CheckEventType string
+
+const (
+	CheckEventStarted     CheckEventType = "check.started"
+	CheckEventItemStarted CheckEventType = "check.item_started"
+	CheckEventItemPassed  CheckEventType = "check.item_passed"
+	CheckEventItemFailed  CheckEventType = "check.item_failed"
+	CheckEventCompleted   CheckEventType = "check.completed"
+	CheckEventCancelled   CheckEventType = "check.cancelled"
+)
+
+// IsTerminalCheckEvent 判断事件是否为任务终态事件，订阅方收到后可以收尾断开。
+func IsTerminalCheckEvent(eventType CheckEventType) bool {
+	return eventType == CheckEventCompleted || eventType == CheckEventCancelled
+}
+
+// CheckEvent 是校验任务的流式进度事件，由 runner 在检查过程中发布。
+type CheckEvent struct {
+	TaskID    string
+	SourceID  string
+	Type      CheckEventType
+	Message   string
+	Item      *CheckTaskItem
+	TraceID   string
+	CreatedAt time.Time
+}
+
 type CheckTask struct {
 	TaskID      string
 	Status      CheckTaskStatus
@@ -49,6 +87,7 @@ type CheckTaskItem struct {
 	FailureCode    string
 	FailureClass   string
 	Message        string
+	Path           CheckItemPath
 	RespondTime    int64
 	TraceID        string
 	CreatedAt      time.Time
@@ -66,6 +105,16 @@ func CanTransitionCheckTask(from CheckTaskStatus, to CheckTaskStatus) bool {
 		return to == CheckTaskSucceeded || to == CheckTaskFailed || to == CheckTaskCancelled
 	case CheckTaskSucceeded, CheckTaskFailed, CheckTaskCancelled:
 		return false
+	default:
+		return false
+	}
+}
+
+// CheckTaskTerminal 判断校验任务是否已进入终态；终态任务不再接受状态迁移。
+func CheckTaskTerminal(status CheckTaskStatus) bool {
+	switch status {
+	case CheckTaskSucceeded, CheckTaskFailed, CheckTaskCancelled:
+		return true
 	default:
 		return false
 	}
@@ -91,4 +140,6 @@ type CheckRepository interface {
 	UpdateTaskStatus(ctx context.Context, taskID string, status CheckTaskStatus, finished int, completedAt *time.Time) error
 	SaveItem(ctx context.Context, item *CheckTaskItem) error
 	ListItems(ctx context.Context, taskID string) ([]*CheckTaskItem, error)
+	// FailInterruptedTasks 把进程重启后遗留的未完成任务收敛为 failed，返回受影响行数。
+	FailInterruptedTasks(ctx context.Context, completedAt time.Time) (int64, error)
 }

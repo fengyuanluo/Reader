@@ -49,6 +49,9 @@ type Input struct {
 	Book           book.Book
 	Chapter        book.BookChapter
 	NextChapterURL string
+	// SkipCache 为真时不写入正文缓存，对应 Legado WebBook.getContent(needSave=false)：
+	// 调试等一次性抓取不应污染真实阅读缓存。
+	SkipCache bool
 }
 
 type Result struct {
@@ -164,7 +167,7 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 		return Result{}, ErrContentEmpty
 	}
 	// 正文规则解析出的标题写回章节表（对齐 Legado BookContent.kt:66-69），否则重启后会退回目录标题。
-	if s.chapters != nil {
+	if s.chapters != nil && !input.SkipCache {
 		if chapter.Title != originalTitle {
 			if err := s.chapters.SaveTitle(ctx, bookID, chapter.Index, chapter.Title); err != nil {
 				return Result{}, err

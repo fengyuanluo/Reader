@@ -2256,6 +2256,8 @@ components:
         - info_failed
         - toc_failed
         - content_failed
+        - search_rule_empty
+        - discovery_rule_empty
     CheckTaskItem:
       type: object
       required:

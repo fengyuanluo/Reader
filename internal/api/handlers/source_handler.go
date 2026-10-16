@@ -26,7 +26,6 @@ import (
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/replace"
 	"reader/internal/domain/source"
-	"reader/internal/domain/task"
 	sqliterepo "reader/internal/infra/sqlite/repositories"
 )
 
@@ -46,6 +45,8 @@ type SourceHandler struct {
 	check      *checkapp.Manager
 	bodyLimit  int64
 	importBody int64
+	// heartbeat 覆盖 SSE 心跳间隔，仅供测试缩短等待；零值使用 defaultSSEHeartbeatInterval。
+	heartbeat time.Duration
 }
 
 // 请求体上限：普通 JSON 请求体参照 READER_FETCH_MAX_BODY_BYTES 的默认值 10 MiB
@@ -127,79 +128,6 @@ func (h *SourceHandler) WithCheck(check *checkapp.Manager) *SourceHandler {
 	return h
 }
 
-func (h *SourceHandler) CreateBookSourceCheckTask(w http.ResponseWriter, r *http.Request) {
-	if h.check == nil {
-		writeNotConfigured(w, r, "check service is not configured")
-		return
-	}
-	var body generated.CheckTaskCreateRequest
-	if !h.decodeJSON(w, r, &body) {
-		return
-	}
-	if len(body.SourceIds) == 0 {
-		writeValidationError(w, r, "sourceIds is required")
-		return
-	}
-	checkTask := &task.CheckTask{
-		TaskID:    "check-" + time.Now().UTC().Format("20060102150405.000000000"),
-		Status:    task.CheckTaskPending,
-		TraceID:   middleware.TraceIDFromContext(r.Context()),
-		CreatedAt: time.Now().UTC(),
-	}
-	created, err := h.check.Start(r.Context(), checkTask, body.SourceIds, checkOptionsFromDTO(body.Options), 4)
-	if err != nil {
-		writeCheckError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, mapCheckTask(created))
-}
-
-func (h *SourceHandler) GetCheckTask(w http.ResponseWriter, r *http.Request, taskId string) {
-	if h.check == nil {
-		writeNotConfigured(w, r, "check service is not configured")
-		return
-	}
-	checkTask, err := h.check.Get(r.Context(), taskId)
-	if err != nil {
-		writeCheckError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, mapCheckTask(checkTask))
-}
-
-func (h *SourceHandler) CancelCheckTask(w http.ResponseWriter, r *http.Request, taskId string) {
-	if h.check == nil {
-		writeNotConfigured(w, r, "check service is not configured")
-		return
-	}
-	checkTask, err := h.check.Cancel(r.Context(), taskId)
-	if err != nil {
-		writeCheckError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, mapCheckTask(checkTask))
-}
-
-func (h *SourceHandler) StreamCheckTaskEvents(w http.ResponseWriter, r *http.Request, taskId string) {
-	if h.check == nil {
-		writeNotConfigured(w, r, "check service is not configured")
-		return
-	}
-	checkTask, err := h.check.Get(r.Context(), taskId)
-	if err != nil {
-		writeCheckError(w, r, err)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.WriteHeader(http.StatusOK)
-	eventType := generated.CheckCompleted
-	if checkTask.Status == task.CheckTaskCancelled {
-		eventType = generated.CheckCancelled
-	}
-	encoded, _ := json.Marshal(generated.CheckEvent{TaskId: checkTask.TaskID, Type: eventType, Message: string(checkTask.Status), TraceId: checkTask.TraceID})
-	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, encoded)
-}
-
 func (h *SourceHandler) ImportBookSources(w http.ResponseWriter, r *http.Request) {
 	if h.importer == nil {
 		writeNotConfigured(w, r, "import service is not configured")
@@ -233,92 +161,6 @@ func writeImportError(w http.ResponseWriter, r *http.Request, err error) {
 		middleware.WriteError(w, r, http.StatusConflict, "source_conflict", err.Error(), nil)
 	default:
 		middleware.WriteError(w, r, http.StatusInternalServerError, "import_failed", err.Error(), nil)
-	}
-}
-
-func (h *SourceHandler) CreateDebugSession(w http.ResponseWriter, r *http.Request) {
-	if h.debugSvc == nil {
-		writeNotConfigured(w, r, "debug service is not configured")
-		return
-	}
-	var body generated.DebugSessionCreateRequest
-	if !h.decodeJSON(w, r, &body) {
-		return
-	}
-	if strings.TrimSpace(body.SourceId) == "" {
-		writeValidationError(w, r, "sourceId is required")
-		return
-	}
-	if body.Mode == generated.Keyword {
-		if body.Keyword == nil || strings.TrimSpace(*body.Keyword) == "" {
-			writeValidationError(w, r, "keyword is required")
-			return
-		}
-	} else if body.Url == nil || strings.TrimSpace(*body.Url) == "" {
-		writeValidationError(w, r, "url is required")
-		return
-	}
-	session := debugSessionFromCreateRequest(body, middleware.TraceIDFromContext(r.Context()))
-	created, err := h.debugSvc.CreateSession(r.Context(), &session)
-	if err != nil {
-		writeDebugError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, mapDebugSession(created))
-}
-
-func (h *SourceHandler) GetDebugSession(w http.ResponseWriter, r *http.Request, sessionId string) {
-	if h.debugSvc == nil {
-		writeNotConfigured(w, r, "debug service is not configured")
-		return
-	}
-	session, err := h.debugSvc.GetSession(r.Context(), sessionId)
-	if err != nil {
-		writeDebugError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, mapDebugSession(session))
-}
-
-func (h *SourceHandler) CancelDebugSession(w http.ResponseWriter, r *http.Request, sessionId string) {
-	if h.debugSvc == nil {
-		writeNotConfigured(w, r, "debug service is not configured")
-		return
-	}
-	session, err := h.debugSvc.CancelSession(r.Context(), sessionId)
-	if err != nil {
-		writeDebugError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, mapDebugSession(session))
-}
-
-func (h *SourceHandler) StreamDebugSessionEvents(w http.ResponseWriter, r *http.Request, sessionId string) {
-	if h.debug == nil {
-		writeNotConfigured(w, r, "debug service is not configured")
-		return
-	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		middleware.WriteError(w, r, http.StatusInternalServerError, "internal_error", "streaming is not supported", nil)
-		return
-	}
-	events, err := h.debug.Subscribe(r.Context(), sessionId, 0)
-	if err != nil {
-		writeDebugError(w, r, err)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	for event := range events {
-		encoded, err := json.Marshal(mapDebugEvent(event))
-		if err != nil {
-			continue
-		}
-		_, _ = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", event.EventID, event.Type, encoded)
-		flusher.Flush()
 	}
 }
 
@@ -976,24 +818,6 @@ func writeReplaceError(w http.ResponseWriter, r *http.Request, err error) {
 		writeValidationError(w, r, err.Error())
 	case errors.Is(err, replaceapp.ErrRegexLimitExceeded):
 		middleware.WriteError(w, r, http.StatusInternalServerError, "replace_failed", "replace regex limit exceeded", nil)
-	default:
-		middleware.WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal error", nil)
-	}
-}
-
-func writeDebugError(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, sqliterepo.ErrNotFound):
-		middleware.WriteError(w, r, http.StatusNotFound, "debug_session_not_found", "debug session not found", nil)
-	default:
-		middleware.WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal error", nil)
-	}
-}
-
-func writeCheckError(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, sqliterepo.ErrNotFound), errors.Is(err, source.ErrNotFound):
-		middleware.WriteError(w, r, http.StatusNotFound, "task_not_found", "check task or source not found", nil)
 	default:
 		middleware.WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal error", nil)
 	}

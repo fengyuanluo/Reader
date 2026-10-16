@@ -27,6 +27,9 @@ type BookService interface {
 
 type ContentService interface {
 	GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error)
+	// GetContentFromChapter 直接用内存中的书/章节对象抓正文，不查章节表：
+	// 对应 Legado Debug.kt 的 contentDebug（直接构造 BookChapter 且 needSave=false）。
+	GetContentFromChapter(ctx context.Context, sourceID string, b book.Book, chapter book.BookChapter) (contentapp.Result, error)
 }
 
 type DiscoveryService interface {
@@ -117,14 +120,12 @@ func (f *KeywordFlow) RunURL(ctx context.Context, session *task.DebugSession) er
 		b := book.Book{BookURL: session.URL, TocURL: session.URL, Origin: session.SourceID, Name: "debug", Author: "debug"}
 		return f.runFromBook(ctx, session, b, start, false, true, true)
 	case task.DebugModeContentURL:
+		// Legado Debug.startDebug 的 "--" 分支：直接构造 BookChapter 抓正文，不落库、
+		// 不查章节表，因此对还没抓取过目录的新书同样可用。
 		b := book.Book{BookURL: session.URL, Origin: session.SourceID, Name: "debug", Author: "debug"}
-		saved, err := f.books.Save(ctx, &b)
-		if err != nil {
-			_ = f.publishFailure(ctx, session, "content", err, diagnosticapp.FailureWebsiteFailed, start)
-			return err
-		}
+		chapter := book.BookChapter{BookURL: session.URL, Title: "调试", URL: session.URL}
 		if err := f.stage(ctx, session, "content", start, func() error {
-			_, _, err := f.content.GetChapterContent(ctx, book.IDFromURL(saved.BookURL), 0)
+			_, err := f.content.GetContentFromChapter(ctx, session.SourceID, b, chapter)
 			return err
 		}); err != nil {
 			return err
@@ -171,17 +172,21 @@ func (f *KeywordFlow) runFromBook(ctx context.Context, session *task.DebugSessio
 			return err
 		}
 	}
+	var chapters []*book.BookChapter
 	if doToc {
 		if err := f.stage(ctx, session, "toc", start, func() error {
-			_, _, err := f.books.RefreshToc(ctx, bookID)
+			var err error
+			chapters, _, err = f.books.RefreshToc(ctx, bookID)
 			return err
 		}); err != nil {
 			return err
 		}
 	}
 	if doContent {
+		// Legado Debug.tocDebug 会先过滤掉卷章节，正文阶段只抓第一个正文章节。
+		contentIndex := firstContentChapterIndex(chapters)
 		if err := f.stage(ctx, session, "content", start, func() error {
-			_, _, err := f.content.GetChapterContent(ctx, bookID, 0)
+			_, _, err := f.content.GetChapterContent(ctx, bookID, contentIndex)
 			return err
 		}); err != nil {
 			return err

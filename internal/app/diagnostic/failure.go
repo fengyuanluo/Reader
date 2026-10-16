@@ -18,6 +18,10 @@ const (
 	FailureDiscoveryFailed = "discovery_failed"
 	FailureTocFailed       = "toc_failed"
 	FailureContentFailed   = "content_failed"
+	// FailureSearchRuleEmpty / FailureDiscoveryRuleEmpty 对齐 Legado CheckSourceService 的
+	// “搜索链接规则为空”“发现规则为空”分组：书源根本没有配置对应规则，而不是规则执行失败。
+	FailureSearchRuleEmpty    = "search_rule_empty"
+	FailureDiscoveryRuleEmpty = "discovery_rule_empty"
 )
 
 const (

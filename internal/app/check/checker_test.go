@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	contentapp "reader/internal/app/content"
 	diagnosticapp "reader/internal/app/diagnostic"
 	discoveryapp "reader/internal/app/discovery"
 	searchapp "reader/internal/app/search"
 	"reader/internal/domain/book"
+	"reader/internal/domain/rule"
 	"reader/internal/domain/source"
 	"reader/internal/domain/task"
 )
@@ -71,6 +73,129 @@ func TestCheckerClassifiesContentEmpty(t *testing.T) {
 	if item.FailureClass != diagnosticapp.FailureClassSourceContentEmpty {
 		t.Fatalf("failure class = %#v", item)
 	}
+}
+
+func TestCheckerPrefersSourceCheckKeyword(t *testing.T) {
+	checker := newTestChecker()
+	src := testCheckSource()
+	src.RuleSearch = rule.Flexible[rule.SearchRule]{Value: &rule.SearchRule{CheckKeyWord: " 校验词 "}}
+
+	item, err := checker.CheckSource(context.Background(), src, defaultCheckOptions())
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.Status != task.CheckItemPassed {
+		t.Fatalf("item = %#v", item)
+	}
+	if checker.search.input.Keyword != "校验词" {
+		t.Fatalf("keyword = %q, want the source checkKeyWord", checker.search.input.Keyword)
+	}
+}
+
+func TestCheckerFallsBackToRequestedKeywordAndDefault(t *testing.T) {
+	checker := newTestChecker()
+	if _, err := checker.CheckSource(context.Background(), testCheckSource(), defaultCheckOptions()); err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if checker.search.input.Keyword != "斗破" {
+		t.Fatalf("keyword = %q, want requested keyword", checker.search.input.Keyword)
+	}
+
+	opts := defaultCheckOptions()
+	opts.Keyword = ""
+	if _, err := checker.CheckSource(context.Background(), testCheckSource(), opts); err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if checker.search.input.Keyword != DefaultCheckKeyword {
+		t.Fatalf("keyword = %q, want %q", checker.search.input.Keyword, DefaultCheckKeyword)
+	}
+}
+
+func TestCheckerAppliesDefaultTimeout(t *testing.T) {
+	search := &deadlineCheckSearch{}
+	checker := NewChecker(search, &fakeCheckDiscovery{}, &fakeCheckBooks{}, &fakeCheckContent{})
+	opts := defaultCheckOptions()
+	opts.CheckInfo, opts.CheckToc, opts.CheckContent = false, false, false
+	if _, err := checker.CheckSource(context.Background(), testCheckSource(), opts); err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if search.deadline.IsZero() {
+		t.Fatal("search stage context has no deadline; default timeout is not applied")
+	}
+	remaining := time.Until(search.deadline)
+	if remaining < DefaultTimeout-10*time.Second || remaining > DefaultTimeout {
+		t.Fatalf("deadline remaining = %v, want about %v", remaining, DefaultTimeout)
+	}
+}
+
+func TestCheckerMarksEmptySearchRule(t *testing.T) {
+	checker := newTestChecker()
+	src := testCheckSource()
+	src.SearchURL = ""
+
+	item, err := checker.CheckSource(context.Background(), src, defaultCheckOptions())
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.Status != task.CheckItemFailed || item.FailureCode != FailureSearchRuleEmpty {
+		t.Fatalf("item = %#v", item)
+	}
+	if checker.search.input.Keyword != "" {
+		t.Fatalf("search was executed for a source without searchUrl: %#v", checker.search.input)
+	}
+}
+
+func TestCheckerMarksEmptyDiscoveryRule(t *testing.T) {
+	checker := newTestChecker()
+	checker.discovery.categories = []discoveryapp.Category{}
+	opts := defaultCheckOptions()
+	opts.CheckSearch = false
+	opts.CheckDiscovery = true
+
+	item, err := checker.CheckSource(context.Background(), testCheckSource(), opts)
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.Status != task.CheckItemFailed || item.FailureCode != FailureDiscoveryRuleEmpty {
+		t.Fatalf("item = %#v", item)
+	}
+}
+
+func TestCheckerRecordsItemPathForBookStages(t *testing.T) {
+	checker := newTestChecker()
+	checker.content.err = contentapp.ErrContentEmpty
+
+	item, err := checker.CheckSource(context.Background(), testCheckSource(), defaultCheckOptions())
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.FailureCode != FailureContentFailed || item.Path != task.CheckPathSearch {
+		t.Fatalf("item = %#v", item)
+	}
+
+	discoveryChecker := newTestChecker()
+	discoveryChecker.content.err = contentapp.ErrContentEmpty
+	opts := defaultCheckOptions()
+	opts.CheckSearch = false
+	opts.CheckDiscovery = true
+	item, err = discoveryChecker.CheckSource(context.Background(), testCheckSource(), opts)
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.FailureCode != FailureContentFailed || item.Path != task.CheckPathDiscovery {
+		t.Fatalf("item = %#v", item)
+	}
+}
+
+type deadlineCheckSearch struct {
+	deadline time.Time
+}
+
+func (s *deadlineCheckSearch) Search(ctx context.Context, input searchapp.MultiSearchInput) (searchapp.MultiSearchResult, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		s.deadline = deadline
+	}
+	return searchapp.MultiSearchResult{Items: []book.SearchBook{{BookURL: "https://book.test/1", Origin: "https://source.test", OriginName: "Source", Name: "斗破苍穹", Author: "天蚕土豆"}}}, nil
 }
 
 func TestCheckerUsesStageSpecificFailureCodeForInfoErrors(t *testing.T) {
@@ -162,15 +287,17 @@ func defaultCheckOptions() Options {
 }
 
 func testCheckSource() *source.BookSource {
-	return &source.BookSource{SourceID: "source-id", BookSourceURL: "https://source.test", BookSourceName: "Source", ExploreURL: "https://source.test/discovery"}
+	return &source.BookSource{SourceID: "source-id", BookSourceURL: "https://source.test", BookSourceName: "Source", SearchURL: "https://source.test/search", ExploreURL: "https://source.test/discovery"}
 }
 
 type fakeCheckSearch struct {
 	result searchapp.MultiSearchResult
 	err    error
+	input  searchapp.MultiSearchInput
 }
 
 func (s *fakeCheckSearch) Search(ctx context.Context, input searchapp.MultiSearchInput) (searchapp.MultiSearchResult, error) {
+	s.input = input
 	if s.err != nil {
 		return searchapp.MultiSearchResult{}, s.err
 	}
@@ -178,8 +305,9 @@ func (s *fakeCheckSearch) Search(ctx context.Context, input searchapp.MultiSearc
 }
 
 type fakeCheckDiscovery struct {
-	result discoveryapp.Result
-	err    error
+	result     discoveryapp.Result
+	err        error
+	categories []discoveryapp.Category
 }
 
 func (d *fakeCheckDiscovery) Discover(ctx context.Context, input discoveryapp.Input) (discoveryapp.Result, error) {
@@ -187,6 +315,16 @@ func (d *fakeCheckDiscovery) Discover(ctx context.Context, input discoveryapp.In
 		return discoveryapp.Result{}, d.err
 	}
 	return d.result, nil
+}
+
+func (d *fakeCheckDiscovery) Categories(ctx context.Context, sourceID string) ([]discoveryapp.Category, error) {
+	if d.err != nil {
+		return nil, d.err
+	}
+	if d.categories != nil {
+		return d.categories, nil
+	}
+	return []discoveryapp.Category{{Title: "玄幻", URL: "https://source.test/discovery"}}, nil
 }
 
 type fakeCheckBooks struct {

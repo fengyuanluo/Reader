@@ -145,6 +145,45 @@ func TestUpdateTaskStatusIsAtomicUnderConcurrency(t *testing.T) {
 	}
 }
 
+func TestFailInterruptedTasks(t *testing.T) {
+	repo := NewCheckRepository(openRepoTestDB(t))
+	ctx := context.Background()
+	createdAt := time.Date(2026, 5, 3, 10, 0, 0, 0, time.UTC)
+	for _, checkTask := range []*task.CheckTask{
+		{TaskID: "running", Status: task.CheckTaskRunning, Total: 2, CreatedAt: createdAt},
+		{TaskID: "pending", Status: task.CheckTaskPending, Total: 1, CreatedAt: createdAt},
+		{TaskID: "done", Status: task.CheckTaskSucceeded, Total: 1, CreatedAt: createdAt},
+	} {
+		if err := repo.CreateTask(ctx, checkTask); err != nil {
+			t.Fatalf("CreateTask(%s) error = %v", checkTask.TaskID, err)
+		}
+	}
+	completedAt := createdAt.Add(time.Minute)
+	count, err := repo.FailInterruptedTasks(ctx, completedAt)
+	if err != nil {
+		t.Fatalf("FailInterruptedTasks() error = %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+	for _, taskID := range []string{"running", "pending"} {
+		got, err := repo.FindTask(ctx, taskID)
+		if err != nil {
+			t.Fatalf("FindTask(%s) error = %v", taskID, err)
+		}
+		if got.Status != task.CheckTaskFailed || got.CompletedAt == nil {
+			t.Fatalf("interrupted task = %#v", got)
+		}
+	}
+	done, err := repo.FindTask(ctx, "done")
+	if err != nil {
+		t.Fatalf("FindTask(done) error = %v", err)
+	}
+	if done.Status != task.CheckTaskSucceeded {
+		t.Fatalf("terminal task was overwritten: %#v", done)
+	}
+}
+
 func TestUpdateTaskStatusErrors(t *testing.T) {
 	repo := NewCheckRepository(openRepoTestDB(t))
 	ctx := context.Background()

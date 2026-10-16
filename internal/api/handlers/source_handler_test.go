@@ -1,16 +1,19 @@
 package handlers
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -765,7 +768,7 @@ func TestDebugSessionHandlersCreateGetAndCancel(t *testing.T) {
 	router, _ := newDebugHandlerTestRouter(t)
 
 	rec := authedRequest(router, http.MethodPost, "/api/v1/debug/book-source", `{"sourceId":"source-1","mode":"keyword","keyword":"斗破"}`)
-	if rec.Code != http.StatusCreated {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	var created generated.DebugSession
@@ -789,7 +792,7 @@ func TestDebugSessionHandlersCreateGetAndCancel(t *testing.T) {
 	}
 
 	rec = authedRequest(router, http.MethodDelete, "/api/v1/debug/sessions/"+created.SessionId, "")
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("cancel status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	var cancelled generated.DebugSession
@@ -798,6 +801,72 @@ func TestDebugSessionHandlersCreateGetAndCancel(t *testing.T) {
 	}
 	if cancelled.Status != generated.DebugSessionStatusCancelled || cancelled.CompletedAt == nil {
 		t.Fatalf("cancelled = %#v", cancelled)
+	}
+}
+
+func TestDebugSessionCreateRejectsUnknownMode(t *testing.T) {
+	router, _ := newDebugHandlerTestRouter(t)
+	for _, mode := range []string{"keywordd", "url", "", "resolve"} {
+		rec := authedRequest(router, http.MethodPost, "/api/v1/debug/book-source", `{"sourceId":"source-1","mode":"`+mode+`","url":"https://book.test/1"}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("mode %q status = %d body=%s", mode, rec.Code, rec.Body.String())
+		}
+		assertErrorCode(t, rec, "validation_failed")
+	}
+}
+
+func TestDebugSessionEventsStreamReturnsNotFoundForUnknownSession(t *testing.T) {
+	router, _ := newDebugHandlerTestRouter(t)
+	rec := authedRequest(router, http.MethodGet, "/api/v1/debug/sessions/missing/events", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "debug_session_not_found")
+}
+
+func TestDebugSessionEventsStreamClosesForTerminalSession(t *testing.T) {
+	router, debugRepo := newDebugHandlerTestRouter(t)
+	ctx := context.Background()
+	session := &task.DebugSession{SessionID: "debug-terminal", SourceID: "source-1", Mode: task.DebugModeKeyword, Status: task.DebugSessionFailed, CreatedAt: time.Now().UTC()}
+	if err := debugRepo.CreateSession(ctx, session); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := debugRepo.AppendEvent(ctx, &task.DebugEvent{SessionID: session.SessionID, Type: task.DebugEventStageFailed, Stage: "content", Level: task.DebugLevelError, Message: "content empty", TraceID: "trace-debug", CreatedAt: session.CreatedAt}); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	rec := authedRequest(router, http.MethodGet, "/api/v1/debug/sessions/"+session.SessionID+"/events", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: debug.stage_failed") || !strings.Contains(body, `"message":"content empty"`) {
+		t.Fatalf("sse body = %s", body)
+	}
+}
+
+func TestDebugSessionEventsStreamRejectsMalformedLastEventID(t *testing.T) {
+	router, debugRepo := newDebugHandlerTestRouter(t)
+	ctx := context.Background()
+	session := &task.DebugSession{SessionID: "debug-last-event", SourceID: "source-1", Mode: task.DebugModeKeyword, Status: task.DebugSessionFailed, CreatedAt: time.Now().UTC()}
+	if err := debugRepo.CreateSession(ctx, session); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	for i := 1; i <= 2; i++ {
+		if err := debugRepo.AppendEvent(ctx, &task.DebugEvent{SessionID: session.SessionID, Type: task.DebugEventLog, Level: task.DebugLevelInfo, Message: "event-" + strconv.Itoa(i), CreatedAt: session.CreatedAt}); err != nil {
+			t.Fatalf("AppendEvent() error = %v", err)
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/debug/sessions/"+session.SessionID+"/events", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Last-Event-ID", "1")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); strings.Contains(body, "event-1") || !strings.Contains(body, "event-2") {
+		t.Fatalf("sse body = %s", body)
 	}
 }
 
@@ -830,12 +899,13 @@ func TestDebugSessionHandlersRequireBearerToken(t *testing.T) {
 func TestCheckTaskHandlersCreateGetCancelAndEvents(t *testing.T) {
 	router, sourceRepo, _ := newCheckHandlerTestRouter(t)
 	src := handlerTestSource(t, "https://check.example.test", "Check")
+	src.SearchURL = src.BookSourceURL + "/search"
 	if err := sourceRepo.Save(context.Background(), src); err != nil {
 		t.Fatalf("save source: %v", err)
 	}
 
 	rec := authedRequest(router, http.MethodPost, "/api/v1/check/book-sources", `{"sourceIds":["`+src.SourceID+`"],"options":{"keyword":"斗破","checkSearch":true,"checkInfo":true,"checkToc":true,"checkContent":true}}`)
-	if rec.Code != http.StatusCreated {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	var created generated.CheckTask
@@ -847,7 +917,7 @@ func TestCheckTaskHandlersCreateGetCancelAndEvents(t *testing.T) {
 	}
 
 	var got generated.CheckTask
-	for i := 0; i < 20; i++ {
+	waitForCondition(t, "check task finished", func() bool {
 		rec = authedRequest(router, http.MethodGet, "/api/v1/check/tasks/"+created.TaskId, "")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("get status = %d body=%s", rec.Code, rec.Body.String())
@@ -855,24 +925,253 @@ func TestCheckTaskHandlersCreateGetCancelAndEvents(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatalf("decode got: %v", err)
 		}
-		if got.Status == generated.TaskStatusSucceeded || got.Status == generated.TaskStatusFailed {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return got.Status == generated.TaskStatusSucceeded || got.Status == generated.TaskStatusFailed
+	})
 	if got.Finished != 1 || len(got.Items) != 1 {
 		t.Fatalf("got = %#v", got)
 	}
 
 	rec = authedRequest(router, http.MethodGet, "/api/v1/check/tasks/"+created.TaskId+"/events", "")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "check.completed") {
-		t.Fatalf("events status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("events status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, want := range []string{"event: check.started", "event: check.item_started", "event: check.item_passed", "event: check.completed"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("events body missing %q: %s", want, rec.Body.String())
+		}
 	}
 
 	rec = authedRequest(router, http.MethodDelete, "/api/v1/check/tasks/"+created.TaskId, "")
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("cancel status = %d body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+func TestCheckTaskCreateReturnsNotFoundForUnknownSource(t *testing.T) {
+	router, _, _ := newCheckHandlerTestRouter(t)
+	rec := authedRequest(router, http.MethodPost, "/api/v1/check/book-sources", `{"sourceIds":["missing"],"options":{"keyword":"斗破","checkSearch":true}}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "source_not_found")
+}
+
+// TestCheckTaskEventsStreamPushesLiveEvents 用真实 HTTP 服务验证 SSE：先回放已产生的事件，
+// 连接保持打开（收到心跳注释），任务结束后推送终态事件并关闭连接。
+func TestCheckTaskEventsStreamPushesLiveEvents(t *testing.T) {
+	db := openHandlerTestDB(t)
+	sourceRepo := repositories.NewBookSourceRepository(db)
+	checkRepo := repositories.NewCheckRepository(db)
+	bookRepo := repositories.NewBookRepository(db)
+	chapterRepo := repositories.NewChapterRepository(db)
+	content := &blockingHandlerContent{started: make(chan struct{}), released: make(chan struct{})}
+	checker := checkapp.NewChecker(
+		&fakeAPISearcher{result: searchapp.MultiSearchResult{Items: []book.SearchBook{{BookURL: "https://book.test/1", Origin: "https://check.example.test", OriginName: "Check", Name: "斗破苍穹", Author: "天蚕土豆"}}}},
+		&fakeAPIDiscovery{},
+		&fakeCheckAPIBooks{bookRepo: bookRepo, chapterRepo: chapterRepo},
+		content,
+	)
+	events := checkapp.NewPublisher()
+	runner := checkworker.NewRunner(checkRepo, checker).WithEvents(events)
+	checkManager := checkapp.NewManager(checkRepo, sourceRepo, runner).WithEvents(events)
+	handler := NewSourceHandler(sourceapp.NewManager(sourceRepo)).WithCheck(checkManager)
+	handler.heartbeat = 20 * time.Millisecond
+	r := chi.NewRouter()
+	generated.HandlerFromMuxWithBaseURL(handler, r, "/api/v1")
+	server := httptest.NewServer(middleware.Trace(middleware.Auth("secret")(r)))
+	defer server.Close()
+
+	src := handlerTestSource(t, "https://live.example.test", "Live")
+	src.SearchURL = src.BookSourceURL + "/search"
+	if err := sourceRepo.Save(context.Background(), src); err != nil {
+		t.Fatalf("save source: %v", err)
+	}
+
+	body := `{"sourceIds":["` + src.SourceID + `"],"options":{"keyword":"斗破","checkSearch":true,"checkInfo":true,"checkToc":true,"checkContent":true}}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/check/book-sources", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST check task: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("create status = %d", resp.StatusCode)
+	}
+	var created generated.CheckTask
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+
+	select {
+	case <-content.started:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("check content stage did not start")
+	}
+
+	streamReq, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/check/tasks/"+created.TaskId+"/events", nil)
+	if err != nil {
+		t.Fatalf("new stream request: %v", err)
+	}
+	streamReq.Header.Set("Authorization", "Bearer secret")
+	stream, err := server.Client().Do(streamReq)
+	if err != nil {
+		t.Fatalf("GET events: %v", err)
+	}
+	defer stream.Body.Close()
+	if stream.StatusCode != http.StatusOK {
+		t.Fatalf("events status = %d", stream.StatusCode)
+	}
+	if got := stream.Header.Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("content-type = %q", got)
+	}
+	sse := newSSEStream(stream.Body)
+	sse.until(t, "event: check.item_started", 5*time.Second)
+	// 任务仍卡在正文阶段，连接必须保持打开并持续发送心跳。
+	sse.until(t, ": heartbeat", 5*time.Second)
+
+	close(content.released)
+	sse.until(t, "event: check.completed", 5*time.Second)
+	sse.untilEOF(t, 5*time.Second)
+}
+
+// sseStream 用单个读协程把 SSE 响应体按行送入 channel，避免并发读同一个 bufio.Reader。
+type sseStream struct {
+	lines chan string
+	errs  chan error
+}
+
+func newSSEStream(body io.Reader) *sseStream {
+	stream := &sseStream{lines: make(chan string, 128), errs: make(chan error, 1)}
+	go func() {
+		defer close(stream.lines)
+		reader := bufio.NewReader(body)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				stream.errs <- err
+				return
+			}
+			stream.lines <- line
+		}
+	}()
+	return stream
+}
+
+func (s *sseStream) until(t *testing.T, want string, timeout time.Duration) {
+	t.Helper()
+	var seen strings.Builder
+	deadline := time.After(timeout)
+	for {
+		select {
+		case line, ok := <-s.lines:
+			if !ok {
+				t.Fatalf("sse stream ended before %q: %v; seen=%s", want, <-s.errs, seen.String())
+			}
+			seen.WriteString(line)
+			if strings.Contains(line, want) {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %q; seen=%s", want, seen.String())
+		}
+	}
+}
+
+func (s *sseStream) untilEOF(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	select {
+	case err := <-s.errs:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("stream read error = %v, want EOF", err)
+		}
+	case <-time.After(timeout):
+		t.Fatalf("timed out waiting for the sse stream to close")
+	}
+}
+
+// TestDebugSessionEventsStreamPushesLiveEvents 验证调试会话的 SSE 是真实事件流：
+// 订阅后推送新事件会实时到达，终态事件到达后连接关闭；长时间无事件时靠心跳保活。
+func TestDebugSessionEventsStreamPushesLiveEvents(t *testing.T) {
+	router, debugRepo, publisher := newDebugHandlerTestRouterWithPublisher(t)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	session := &task.DebugSession{SessionID: "debug-live", SourceID: "source-1", Mode: task.DebugModeKeyword, Status: task.DebugSessionRunning, CreatedAt: time.Now().UTC()}
+	if err := debugRepo.CreateSession(context.Background(), session); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/debug/sessions/"+session.SessionID+"/events", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer secret")
+	stream, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET events: %v", err)
+	}
+	defer stream.Body.Close()
+	if stream.StatusCode != http.StatusOK {
+		t.Fatalf("events status = %d", stream.StatusCode)
+	}
+
+	sse := newSSEStream(stream.Body)
+	// 订阅后先看到心跳，说明在无事件时连接保持打开。
+	sse.until(t, ": heartbeat", 5*time.Second)
+
+	publisher.Publish(context.Background(), &task.DebugEvent{
+		SessionID: session.SessionID,
+		Type:      task.DebugEventStageFailed,
+		Stage:     "content",
+		Level:     task.DebugLevelError,
+		Message:   "content empty",
+		TraceID:   "trace-live",
+		CreatedAt: time.Now().UTC(),
+	})
+	sse.until(t, "event: debug.stage_failed", 5*time.Second)
+	sse.until(t, `"message":"content empty"`, 5*time.Second)
+	// stage 失败不是会话终态，连接必须继续打开并发送心跳。
+	sse.until(t, ": heartbeat", 5*time.Second)
+	completedAt := time.Now().UTC()
+	if _, err := debugRepo.UpdateSessionStatus(context.Background(), session.SessionID, task.DebugSessionFailed, &completedAt); err != nil {
+		t.Fatalf("UpdateSessionStatus() error = %v", err)
+	}
+	// 会话进入终态后，SSE 通过心跳周期内的状态检查收束连接，不再永久挂起。
+	sse.untilEOF(t, 5*time.Second)
+}
+
+func waitForCondition(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// blockingHandlerContent 阻塞正文抓取，让任务在“运行中”状态停留以观察 SSE 实时推送。
+type blockingHandlerContent struct {
+	once     sync.Once
+	started  chan struct{}
+	released chan struct{}
+}
+
+func (c *blockingHandlerContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
+	c.once.Do(func() { close(c.started) })
+	select {
+	case <-c.released:
+	case <-ctx.Done():
+		return contentapp.Result{}, nil, ctx.Err()
+	}
+	return contentapp.Result{Content: "正文", Chapter: book.BookChapter{Index: index}}, &book.Book{}, nil
 }
 
 func TestCheckTaskHandlersValidateAndRequireAuth(t *testing.T) {
@@ -1003,14 +1302,21 @@ func newReplaceHandlerTestRouter(t *testing.T) http.Handler {
 
 func newDebugHandlerTestRouter(t *testing.T) (http.Handler, *repositories.DebugRepository) {
 	t.Helper()
+	router, repo, _ := newDebugHandlerTestRouterWithPublisher(t)
+	return router, repo
+}
+
+func newDebugHandlerTestRouterWithPublisher(t *testing.T) (http.Handler, *repositories.DebugRepository, *debugapp.Publisher) {
+	t.Helper()
 	db := openHandlerTestDB(t)
 	manager := sourceapp.NewManager(repositories.NewBookSourceRepository(db))
 	debugRepo := repositories.NewDebugRepository(db)
 	publisher := debugapp.NewPublisher(debugRepo)
-	handler := NewSourceHandler(manager).WithDebug(debugapp.NewService(debugRepo), publisher)
+	handler := NewSourceHandler(manager).WithDebug(debugapp.NewService(debugRepo).WithPublisher(publisher), publisher)
+	handler.heartbeat = 10 * time.Millisecond
 	r := chi.NewRouter()
 	generated.HandlerFromMuxWithBaseURL(handler, r, "/api/v1")
-	return middleware.Trace(middleware.Auth("secret")(r)), debugRepo
+	return middleware.Trace(middleware.Auth("secret")(r)), debugRepo, publisher
 }
 
 func newCheckHandlerTestRouter(t *testing.T) (http.Handler, *repositories.BookSourceRepository, *repositories.CheckRepository) {
@@ -1022,9 +1328,11 @@ func newCheckHandlerTestRouter(t *testing.T) (http.Handler, *repositories.BookSo
 	checkRepo := repositories.NewCheckRepository(db)
 	manager := sourceapp.NewManager(sourceRepo)
 	checker := checkapp.NewChecker(&fakeAPISearcher{result: searchapp.MultiSearchResult{Items: []book.SearchBook{{BookURL: "https://book.test/1", Origin: "https://check.example.test", OriginName: "Check", Name: "斗破苍穹", Author: "天蚕土豆"}}}}, &fakeAPIDiscovery{}, &fakeCheckAPIBooks{bookRepo: bookRepo, chapterRepo: chapterRepo}, &fakeCheckAPIContent{})
-	runner := checkworker.NewRunner(checkRepo, checker).WithDiagnostics(checkapp.NewDiagnosticsUpdater(sourceRepo))
-	checkManager := checkapp.NewManager(checkRepo, sourceRepo, runner)
+	events := checkapp.NewPublisher()
+	runner := checkworker.NewRunner(checkRepo, checker).WithDiagnostics(checkapp.NewDiagnosticsUpdater(sourceRepo)).WithEvents(events)
+	checkManager := checkapp.NewManager(checkRepo, sourceRepo, runner).WithEvents(events)
 	handler := NewSourceHandler(manager).WithCheck(checkManager)
+	handler.heartbeat = 10 * time.Millisecond
 	r := chi.NewRouter()
 	generated.HandlerFromMuxWithBaseURL(handler, r, "/api/v1")
 	return middleware.Trace(middleware.Auth("secret")(r)), sourceRepo, checkRepo
@@ -1072,6 +1380,10 @@ func (s *fakeAPIDiscovery) Discover(ctx context.Context, input discoveryapp.Inpu
 		return discoveryapp.Result{}, s.err
 	}
 	return s.result, nil
+}
+
+func (s *fakeAPIDiscovery) Categories(ctx context.Context, sourceID string) ([]discoveryapp.Category, error) {
+	return []discoveryapp.Category{{Title: "玄幻", URL: "https://source.test/discovery"}}, nil
 }
 
 type fakeCheckAPIBooks struct {

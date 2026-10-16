@@ -73,6 +73,17 @@ func (r *CheckRepository) UpdateTaskStatus(ctx context.Context, taskID string, s
 	return task.ErrInvalidCheckTaskTransition
 }
 
+// FailInterruptedTasks 收敛重启前遗留的未完成任务；这些任务的取消句柄只存在于旧进程内存中。
+func (r *CheckRepository) FailInterruptedTasks(ctx context.Context, completedAt time.Time) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE check_tasks SET status = ?, completed_at = ? WHERE status IN (?, ?)`,
+		string(task.CheckTaskFailed), formatOptionalTime(&completedAt),
+		string(task.CheckTaskPending), string(task.CheckTaskRunning))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (r *CheckRepository) SaveItem(ctx context.Context, item *task.CheckTaskItem) error {
 	_, err := r.db.ExecContext(ctx, `
 INSERT INTO check_task_items(task_id, source_id, book_source_url, book_source_name, status, failure_code, failure_class, message, respond_time, trace_id, created_at, updated_at)

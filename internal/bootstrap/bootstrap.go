@@ -5,7 +5,9 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"path/filepath"
+	"time"
 
 	bookapp "reader/internal/app/book"
 	checkapp "reader/internal/app/check"
@@ -68,6 +70,20 @@ func Open(cfg config.Config) (*Runtime, func(), error) {
 	replaceRepo := repositories.NewReplaceRuleRepository(db)
 	debugRepo := repositories.NewDebugRepository(db)
 	checkRepo := repositories.NewCheckRepository(db)
+	// 进程内的取消句柄与调试会话运行都在重启后丢失，遗留的未完成任务/会话无法再被取消或推进，
+	// 启动时统一收敛为 failed，避免永久停在 running（Legado 由 service 生命周期管理同类状态）。
+	if count, err := checkRepo.FailInterruptedTasks(context.Background(), time.Now().UTC()); err != nil {
+		cleanup()
+		return nil, nil, err
+	} else if count > 0 {
+		slog.Info("reconciled interrupted check tasks", "count", count)
+	}
+	if count, err := debugRepo.FailInterruptedSessions(context.Background(), time.Now().UTC()); err != nil {
+		cleanup()
+		return nil, nil, err
+	} else if count > 0 {
+		slog.Info("reconciled interrupted debug sessions", "count", count)
+	}
 	imageCacheRepo := repositories.NewImageCacheRepository(db)
 	// 启动时清理过期图片缓存，防止 cache_entries 无限增长。
 	if _, err := imageCacheRepo.DeleteExpired(context.Background()); err != nil {
@@ -119,11 +135,12 @@ func Open(cfg config.Config) (*Runtime, func(), error) {
 	replaceManager := replaceapp.NewManager(replaceRepo)
 	debugPublisher := debugapp.NewPublisher(debugRepo)
 	debugFlow := debugapp.NewKeywordFlow(multiSearcher, bookService, contentApp, debugPublisher).WithDiscovery(discoveryService)
-	debugRunner := debugapp.NewRunner(debugFlow)
-	debugService := debugapp.NewService(debugRepo).WithRunner(debugRunner)
+	debugRunner := debugapp.NewRunner(debugFlow, debugRepo)
+	debugService := debugapp.NewService(debugRepo).WithRunner(debugRunner).WithPublisher(debugPublisher)
 	checker := checkapp.NewChecker(multiSearcher, discoveryService, bookService, contentApp)
-	checkRunner := checkworker.NewRunner(checkRepo, checker).WithDiagnostics(checkapp.NewDiagnosticsUpdater(repo))
-	checkManager := checkapp.NewManager(checkRepo, repo, checkRunner)
+	checkEvents := checkapp.NewPublisher()
+	checkRunner := checkworker.NewRunner(checkRepo, checker).WithDiagnostics(checkapp.NewDiagnosticsUpdater(repo)).WithEvents(checkEvents)
+	checkManager := checkapp.NewManager(checkRepo, repo, checkRunner).WithEvents(checkEvents)
 	return &Runtime{
 		Cfg:            cfg,
 		DB:             db,
