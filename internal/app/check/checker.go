@@ -3,6 +3,7 @@ package checkapp
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	contentapp "reader/internal/app/content"
@@ -22,6 +23,18 @@ const (
 	FailureDiscoveryFailed = diagnosticapp.FailureDiscoveryFailed
 	FailureTocFailed       = diagnosticapp.FailureTocFailed
 	FailureContentFailed   = diagnosticapp.FailureContentFailed
+	// FailureSearchRuleEmpty / FailureDiscoveryRuleEmpty 表示书源缺少搜索/发现规则，对齐 Legado 分组语义。
+	FailureSearchRuleEmpty    = diagnosticapp.FailureSearchRuleEmpty
+	FailureDiscoveryRuleEmpty = diagnosticapp.FailureDiscoveryRuleEmpty
+)
+
+const (
+	// DefaultCheckKeyword 是书源未配置 checkKeyWord 且调用方未指定关键字时的兜底关键字，
+	// 对齐 Legado CheckSource.keyword 默认值与 spec CheckOptions.keyword 默认值。
+	DefaultCheckKeyword = "我的"
+	// DefaultTimeout 是单本书源校验的整体超时，对齐 Legado CheckSource.timeout（180000ms）
+	// 与 spec CheckOptions.timeoutMs 默认值；整轮校验（搜索/详情/目录/正文）都受它约束。
+	DefaultTimeout = 180 * time.Second
 )
 
 type SearchService interface {
@@ -30,6 +43,8 @@ type SearchService interface {
 
 type DiscoveryService interface {
 	Discover(ctx context.Context, input discoveryapp.Input) (discoveryapp.Result, error)
+	// Categories 返回书源发现的分类列表；用于按 Legado 语义区分“发现规则为空”和“发现失效”。
+	Categories(ctx context.Context, sourceID string) ([]discoveryapp.Category, error)
 }
 
 type BookService interface {
@@ -65,14 +80,14 @@ func NewChecker(search SearchService, discovery DiscoveryService, books BookServ
 
 func (c *Checker) CheckSource(ctx context.Context, src *source.BookSource, opts Options) (*task.CheckTaskItem, error) {
 	start := time.Now()
-	if opts.Keyword == "" {
-		opts.Keyword = "我的"
+	opts.Keyword = checkKeyword(src, opts.Keyword)
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
 	}
-	if opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
-		defer cancel()
-	}
+	// Legado CheckSourceService 用 withTimeout 包住整本书源的校验过程，Reader 保持同一语义。
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	item := &task.CheckTaskItem{
 		SourceID:       src.SourceID,
 		BookSourceURL:  src.BookSourceURL,
@@ -80,6 +95,12 @@ func (c *Checker) CheckSource(ctx context.Context, src *source.BookSource, opts 
 		Status:         task.CheckItemPassed,
 	}
 	if opts.CheckSearch {
+		if strings.TrimSpace(src.SearchURL) == "" {
+			// Legado：没有搜索链接规则时不执行搜索，直接标记“搜索链接规则为空”。
+			item.Message = "searchUrl rule is empty"
+			failed, _ := c.fail(item, start, diagnosticapp.FailureDetails{Code: FailureSearchRuleEmpty, Message: item.Message})
+			return failed, nil
+		}
 		result, err := c.search.Search(ctx, searchapp.MultiSearchInput{Keyword: opts.Keyword, Page: 1, SourceIDs: []string{src.SourceID}, EnabledOnly: false, Concurrency: 1})
 		if err != nil {
 			item.Message = err.Error()
@@ -91,11 +112,23 @@ func (c *Checker) CheckSource(ctx context.Context, src *source.BookSource, opts 
 			failed, _ := c.fail(item, start, diagnosticapp.ClassifyFailure(errors.New(item.Message), FailureSearchFailed))
 			return failed, nil
 		}
-		if err := c.checkBook(ctx, result.Items[0].ToBook(), opts, start, item); err != nil {
+		if err := c.checkBook(ctx, result.Items[0].ToBook(), opts, start, item, task.CheckPathSearch); err != nil {
 			return item, err
 		}
 	}
-	if opts.CheckDiscovery && src.ExploreURL != "" {
+	if opts.CheckDiscovery && strings.TrimSpace(src.ExploreURL) != "" {
+		categories, err := c.discovery.Categories(ctx, src.SourceID)
+		if err != nil {
+			item.Message = err.Error()
+			failed, _ := c.fail(item, start, diagnosticapp.ClassifyFailure(err, FailureDiscoveryFailed))
+			return failed, err
+		}
+		if len(categories) == 0 {
+			// Legado：exploreUrl 非空却解析不出任何可用分类时标记“发现规则为空”。
+			item.Message = "exploreUrl rule is empty"
+			failed, _ := c.fail(item, start, diagnosticapp.FailureDetails{Code: FailureDiscoveryRuleEmpty, Message: item.Message})
+			return failed, nil
+		}
 		result, err := c.discovery.Discover(ctx, discoveryapp.Input{SourceIDs: []string{src.SourceID}, Page: 1})
 		if err != nil {
 			item.Message = err.Error()
@@ -108,7 +141,7 @@ func (c *Checker) CheckSource(ctx context.Context, src *source.BookSource, opts 
 			return failed, nil
 		}
 		if !opts.CheckSearch {
-			if err := c.checkBook(ctx, result.Items[0].ToBook(), opts, start, item); err != nil {
+			if err := c.checkBook(ctx, result.Items[0].ToBook(), opts, start, item, task.CheckPathDiscovery); err != nil {
 				return item, err
 			}
 		}
@@ -117,7 +150,22 @@ func (c *Checker) CheckSource(ctx context.Context, src *source.BookSource, opts 
 	return item, nil
 }
 
-func (c *Checker) checkBook(ctx context.Context, b book.Book, opts Options, start time.Time, item *task.CheckTaskItem) error {
+// checkKeyword 按 Legado BookSource.getCheckKeyword 语义选取校验关键字：
+// 书源自身的 RuleSearch.CheckKeyWord 优先，为空时才回退到调用方给出的默认关键字。
+func checkKeyword(src *source.BookSource, fallback string) string {
+	if src != nil && src.RuleSearch.Value != nil {
+		if keyword := strings.TrimSpace(src.RuleSearch.Value.CheckKeyWord); keyword != "" {
+			return keyword
+		}
+	}
+	if keyword := strings.TrimSpace(fallback); keyword != "" {
+		return keyword
+	}
+	return DefaultCheckKeyword
+}
+
+func (c *Checker) checkBook(ctx context.Context, b book.Book, opts Options, start time.Time, item *task.CheckTaskItem, path task.CheckItemPath) error {
+	item.Path = path
 	saved, err := c.books.Save(ctx, &b)
 	if err != nil {
 		item.Message = err.Error()

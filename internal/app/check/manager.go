@@ -17,10 +17,25 @@ type Manager struct {
 	repo    task.CheckRepository
 	sources source.BookSourceRepository
 	runner  Runner
+	events  *Publisher
 }
 
 func NewManager(repo task.CheckRepository, sources source.BookSourceRepository, runner Runner) *Manager {
 	return &Manager{repo: repo, sources: sources, runner: runner}
+}
+
+func (m *Manager) WithEvents(publisher *Publisher) *Manager {
+	m.events = publisher
+	return m
+}
+
+// Subscribe 返回任务事件流；事件流不存在（任务不是由本进程执行或已过保留期）时 ok 为 false，
+// 调用方需要退回按持久化状态收尾。
+func (m *Manager) Subscribe(ctx context.Context, taskID string) (<-chan *task.CheckEvent, bool) {
+	if m.events == nil {
+		return nil, false
+	}
+	return m.events.Subscribe(ctx, taskID)
 }
 
 func (m *Manager) Start(ctx context.Context, checkTask *task.CheckTask, sourceIDs []string, opts Options, concurrency int) (*task.CheckTask, error) {

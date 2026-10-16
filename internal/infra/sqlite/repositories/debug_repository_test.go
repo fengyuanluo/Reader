@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -36,8 +37,12 @@ func TestDebugRepositoryCreatesUpdatesAndFindsSession(t *testing.T) {
 	}
 
 	completedAt := createdAt.Add(time.Second)
-	if err := repo.UpdateSessionStatus(ctx, session.SessionID, task.DebugSessionSucceeded, &completedAt); err != nil {
+	applied, err := repo.UpdateSessionStatus(ctx, session.SessionID, task.DebugSessionSucceeded, &completedAt)
+	if err != nil {
 		t.Fatalf("UpdateSessionStatus() error = %v", err)
+	}
+	if !applied {
+		t.Fatalf("UpdateSessionStatus() applied = false")
 	}
 	got, err = repo.FindSession(ctx, session.SessionID)
 	if err != nil {
@@ -45,6 +50,84 @@ func TestDebugRepositoryCreatesUpdatesAndFindsSession(t *testing.T) {
 	}
 	if got.Status != task.DebugSessionSucceeded || got.CompletedAt == nil || !got.CompletedAt.Equal(completedAt) {
 		t.Fatalf("updated session = %#v", got)
+	}
+}
+
+func TestDebugRepositoryRejectsStatusUpdateOnTerminalSession(t *testing.T) {
+	repo := NewDebugRepository(openRepoTestDB(t))
+	ctx := context.Background()
+	createdAt := time.Date(2026, 5, 3, 10, 0, 0, 0, time.UTC)
+	session := &task.DebugSession{SessionID: "debug-terminal", SourceID: "source-1", Mode: task.DebugModeKeyword, Status: task.DebugSessionRunning, CreatedAt: createdAt}
+	if err := repo.CreateSession(ctx, session); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	cancelledAt := createdAt.Add(time.Second)
+	applied, err := repo.UpdateSessionStatus(ctx, session.SessionID, task.DebugSessionCancelled, &cancelledAt)
+	if err != nil || !applied {
+		t.Fatalf("cancel update applied=%v err=%v", applied, err)
+	}
+	// 已进入终态的会话不能再被并发结束路径改写状态。
+	failedAt := createdAt.Add(2 * time.Second)
+	applied, err = repo.UpdateSessionStatus(ctx, session.SessionID, task.DebugSessionFailed, &failedAt)
+	if err != nil {
+		t.Fatalf("UpdateSessionStatus(failed) error = %v", err)
+	}
+	if applied {
+		t.Fatalf("terminal session accepted a second status update")
+	}
+	got, err := repo.FindSession(ctx, session.SessionID)
+	if err != nil {
+		t.Fatalf("FindSession() error = %v", err)
+	}
+	if got.Status != task.DebugSessionCancelled || got.CompletedAt == nil || !got.CompletedAt.Equal(cancelledAt) {
+		t.Fatalf("session = %#v", got)
+	}
+}
+
+func TestDebugRepositoryUpdateSessionStatusMissingSession(t *testing.T) {
+	repo := NewDebugRepository(openRepoTestDB(t))
+	completedAt := time.Now().UTC()
+	if _, err := repo.UpdateSessionStatus(context.Background(), "missing", task.DebugSessionSucceeded, &completedAt); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDebugRepositoryFailsInterruptedSessions(t *testing.T) {
+	repo := NewDebugRepository(openRepoTestDB(t))
+	ctx := context.Background()
+	createdAt := time.Date(2026, 5, 3, 10, 0, 0, 0, time.UTC)
+	for _, session := range []*task.DebugSession{
+		{SessionID: "debug-running", SourceID: "source-1", Mode: task.DebugModeKeyword, Status: task.DebugSessionRunning, CreatedAt: createdAt},
+		{SessionID: "debug-pending", SourceID: "source-1", Mode: task.DebugModeKeyword, Status: task.DebugSessionPending, CreatedAt: createdAt},
+		{SessionID: "debug-done", SourceID: "source-1", Mode: task.DebugModeKeyword, Status: task.DebugSessionSucceeded, CreatedAt: createdAt},
+	} {
+		if err := repo.CreateSession(ctx, session); err != nil {
+			t.Fatalf("CreateSession(%s) error = %v", session.SessionID, err)
+		}
+	}
+	completedAt := createdAt.Add(time.Minute)
+	count, err := repo.FailInterruptedSessions(ctx, completedAt)
+	if err != nil {
+		t.Fatalf("FailInterruptedSessions() error = %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+	for _, sessionID := range []string{"debug-running", "debug-pending"} {
+		got, err := repo.FindSession(ctx, sessionID)
+		if err != nil {
+			t.Fatalf("FindSession(%s) error = %v", sessionID, err)
+		}
+		if got.Status != task.DebugSessionFailed || got.CompletedAt == nil {
+			t.Fatalf("interrupted session = %#v", got)
+		}
+	}
+	done, err := repo.FindSession(ctx, "debug-done")
+	if err != nil {
+		t.Fatalf("FindSession(debug-done) error = %v", err)
+	}
+	if done.Status != task.DebugSessionSucceeded {
+		t.Fatalf("terminal session was overwritten: %#v", done)
 	}
 }
 

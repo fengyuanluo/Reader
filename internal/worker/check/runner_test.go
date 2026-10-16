@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -49,7 +51,7 @@ func TestRunnerAppliesSourceDiagnostics(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	repo.waitForStatus(t, task.CheckTaskFailed)
-	if sourceRepo.sources["s1"].BookSourceGroup != "正文失效" {
+	if sourceRepo.sources["s1"].BookSourceGroup != "搜索正文失效" {
 		t.Fatalf("source = %#v", sourceRepo.sources["s1"])
 	}
 }
@@ -133,30 +135,200 @@ func TestRunnerPersistsAllItemsWithRealSQLiteRepository(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		got, err := repo.FindTask(context.Background(), checkTask.TaskID)
+	waitForCheckTaskStatus(t, repo, checkTask.TaskID, func(got *task.CheckTask) error {
+		if got.Finished != len(sources) {
+			return fmt.Errorf("finished = %d, want %d", got.Finished, len(sources))
+		}
+		if len(got.Items) != len(sources) {
+			return fmt.Errorf("items = %d, want %d", len(got.Items), len(sources))
+		}
+		return nil
+	})
+}
+
+// waitForCheckTaskStatus 轮询任务直到进入终态并通过 check 断言；deadline 统一为 5s，避免固定 sleep 预算在高负载下 flaky。
+func waitForCheckTaskStatus(t *testing.T, repo task.CheckRepository, taskID string, check func(*task.CheckTask) error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		got, err := repo.FindTask(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("FindTask() error = %v", err)
 		}
-		if got.Status == task.CheckTaskSucceeded || got.Status == task.CheckTaskFailed || got.Status == task.CheckTaskCancelled {
-			if got.Finished != len(sources) {
-				t.Fatalf("finished = %d, want %d", got.Finished, len(sources))
-			}
-			if len(got.Items) != len(sources) {
-				t.Fatalf("items = %d, want %d", len(got.Items), len(sources))
+		if task.CheckTaskTerminal(got.Status) {
+			if check != nil {
+				if err := check(got); err != nil {
+					t.Fatalf("check task = %#v: %v", got, err)
+				}
 			}
 			return
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for real sqlite runner completion")
+		lastErr = fmt.Errorf("status = %s", got.Status)
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for terminal check task: %v", lastErr)
+}
+
+func TestRunnerCancelsQueuedItemsInsteadOfFailingThem(t *testing.T) {
+	repo := newFakeCheckRepo()
+	content := &blockingRunnerContent{started: make(chan struct{}), released: make(chan struct{})}
+	checker := checkapp.NewChecker(&runnerSearch{}, &runnerDiscovery{}, &runnerBooks{}, content)
+	runner := NewRunner(repo, checker)
+	sources := []*source.BookSource{runnerSource("s1"), runnerSource("s2"), runnerSource("s3")}
+	checkTask := &task.CheckTask{TaskID: "task-queued"}
+	if err := runner.Start(context.Background(), checkTask, sources, checkapp.Options{Keyword: "斗破", CheckSearch: true, CheckInfo: true, CheckToc: true, CheckContent: true}, 1); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-content.started:
+	case <-time.After(time.Second):
+		t.Fatalf("content did not start")
+	}
+	if !runner.Cancel(checkTask.TaskID) {
+		t.Fatalf("Cancel() returned false")
+	}
+	select {
+	case <-content.released:
+	case <-time.After(time.Second):
+		t.Fatalf("content did not release")
+	}
+	repo.waitForStatus(t, task.CheckTaskCancelled)
+	got, err := repo.FindTask(context.Background(), checkTask.TaskID)
+	if err != nil {
+		t.Fatalf("FindTask() error = %v", err)
+	}
+	if got.Finished != len(sources) || len(got.Items) != len(sources) {
+		t.Fatalf("task = %#v, want every item accounted for", got)
+	}
+	for _, item := range got.Items {
+		if item.Status != task.CheckItemCancelled {
+			t.Fatalf("item %s = %#v, want cancelled (排队条目不能被记为 failed)", item.SourceID, item)
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
+func TestRunnerBoundsConcurrentChecks(t *testing.T) {
+	repo := newFakeCheckRepo()
+	content := &concurrencyTrackingContent{}
+	checker := checkapp.NewChecker(&runnerSearch{}, &runnerDiscovery{}, &runnerBooks{}, content)
+	runner := NewRunner(repo, checker)
+	sources := make([]*source.BookSource, 0, 8)
+	for i := range 8 {
+		sources = append(sources, runnerSource("s"+strconv.Itoa(i)))
+	}
+	checkTask := &task.CheckTask{TaskID: "task-bounded"}
+	if err := runner.Start(context.Background(), checkTask, sources, checkapp.Options{Keyword: "斗破", CheckSearch: true, CheckInfo: true, CheckToc: true, CheckContent: true}, 2); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	repo.waitForStatus(t, task.CheckTaskSucceeded)
+	if peak := content.peakLoad(); peak > 2 {
+		t.Fatalf("peak concurrent checks = %d, want <= 2", peak)
+	}
+}
+
+func TestRunnerPublishesCheckEvents(t *testing.T) {
+	repo := newFakeCheckRepo()
+	publisher := checkapp.NewPublisher()
+	checker := checkapp.NewChecker(&runnerSearch{}, &runnerDiscovery{}, &runnerBooks{}, &runnerContent{})
+	runner := NewRunner(repo, checker).WithEvents(publisher)
+	checkTask := &task.CheckTask{TaskID: "task-events", TraceID: "trace-events"}
+	if err := runner.Start(context.Background(), checkTask, []*source.BookSource{runnerSource("s1")}, checkapp.Options{Keyword: "斗破", CheckSearch: true, CheckInfo: true, CheckToc: true, CheckContent: true}, 1); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, ok := publisher.Subscribe(ctx, checkTask.TaskID)
+	if !ok {
+		t.Fatal("Subscribe() ok = false, want the task stream")
+	}
+	seen := map[task.CheckEventType]bool{}
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case event := <-events:
+			if event == nil {
+				t.Fatalf("event stream closed before the terminal event; seen=%v", seen)
+			}
+			if event.TraceID != "trace-events" {
+				t.Fatalf("event traceId = %q", event.TraceID)
+			}
+			seen[event.Type] = true
+			if event.Type == task.CheckEventItemPassed && event.Item == nil {
+				t.Fatalf("item event has no item payload: %#v", event)
+			}
+			if task.IsTerminalCheckEvent(event.Type) {
+				for _, want := range []task.CheckEventType{task.CheckEventStarted, task.CheckEventItemStarted, task.CheckEventItemPassed, task.CheckEventCompleted} {
+					if !seen[want] {
+						t.Fatalf("missing event %s; seen=%v", want, seen)
+					}
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for check events; seen=%v", seen)
+		}
+	}
+}
+
+func TestRunnerKeepsCancelHandleWhenDuplicateStartFails(t *testing.T) {
+	repo := repositories.NewCheckRepository(openRunnerRepoTestDB(t))
+	content := &blockingRunnerContent{started: make(chan struct{}), released: make(chan struct{})}
+	checker := checkapp.NewChecker(&runnerSearch{}, &runnerDiscovery{}, &runnerBooks{}, content)
+	runner := NewRunner(repo, checker)
+	checkTask := &task.CheckTask{TaskID: "task-duplicate"}
+	opts := checkapp.Options{Keyword: "斗破", CheckSearch: true, CheckInfo: true, CheckToc: true, CheckContent: true}
+	if err := runner.Start(context.Background(), checkTask, []*source.BookSource{runnerSource("s1")}, opts, 1); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-content.started:
+	case <-time.After(time.Second):
+		t.Fatalf("content did not start")
+	}
+	// 重复 taskId 的 Start 在注册 cancel 之前就失败，不能影响运行中任务的取消句柄。
+	if err := runner.Start(context.Background(), checkTask, []*source.BookSource{runnerSource("s1")}, opts, 1); err == nil {
+		t.Fatalf("duplicate Start() error = nil, want create task failure")
+	}
+	if !runner.Cancel(checkTask.TaskID) {
+		t.Fatalf("Cancel() returned false; the running task lost its cancel handle")
+	}
+	select {
+	case <-content.released:
+	case <-time.After(time.Second):
+		t.Fatalf("content did not release")
+	}
+}
+
+// concurrencyTrackingContent 统计同时在跑的正文抓取数量，用于验证并发上限。
+type concurrencyTrackingContent struct {
+	mu      sync.Mutex
+	current int
+	peak    int
+}
+
+func (c *concurrencyTrackingContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
+	c.mu.Lock()
+	c.current++
+	if c.current > c.peak {
+		c.peak = c.current
+	}
+	c.mu.Unlock()
+	time.Sleep(5 * time.Millisecond)
+	c.mu.Lock()
+	c.current--
+	c.mu.Unlock()
+	return contentapp.Result{Content: "正文", Chapter: book.BookChapter{Index: index}}, &book.Book{}, nil
+}
+
+func (c *concurrencyTrackingContent) peakLoad() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.peak
+}
+
 func runnerSource(id string) *source.BookSource {
-	return &source.BookSource{SourceID: id, BookSourceURL: "https://" + id + ".test", BookSourceName: id}
+	return &source.BookSource{SourceID: id, BookSourceURL: "https://" + id + ".test", BookSourceName: id, SearchURL: "https://" + id + ".test/search"}
 }
 
 type runnerSearch struct{}
@@ -169,6 +341,10 @@ type runnerDiscovery struct{}
 
 func (runnerDiscovery) Discover(ctx context.Context, input discoveryapp.Input) (discoveryapp.Result, error) {
 	return discoveryapp.Result{}, nil
+}
+
+func (runnerDiscovery) Categories(ctx context.Context, sourceID string) ([]discoveryapp.Category, error) {
+	return []discoveryapp.Category{{Title: "玄幻", URL: "https://source.test/discovery"}}, nil
 }
 
 type runnerBooks struct{}
@@ -294,6 +470,10 @@ func (r *fakeCheckRepo) ListItems(ctx context.Context, taskID string) ([]*task.C
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]*task.CheckTaskItem(nil), r.items[taskID]...), nil
+}
+
+func (r *fakeCheckRepo) FailInterruptedTasks(ctx context.Context, completedAt time.Time) (int64, error) {
+	return 0, nil
 }
 
 func (r *fakeCheckRepo) waitForStatus(t *testing.T, status task.CheckTaskStatus) {

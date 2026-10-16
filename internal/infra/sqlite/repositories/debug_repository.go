@@ -30,8 +30,40 @@ func (r *DebugRepository) FindSession(ctx context.Context, sessionID string) (*t
 	return scanDebugSession(r.db.QueryRowContext(ctx, `SELECT session_id, source_id, mode, status, coalesce(keyword, ''), coalesce(url, ''), coalesce(trace_id, ''), created_at, completed_at FROM debug_sessions WHERE session_id = ?`, sessionID))
 }
 
-func (r *DebugRepository) UpdateSessionStatus(ctx context.Context, sessionID string, status task.DebugSessionStatus, completedAt *time.Time) error {
-	return execUpdateOne(ctx, r.db, `UPDATE debug_sessions SET status = ?, completed_at = ? WHERE session_id = ?`, string(status), formatOptionalTime(completedAt), sessionID)
+// UpdateSessionStatus 只在会话未进入终态时写入终态，避免取消与自然结束并发时互相覆盖。
+func (r *DebugRepository) UpdateSessionStatus(ctx context.Context, sessionID string, status task.DebugSessionStatus, completedAt *time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE debug_sessions SET status = ?, completed_at = ? WHERE session_id = ? AND status NOT IN (?, ?, ?)`,
+		string(status), formatOptionalTime(completedAt), sessionID,
+		string(task.DebugSessionSucceeded), string(task.DebugSessionFailed), string(task.DebugSessionCancelled))
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected == 1 {
+		return true, nil
+	}
+	var exists int
+	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM debug_sessions WHERE session_id = ?`, sessionID).Scan(&exists); err != nil {
+		return false, err
+	}
+	if exists == 0 {
+		return false, ErrNotFound
+	}
+	return false, nil
+}
+
+// FailInterruptedSessions 收敛重启前遗留的未结束会话；这些会话的取消句柄只存在于旧进程内存中。
+func (r *DebugRepository) FailInterruptedSessions(ctx context.Context, completedAt time.Time) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE debug_sessions SET status = ?, completed_at = ? WHERE status IN (?, ?)`,
+		string(task.DebugSessionFailed), formatOptionalTime(&completedAt),
+		string(task.DebugSessionPending), string(task.DebugSessionRunning))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (r *DebugRepository) AppendEvent(ctx context.Context, event *task.DebugEvent) error {

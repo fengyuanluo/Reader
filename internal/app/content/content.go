@@ -45,6 +45,9 @@ type Input struct {
 	Book           book.Book
 	Chapter        book.BookChapter
 	NextChapterURL string
+	// SkipCache 为真时不写入正文缓存，对应 Legado WebBook.getContent(needSave=false)：
+	// 调试等一次性抓取不应污染真实阅读缓存。
+	SkipCache bool
 }
 
 type Result struct {
@@ -111,7 +114,7 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 			}
 			content = processed.Content
 		}
-		if s.chapters != nil {
+		if s.chapters != nil && !input.SkipCache {
 			if err := s.chapters.SaveContent(ctx, bookID, chapter.Index, content); err != nil {
 				return Result{}, err
 			}
@@ -169,7 +172,7 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 		}
 		content = processed.Content
 	}
-	if s.chapters != nil {
+	if s.chapters != nil && !input.SkipCache {
 		if err := s.chapters.SaveContent(ctx, bookID, chapter.Index, content); err != nil {
 			return Result{}, err
 		}

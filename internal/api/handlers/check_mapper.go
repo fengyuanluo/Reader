@@ -9,7 +9,7 @@ import (
 )
 
 func checkOptionsFromDTO(dto *generated.CheckOptions) checkapp.Options {
-	opts := checkapp.Options{Keyword: "我的", CheckSearch: true, CheckDiscovery: true, CheckInfo: true, CheckToc: true, CheckContent: true}
+	opts := checkapp.Options{Keyword: checkapp.DefaultCheckKeyword, Timeout: checkapp.DefaultTimeout, CheckSearch: true, CheckDiscovery: true, CheckInfo: true, CheckToc: true, CheckContent: true}
 	if dto == nil {
 		return opts
 	}
@@ -35,6 +35,23 @@ func checkOptionsFromDTO(dto *generated.CheckOptions) checkapp.Options {
 		opts.Timeout = time.Duration(*dto.TimeoutMs) * time.Millisecond
 	}
 	return opts
+}
+
+func mapCheckEvent(event *task.CheckEvent) generated.CheckEvent {
+	dto := generated.CheckEvent{
+		TaskId:  event.TaskID,
+		Type:    generated.CheckEventType(event.Type),
+		Message: event.Message,
+		TraceId: event.TraceID,
+	}
+	if event.SourceID != "" {
+		dto.SourceId = &event.SourceID
+	}
+	if event.Item != nil {
+		item := mapCheckItem(event.Item)
+		dto.Item = &item
+	}
+	return dto
 }
 
 func mapCheckTask(item *task.CheckTask) generated.CheckTask {

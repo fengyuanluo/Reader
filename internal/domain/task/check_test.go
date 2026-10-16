@@ -52,3 +52,40 @@ func TestCheckTaskPredecessors(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckTaskTerminalAndEventTypes(t *testing.T) {
+	terminal := []CheckTaskStatus{CheckTaskSucceeded, CheckTaskFailed, CheckTaskCancelled}
+	for _, status := range terminal {
+		if !CheckTaskTerminal(status) {
+			t.Fatalf("CheckTaskTerminal(%q) = false", status)
+		}
+	}
+	for _, status := range []CheckTaskStatus{CheckTaskPending, CheckTaskRunning, ""} {
+		if CheckTaskTerminal(status) {
+			t.Fatalf("CheckTaskTerminal(%q) = true", status)
+		}
+	}
+	for _, eventType := range []CheckEventType{CheckEventCompleted, CheckEventCancelled} {
+		if !IsTerminalCheckEvent(eventType) {
+			t.Fatalf("IsTerminalCheckEvent(%q) = false", eventType)
+		}
+	}
+	for _, eventType := range []CheckEventType{CheckEventStarted, CheckEventItemStarted, CheckEventItemPassed, CheckEventItemFailed, ""} {
+		if IsTerminalCheckEvent(eventType) {
+			t.Fatalf("IsTerminalCheckEvent(%q) = true", eventType)
+		}
+	}
+}
+
+func TestDebugSessionTerminal(t *testing.T) {
+	for _, status := range []DebugSessionStatus{DebugSessionSucceeded, DebugSessionFailed, DebugSessionCancelled} {
+		if !DebugSessionTerminal(status) {
+			t.Fatalf("DebugSessionTerminal(%q) = false", status)
+		}
+	}
+	for _, status := range []DebugSessionStatus{DebugSessionPending, DebugSessionRunning, ""} {
+		if DebugSessionTerminal(status) {
+			t.Fatalf("DebugSessionTerminal(%q) = true", status)
+		}
+	}
+}
