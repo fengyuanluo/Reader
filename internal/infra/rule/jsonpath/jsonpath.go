@@ -77,9 +77,59 @@ func (a *Adapter) Object(rule string) (any, error) {
 
 func normalizeRule(rule string) string {
 	if strings.HasPrefix(rule, "$.[") {
-		return "$" + strings.TrimPrefix(rule, "$.")
+		rule = "$" + strings.TrimPrefix(rule, "$.")
 	}
-	return rule
+	return normalizeSingleQuotedStrings(rule)
+}
+
+func normalizeSingleQuotedStrings(rule string) string {
+	if !strings.Contains(rule, "'") {
+		return rule
+	}
+	var out strings.Builder
+	for i := 0; i < len(rule); {
+		if rule[i] != '\'' {
+			out.WriteByte(rule[i])
+			i++
+			continue
+		}
+		i++
+		var value strings.Builder
+		closed := false
+		for i < len(rule) {
+			if rule[i] == '\'' {
+				i++
+				closed = true
+				break
+			}
+			if rule[i] == '\\' && i+1 < len(rule) {
+				next := rule[i+1]
+				switch next {
+				case '\'', '\\':
+					value.WriteByte(next)
+				case 'n':
+					value.WriteByte('\n')
+				case 'r':
+					value.WriteByte('\r')
+				case 't':
+					value.WriteByte('\t')
+				default:
+					value.WriteByte('\\')
+					value.WriteByte(next)
+				}
+				i += 2
+				continue
+			}
+			value.WriteByte(rule[i])
+			i++
+		}
+		if !closed {
+			return rule
+		}
+		encoded, _ := json.Marshal(value.String())
+		out.Write(encoded)
+	}
+	return out.String()
 }
 
 func (a *Adapter) List(rule string) ([]any, error) {
@@ -119,8 +169,8 @@ func (a *Adapter) values(rule string) ([]any, error) {
 	for _, step := range chain.Steps {
 		value, err := a.Object(step.Raw)
 		if err != nil {
-			if isScalarTraversalError(err) {
-				return nil, nil
+			if isEmptyTraversalError(err) || len(chain.Steps) > 1 {
+				continue
 			}
 			return nil, err
 		}
@@ -142,13 +192,16 @@ func (a *Adapter) values(rule string) ([]any, error) {
 	return out, nil
 }
 
-// isScalarTraversalError 判断是否为在标量（float64/string/bool/nil 等）上继续取子路径的错误。
+// isEmptyTraversalError 判断是否为在标量（float64/string/bool/nil 等）上继续取子路径，或键/下标不存在：
 // PaesslerAG/jsonpath 以 %T 输出类型名（如 float64），Legado 对这类异常容错返回空。
-func isScalarTraversalError(err error) bool {
+func isEmptyTraversalError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
+	if strings.Contains(msg, "unknown key ") || strings.Contains(msg, " out of bounds") {
+		return true
+	}
 	idx := strings.Index(msg, "unsupported value type ")
 	return idx >= 0 && strings.Contains(msg[idx:], " for select")
 }

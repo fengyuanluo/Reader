@@ -76,7 +76,7 @@ func (a *Analyzer) GetStringRaw(ctx context.Context, rule string, input any) (st
 	if strings.Contains(rule, "{$.") && !strings.Contains(rule, "{{") {
 		return a.renderJSONPathTemplate(ctx, rule, input)
 	}
-	values, err := a.evalStringSteps(ctx, rule, input)
+	values, err := a.evalStringSteps(ctx, rule, input, true)
 	if err != nil || len(values) == 0 {
 		return "", err
 	}
@@ -128,6 +128,14 @@ func (a *Analyzer) ExpandString(ctx context.Context, text string, input any) (st
 
 // GetStringList 求值规则并返回结果列表；与 Legado getStringList 一致，不做实体反转义与 URL 绝对化。
 func (a *Analyzer) GetStringList(ctx context.Context, rule string, input any) ([]string, error) {
+	return a.getStringList(ctx, rule, input, true)
+}
+
+func (a *Analyzer) GetStringListRaw(ctx context.Context, rule string, input any) ([]string, error) {
+	return a.getStringList(ctx, rule, input, false)
+}
+
+func (a *Analyzer) getStringList(ctx context.Context, rule string, input any, normalizeURLs bool) ([]string, error) {
 	if strings.TrimSpace(rule) == "" {
 		return nil, nil
 	}
@@ -139,7 +147,7 @@ func (a *Analyzer) GetStringList(ctx context.Context, rule string, input any) ([
 		if value == "" {
 			return nil, nil
 		}
-		return toStringList(value), nil
+		return stringList(value, normalizeURLs), nil
 	}
 	if strings.Contains(rule, "{$.") && !strings.Contains(rule, "{{") {
 		value, err := a.renderJSONPathTemplate(ctx, rule, input)
@@ -149,12 +157,12 @@ func (a *Analyzer) GetStringList(ctx context.Context, rule string, input any) ([
 		if value == "" {
 			return nil, nil
 		}
-		return toStringList(value), nil
+		return stringList(value, normalizeURLs), nil
 	}
-	return a.evalStringSteps(ctx, rule, input)
+	return a.evalStringSteps(ctx, rule, input, normalizeURLs)
 }
 
-func (a *Analyzer) evalStringSteps(ctx context.Context, rule string, input any) ([]string, error) {
+func (a *Analyzer) evalStringSteps(ctx context.Context, rule string, input any, normalizeURLs bool) ([]string, error) {
 	steps := splitSourceRules(rule, false)
 	var current any = input
 	for _, step := range steps {
@@ -164,7 +172,8 @@ func (a *Analyzer) evalStringSteps(ctx context.Context, rule string, input any) 
 		}
 		current = collapseScalarResult(value)
 	}
-	return toStringList(current), nil
+	values := stringList(current, normalizeURLs)
+	return values, nil
 }
 
 // htmlEntityPattern 仅匹配以分号结尾的命名/数字实体，与 Legado StringEscapeUtils.unescapeHtml4 一致，
@@ -273,16 +282,23 @@ func (a *Analyzer) evalStep(ctx context.Context, step sourceRule, input any, wan
 	default:
 		if isJSONInput(input) {
 			adapter, e := jsonpath.New(asString(input))
-			if e == nil {
-				jsonRule := normalizeJSONRule(step.rule)
-				if wantElements {
-					result, err = adapter.List(jsonRule)
-				} else {
-					result, err = adapter.Strings(jsonRule)
-				}
-				if err == nil {
-					break
-				}
+			if e != nil {
+				return nil, e
+			}
+			jsonRule := normalizeJSONRule(step.rule)
+			if wantElements {
+				result, err = adapter.List(jsonRule)
+			} else {
+				result, err = adapter.Strings(jsonRule)
+			}
+			if err == nil {
+				break
+			}
+			// 显式 JSONPath（$ 开头或 @Json: 前缀）的解析/取值错误直接上报；
+			// 形如 ".name@href" 的 CSS 规则在 JSON 输入下才被规范化为 JSONPath，
+			// 解析失败时仍回落到 CSS 适配器（与 Legado 对非 $ 规则的容错一致）。
+			if isExplicitJSONPathRule(step.rule) {
+				return nil, err
 			}
 		}
 		adapter, e := newCSSAdapter(input)
@@ -705,6 +721,16 @@ func isJSONInput(input any) bool {
 		(strings.HasPrefix(text, "[") && strings.HasSuffix(text, "]"))
 }
 
+// isExplicitJSONPathRule 判断规则是否显式声明为 JSONPath（$ 开头或 @Json: 前缀）；
+// 这类规则的解析/取值错误应当上报，而不是回落到 CSS 适配器。
+func isExplicitJSONPathRule(rule string) bool {
+	trimmed := strings.TrimSpace(rule)
+	if strings.HasPrefix(trimmed, "@Json:") {
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "@Json:"))
+	}
+	return strings.HasPrefix(trimmed, "$")
+}
+
 func normalizeJSONRule(rule string) string {
 	rule = strings.TrimSpace(strings.TrimPrefix(rule, "@Json:"))
 	if rule == "" || strings.HasPrefix(rule, "$") || strings.HasPrefix(rule, "@") {
@@ -923,6 +949,10 @@ func collapseScalarResult(input any) any {
 }
 
 func toStringList(input any) []string {
+	return stringList(input, true)
+}
+
+func stringList(input any, normalizeCustomURL bool) []string {
 	switch value := input.(type) {
 	case nil:
 		return nil
@@ -933,8 +963,10 @@ func toStringList(input any) []string {
 		if trimmed == "" {
 			return nil
 		}
-		if parsed := urlrule.ParseCustom(trimmed); len(parsed.Attribute) > 0 {
-			return []string{parsed.String()}
+		if normalizeCustomURL {
+			if parsed := urlrule.ParseCustom(trimmed); len(parsed.Attribute) > 0 {
+				return []string{parsed.String()}
+			}
 		}
 		return strings.Split(value, "\n")
 	case []any:

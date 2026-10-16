@@ -222,7 +222,7 @@ func TestDiscoverAppliesLoginCheckJS(t *testing.T) {
 		BookSourceName: "S1",
 		ExploreURL:     "玄幻::/list?page={page}",
 		EnabledExplore: true,
-		LoginCheckJS:   `result.replace("old", "")`,
+		LoginCheckJS:   `result.body.replace("old", "")`,
 		RuleExplore: rule.Flexible[rule.ExploreRule]{Value: &rule.ExploreRule{
 			BookList: ".item",
 			Name:     ".name@text",

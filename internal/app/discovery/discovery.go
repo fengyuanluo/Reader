@@ -17,6 +17,7 @@ import (
 	"reader/internal/domain/rule"
 	"reader/internal/domain/source"
 	"reader/internal/infra/ratelimit"
+	"reader/internal/infra/requestoption"
 	ruleinfra "reader/internal/infra/rule"
 	urlrule "reader/internal/infra/rule/url"
 	"reader/internal/infra/script"
@@ -67,7 +68,8 @@ func NewService(repo source.BookSourceRepository, fetcher fetch.Fetcher, scriptR
 	return &Service{repo: repo, fetcher: fetcher, script: scriptRuntime, cache: newCategoryCache(defaultCategoryCacheTTL, defaultCategoryCacheMaxItems)}
 }
 
-// WithLimiter 注入限流器：多源发现并发度缺省取其全局并发上限，单源请求在抓取入口按源限流。
+// WithLimiter 注入全局与单源并发上限；按源 concurrentRate 的限速由 fetcher（fetch.Request.SourceKey/
+// ConcurrentRate）负责，这里不再重复限速。多源发现并发度缺省取其全局并发上限。
 func (s *Service) WithLimiter(limiter *ratelimit.Limiter) *Service {
 	s.limiter = limiter
 	return s
@@ -202,16 +204,26 @@ func (s *Service) discoverSource(ctx context.Context, src *source.BookSource, in
 		}
 	}
 	discoveryURL = buildPageURL(discoveryURL, input.Page)
-	discoveryURL = urlrule.Absolute(src.BookSourceURL, discoveryURL)
-	req := fetch.Request{URL: discoveryURL, UseCookieJar: src.EnabledCookieJar}
 	headers, err := sourceapp.NewScriptIntegration(s.script).HeaderMap(ctx, src)
 	if err != nil {
 		return nil, err
 	}
-	req.Headers = headers
-	sourceapp.ApplyNetworkOptions(&req, nil)
-	resp, err := ratelimit.Do(ctx, s.limiter, src.BookSourceURL, src.ConcurrentRate, func(ctx context.Context) (*fetch.Response, error) {
-		return s.fetcher.Fetch(ctx, req)
+	evaluator := sourceapp.RequestEvaluator(s.script, src, script.Bindings{
+		"page": input.Page, "baseUrl": src.BookSourceURL,
+	})
+	req, err := requestoption.Build(ctx, discoveryURL, src.BookSourceURL, fetch.Request{
+		Headers:        headers,
+		UseCookieJar:   src.EnabledCookieJar,
+		SourceKey:      src.BookSourceURL,
+		ConcurrentRate: src.ConcurrentRate,
+	}, evaluator)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := ratelimit.Do(ctx, s.limiter, src.BookSourceURL, func(ctx context.Context) (*fetch.Response, error) {
+		return requestoption.Fetch(ctx, s.fetcher, req, sourceapp.RequestEvaluator(s.script, src, script.Bindings{
+			"page": input.Page, "baseUrl": req.URL,
+		}))
 	})
 	if err != nil {
 		return nil, err

@@ -104,6 +104,37 @@ func mapCheckItem(item *task.CheckTaskItem) generated.CheckTaskItem {
 	if item.RespondTime != 0 {
 		dto.RespondTime = &item.RespondTime
 	}
+	if item.KeywordUsed != "" {
+		dto.KeywordUsed = &item.KeywordUsed
+	}
+	if item.TimeoutMS != 0 {
+		dto.TimeoutMs = &item.TimeoutMS
+	}
+	if len(item.Stages) > 0 {
+		stages := make([]generated.CheckStageResult, 0, len(item.Stages))
+		for _, stage := range item.Stages {
+			mapped := generated.CheckStageResult{
+				Flow:   generated.CheckStageFlow(stage.Flow),
+				Stage:  generated.CheckStageName(stage.Stage),
+				Status: generated.CheckTaskItemStatus(stage.Status),
+			}
+			if stage.FailureCode != "" {
+				code := generated.CheckFailureCode(stage.FailureCode)
+				mapped.FailureCode = &code
+			}
+			if stage.FailureClass != "" {
+				mapped.FailureClass = &stage.FailureClass
+			}
+			if stage.Message != "" {
+				mapped.Message = &stage.Message
+			}
+			if stage.ElapsedMS != 0 {
+				mapped.ElapsedMs = &stage.ElapsedMS
+			}
+			stages = append(stages, mapped)
+		}
+		dto.Stages = &stages
+	}
 	if item.TraceID != "" {
 		dto.TraceId = &item.TraceID
 	}

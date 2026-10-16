@@ -34,6 +34,12 @@ func bookSourceFromDTO(dto generated.BookSource, raw json.RawMessage) (*source.B
 		RuleToc:          flexibleFromRuleObject[rule.TocRule](dto.RuleToc),
 		RuleContent:      flexibleFromRuleObject[rule.ContentRule](dto.RuleContent),
 	}
+	if dto.EventListener != nil {
+		src.EventListener = *dto.EventListener
+	}
+	if dto.CustomButton != nil {
+		src.CustomButton = *dto.CustomButton
+	}
 	src.BookSourceGroup = stringValue(dto.BookSourceGroup)
 	src.BookURLPattern = stringValue(dto.BookUrlPattern)
 	src.ConcurrentRate = stringValue(dto.ConcurrentRate)
@@ -63,10 +69,11 @@ func bookSourceFromDTO(dto generated.BookSource, raw json.RawMessage) (*source.B
 	src.RawJSON = append(json.RawMessage(nil), raw...)
 	// DTO 无法区分“未提供”与“显式 false”，缺省的 enabled/enabledExplore/enabledCookieJar/respondTime
 	// 按 Legado BookSource 默认值补齐，与导入路径保持一致。
-	if err := src.ApplyLegadoDefaults(raw); err != nil {
+	if err := src.Normalize(); err != nil {
 		return nil, err
 	}
-	if err := src.Normalize(); err != nil {
+	// Normalize 之后再按请求体原文回填 enabled/respondTime 等显式字段（含 0/false）。
+	if err := src.ApplyLegadoDefaults(raw); err != nil {
 		return nil, err
 	}
 	return src, nil
@@ -136,6 +143,8 @@ func mapBookSource(src *source.BookSource) generated.BookSource {
 		Enabled:          src.Enabled,
 		EnabledExplore:   src.EnabledExplore,
 		EnabledCookieJar: src.EnabledCookieJar,
+		EventListener:    boolPtr(src.EventListener),
+		CustomButton:     boolPtr(src.CustomButton),
 		LastUpdateTime:   src.LastUpdateTime,
 		RuleExplore:      ruleObjectFromFlexible(src.RuleExplore),
 		RuleSearch:       ruleObjectFromFlexible(src.RuleSearch),

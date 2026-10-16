@@ -9,6 +9,7 @@ import (
 
 	"reader/internal/domain/fetch"
 	domainsource "reader/internal/domain/source"
+	"reader/internal/infra/requestoption"
 	urlrule "reader/internal/infra/rule/url"
 	"reader/internal/infra/script"
 )
@@ -39,7 +40,7 @@ func (s *ScriptIntegration) HeaderMapWithBindings(ctx context.Context, src *doma
 		}
 	}
 	if header == "" {
-		return loginHeaders, nil
+		return finalizeHeaderMap(loginHeaders)
 	}
 	bindings := sourceScriptBindings(src)
 	for key, value := range extra {
@@ -60,7 +61,7 @@ func (s *ScriptIntegration) HeaderMapWithBindings(ctx context.Context, src *doma
 		for key, value := range loginHeaders {
 			headers[key] = value
 		}
-		return headers, nil
+		return finalizeHeaderMap(headers)
 	}
 	if strings.HasPrefix(strings.ToLower(header), "<js>") && strings.HasSuffix(strings.ToLower(header), "</js>") {
 		if s.runtime == nil {
@@ -77,7 +78,7 @@ func (s *ScriptIntegration) HeaderMapWithBindings(ctx context.Context, src *doma
 		for key, value := range loginHeaders {
 			headers[key] = value
 		}
-		return headers, nil
+		return finalizeHeaderMap(headers)
 	}
 	headers, err := parseHeaderJSON(header)
 	if err != nil {
@@ -85,6 +86,13 @@ func (s *ScriptIntegration) HeaderMapWithBindings(ctx context.Context, src *doma
 	}
 	for key, value := range loginHeaders {
 		headers[key] = value
+	}
+	return finalizeHeaderMap(headers)
+}
+
+func finalizeHeaderMap(headers map[string]string) (map[string]string, error) {
+	if err := requestoption.SanitizeSourceHeaders(headers); err != nil {
+		return nil, err
 	}
 	return headers, nil
 }
@@ -96,8 +104,11 @@ func (s *ScriptIntegration) LoginCheck(ctx context.Context, src *domainsource.Bo
 		return resp, nil
 	}
 	value, err := s.runtime.EvalWithBindings(ctx, checkJS, script.Bindings{
-		"source": src,
-		"result": string(resp.Body),
+		"source":     s.runtime.SourceBindings(ctx, src),
+		"__source":   src,
+		"baseUrl":    sourceBaseURL(src),
+		"result":     resp,
+		"__response": resp,
 		"response": map[string]any{
 			"statusCode": resp.StatusCode,
 			"body":       string(resp.Body),

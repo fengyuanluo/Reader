@@ -3,6 +3,7 @@ package diagnosticapp
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 
 	bookapp "reader/internal/app/book"
@@ -10,12 +11,15 @@ import (
 	"reader/internal/domain/fetch"
 )
 
+var upstreamHTTPStatusPattern = regexp.MustCompile(`(?i)unexpected status:\s*([1-5][0-9]{2})`)
+
 const (
 	FailureTimeout         = "timeout"
 	FailureJSFailed        = "js_failed"
 	FailureWebsiteFailed   = "website_failed"
 	FailureSearchFailed    = "search_failed"
 	FailureDiscoveryFailed = "discovery_failed"
+	FailureInfoFailed      = "info_failed"
 	FailureTocFailed       = "toc_failed"
 	FailureContentFailed   = "content_failed"
 	// FailureSearchRuleEmpty / FailureDiscoveryRuleEmpty 对齐 Legado CheckSourceService 的
@@ -32,6 +36,7 @@ const (
 	FailureClassNetworkTLSInvalid          = "network_tls_invalid"
 	FailureClassNetworkTimeout             = "network_timeout"
 	FailureClassNetworkConnectionReset     = "network_connection_reset"
+	FailureClassNetworkTransient           = "network_transient"
 	FailureClassSourceUpstreamHTTP400      = "source_upstream_http_400"
 	FailureClassSourceUpstreamHTTP401      = "source_upstream_http_401"
 	FailureClassSourceUpstreamHTTP403      = "source_upstream_http_403"
@@ -46,6 +51,10 @@ const (
 	FailureClassSourceDiscoveryEmptyResult = "source_discovery_empty_result"
 	FailureClassSourceTocEmpty             = "source_toc_empty"
 	FailureClassSourceContentEmpty         = "source_content_empty"
+	FailureClassSourceDownloadURLsEmpty    = "source_download_urls_empty"
+	FailureClassUnsupportedRuntimeAPI      = "unsupported_runtime_api"
+	FailureClassUnsupportedBrowser         = "unsupported_browser_capability"
+	FailureClassReaderInternal             = "reader_internal"
 )
 
 type FailureDetails struct {
@@ -155,7 +164,8 @@ func ClassifyFailureClassFromMessage(message string, lower string, code string) 
 		strings.Contains(lower, "x509:") ||
 		strings.Contains(lower, "tls handshake timeout"):
 		return FailureClassNetworkTLSInvalid
-	case strings.Contains(lower, "context deadline exceeded") || strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "client.timeout exceeded while awaiting headers"):
+	case strings.Contains(lower, "context deadline exceeded") || strings.Contains(lower, "i/o timeout") ||
+		strings.Contains(lower, "client.timeout exceeded while awaiting headers"):
 		return FailureClassNetworkTimeout
 	// network_connection_reset covers connection-level transport failures:
 	// RST, refused ports, and connections closed before a complete response.
@@ -163,36 +173,38 @@ func ClassifyFailureClassFromMessage(message string, lower string, code string) 
 		strings.Contains(lower, "connection refused") ||
 		isConnectionEOFMessage(lower):
 		return FailureClassNetworkConnectionReset
-	case strings.Contains(lower, "unexpected status: 400"):
-		return FailureClassSourceUpstreamHTTP400
-	case strings.Contains(lower, "unexpected status: 401"):
-		return FailureClassSourceUpstreamHTTP401
-	case strings.Contains(lower, "unexpected status: 403"):
-		return FailureClassSourceUpstreamHTTP403
-	case strings.Contains(lower, "unexpected status: 404"):
-		return FailureClassSourceUpstreamHTTP404
-	case strings.Contains(lower, "unexpected status: 500"):
-		return FailureClassSourceUpstreamHTTP500
+	// network_transient 兜住其余瞬态传输失败（远端新增分类）：裸 EOF 由上面的 connection_reset 口径覆盖。
+	case strings.Contains(lower, "connection closed"):
+		return FailureClassNetworkTransient
+	case upstreamHTTPFailureClass(lower) != "":
+		return upstreamHTTPFailureClass(lower)
 	case strings.Contains(lower, "unexpected end of json input"):
 		return FailureClassSourceUpstreamEmptyJSON
 	case strings.Contains(lower, "invalid character") && strings.Contains(lower, "looking for beginning of value at parse"):
 		return FailureClassSourceUpstreamNonJSON
+	case strings.Contains(lower, "startbrowser") || strings.Contains(lower, "webview") || strings.Contains(lower, "unsupported browser flow"):
+		return FailureClassUnsupportedBrowser
+	case strings.Contains(lower, "org is not defined") || strings.Contains(lower, "unsupported runtime api") ||
+		strings.Contains(lower, "object has no member") || strings.Contains(lower, "referenceerror: org"):
+		return FailureClassUnsupportedRuntimeAPI
+	case strings.Contains(lower, "empty download urls"):
+		return FailureClassSourceDownloadURLsEmpty
+	// 规则脚本失败优先于“空结果”文案：带 warnings 的空结果若根因是脚本，归类为脚本失败。
 	case strings.Contains(lower, "script_failed:") && strings.Contains(lower, "syntaxerror"):
 		return FailureClassSourceRuleScriptSyntax
 	case strings.Contains(lower, "script_failed:"):
 		return FailureClassSourceRuleScriptFailed
+	case strings.HasPrefix(lower, "empty search result"):
+		return FailureClassSourceSearchEmptyResult
+	case strings.HasPrefix(lower, "empty discovery result"):
+		return FailureClassSourceDiscoveryEmptyResult
+	case lower == "empty toc" || lower == "toc_empty":
+		return FailureClassSourceTocEmpty
+	case lower == "empty content" || lower == "content_empty":
+		return FailureClassSourceContentEmpty
 	case strings.Contains(lower, "unsupported url option") ||
-		strings.Contains(lower, "unsupported browser flow") ||
 		strings.Contains(lower, "unsupported_rule_feature"):
 		return FailureClassSourceUnsupportedRule
-	case code == FailureSearchFailed:
-		return FailureClassSourceSearchEmptyResult
-	case code == FailureDiscoveryFailed:
-		return FailureClassSourceDiscoveryEmptyResult
-	case code == FailureTocFailed:
-		return FailureClassSourceTocEmpty
-	case code == FailureContentFailed:
-		return FailureClassSourceContentEmpty
 	case code == FailureJSFailed:
 		return FailureClassSourceRuleScriptFailed
 	default:
@@ -209,4 +221,12 @@ func isConnectionEOFMessage(lower string) bool {
 	return lower == "eof" ||
 		strings.HasSuffix(lower, ": eof") ||
 		strings.Contains(lower, "unexpected eof")
+}
+
+func upstreamHTTPFailureClass(message string) string {
+	match := upstreamHTTPStatusPattern.FindStringSubmatch(message)
+	if len(match) != 2 {
+		return ""
+	}
+	return "source_upstream_http_" + match[1]
 }

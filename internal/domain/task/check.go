@@ -67,6 +67,33 @@ type CheckEvent struct {
 	CreatedAt time.Time
 }
 
+type CheckStageFlow string
+
+const (
+	CheckFlowSearch    CheckStageFlow = "search"
+	CheckFlowDiscovery CheckStageFlow = "discovery"
+)
+
+type CheckStageName string
+
+const (
+	CheckStageSearch    CheckStageName = "search"
+	CheckStageDiscovery CheckStageName = "discovery"
+	CheckStageInfo      CheckStageName = "info"
+	CheckStageToc       CheckStageName = "toc"
+	CheckStageContent   CheckStageName = "content"
+)
+
+type CheckStageResult struct {
+	Flow         CheckStageFlow      `json:"flow"`
+	Stage        CheckStageName      `json:"stage"`
+	Status       CheckTaskItemStatus `json:"status"`
+	FailureCode  string              `json:"failureCode,omitempty"`
+	FailureClass string              `json:"failureClass,omitempty"`
+	Message      string              `json:"message,omitempty"`
+	ElapsedMS    int64               `json:"elapsedMs,omitempty"`
+}
+
 type CheckTask struct {
 	TaskID      string
 	Status      CheckTaskStatus
@@ -89,6 +116,9 @@ type CheckTaskItem struct {
 	Message        string
 	Path           CheckItemPath
 	RespondTime    int64
+	KeywordUsed    string
+	TimeoutMS      int64
+	Stages         []CheckStageResult
 	TraceID        string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -138,6 +168,7 @@ type CheckRepository interface {
 	CreateTask(ctx context.Context, task *CheckTask) error
 	FindTask(ctx context.Context, taskID string) (*CheckTask, error)
 	UpdateTaskStatus(ctx context.Context, taskID string, status CheckTaskStatus, finished int, completedAt *time.Time) error
+	UpdateTaskProgress(ctx context.Context, taskID string, finished int) error
 	SaveItem(ctx context.Context, item *CheckTaskItem) error
 	ListItems(ctx context.Context, taskID string) ([]*CheckTaskItem, error)
 	// FailInterruptedTasks 把进程重启后遗留的未完成任务收敛为 failed，返回受影响行数。

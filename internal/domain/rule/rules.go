@@ -63,6 +63,7 @@ type TocRule struct {
 
 type ContentRule struct {
 	Content        string `json:"content,omitempty"`
+	SubContent     string `json:"subContent,omitempty"`
 	Title          string `json:"title,omitempty"`
 	NextContentURL string `json:"nextContentUrl,omitempty"`
 	WebJS          string `json:"webJs,omitempty"`
@@ -71,6 +72,7 @@ type ContentRule struct {
 	ImageStyle     string `json:"imageStyle,omitempty"`
 	ImageDecode    string `json:"imageDecode,omitempty"`
 	PayAction      string `json:"payAction,omitempty"`
+	CallBackJS     string `json:"callBackJs,omitempty"`
 }
 
 type Flexible[T any] struct {

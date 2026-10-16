@@ -45,6 +45,108 @@ func TestCheckerClassifiesEmptySearch(t *testing.T) {
 	}
 }
 
+func TestCheckerPreservesSearchWarning(t *testing.T) {
+	checker := newTestChecker()
+	checker.search.result = searchapp.MultiSearchResult{Warnings: []searchapp.SourceWarning{{Code: "search_failed", Message: "unexpected status: 403"}}}
+	item, err := checker.CheckSource(context.Background(), testCheckSource(), defaultCheckOptions())
+	if err == nil {
+		t.Fatal("expected search warning error")
+	}
+	if item.Message != "unexpected status: 403" || item.FailureClass != diagnosticapp.FailureClassSourceUpstreamHTTP403 {
+		t.Fatalf("item = %#v", item)
+	}
+}
+
+func TestCheckerUsesSourceCheckKeyword(t *testing.T) {
+	checker := newTestChecker()
+	src := testCheckSource()
+	src.RuleSearch.Value = &rule.SearchRule{CheckKeyWord: "源关键词"}
+	item, err := checker.CheckSource(context.Background(), src, defaultCheckOptions())
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if checker.search.input.Keyword != "源关键词" || item.KeywordUsed != "源关键词" {
+		t.Fatalf("input = %#v, item = %#v", checker.search.input, item)
+	}
+}
+
+func TestCheckerIgnoresInvalidSourceCheckKeyword(t *testing.T) {
+	checker := newTestChecker()
+	src := testCheckSource()
+	src.RuleSearch.Value = &rule.SearchRule{CheckKeyWord: "https://example.test/query"}
+	item, err := checker.CheckSource(context.Background(), src, defaultCheckOptions())
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if checker.search.input.Keyword != "斗破" || item.KeywordUsed != "斗破" {
+		t.Fatalf("input = %#v, item = %#v", checker.search.input, item)
+	}
+}
+
+func TestCheckerFileSourceRequiresDownloadURLsAndSkipsTocContent(t *testing.T) {
+	checker := newTestChecker()
+	src := testCheckSource()
+	src.BookSourceType = fileSourceType
+	src.SearchURL = "/search"
+	checker.books.infoBook = book.Book{
+		BookURL:      "https://book.test/1",
+		DownloadURLs: []string{"https://files.test/book.txt"},
+	}
+
+	item, err := checker.CheckSource(context.Background(), src, defaultCheckOptions())
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.Status != task.CheckItemPassed || checker.books.tocCalls != 0 || checker.content.calls != 0 {
+		t.Fatalf("item=%#v tocCalls=%d contentCalls=%d", item, checker.books.tocCalls, checker.content.calls)
+	}
+	if stageStatus(item.Stages, task.CheckFlowSearch, task.CheckStageToc) != task.CheckItemSkipped || stageStatus(item.Stages, task.CheckFlowSearch, task.CheckStageContent) != task.CheckItemSkipped {
+		t.Fatalf("stages = %#v", item.Stages)
+	}
+}
+
+func TestCheckerFileSourceFailsWhenDownloadURLsAreEmpty(t *testing.T) {
+	checker := newTestChecker()
+	src := testCheckSource()
+	src.BookSourceType = fileSourceType
+	src.SearchURL = "/search"
+	item, err := checker.CheckSource(context.Background(), src, defaultCheckOptions())
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.Status != task.CheckItemFailed || item.FailureClass != diagnosticapp.FailureClassSourceDownloadURLsEmpty {
+		t.Fatalf("item = %#v", item)
+	}
+}
+
+func TestCheckerFileSourceWithoutSearchIsSkipped(t *testing.T) {
+	checker := newTestChecker()
+	src := testCheckSource()
+	src.BookSourceType = fileSourceType
+	src.SearchURL = ""
+	src.ExploreURL = ""
+	item, err := checker.CheckSource(context.Background(), src, defaultCheckOptions())
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.Status != task.CheckItemSkipped || checker.search.calls != 0 {
+		t.Fatalf("item=%#v searchCalls=%d", item, checker.search.calls)
+	}
+}
+
+func TestCheckerChecksSearchAndDiscoveryBookChainsIndependently(t *testing.T) {
+	checker := newTestChecker()
+	opts := defaultCheckOptions()
+	opts.CheckDiscovery = true
+	item, err := checker.CheckSource(context.Background(), testCheckSource(), opts)
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.Status != task.CheckItemPassed || checker.books.infoCalls != 2 || checker.books.tocCalls != 2 || checker.content.calls != 2 {
+		t.Fatalf("item=%#v info=%d toc=%d content=%d", item, checker.books.infoCalls, checker.books.tocCalls, checker.content.calls)
+	}
+}
+
 func TestCheckerClassifiesEmptyToc(t *testing.T) {
 	checker := newTestChecker()
 	checker.books.chapters = nil
@@ -111,6 +213,8 @@ func TestCheckerFallsBackToRequestedKeywordAndDefault(t *testing.T) {
 	}
 }
 
+// TestCheckerAppliesDefaultTimeout 同时校验两侧口径：默认超时必须进入上下文 deadline（我方回归），
+// 也必须落在条目的 timeoutMs 上（远端阶段化新增字段）。
 func TestCheckerAppliesDefaultTimeout(t *testing.T) {
 	search := &deadlineCheckSearch{}
 	checker := NewChecker(search, &fakeCheckDiscovery{}, &fakeCheckBooks{}, &fakeCheckContent{})
@@ -125,6 +229,14 @@ func TestCheckerAppliesDefaultTimeout(t *testing.T) {
 	remaining := time.Until(search.deadline)
 	if remaining < DefaultTimeout-10*time.Second || remaining > DefaultTimeout {
 		t.Fatalf("deadline remaining = %v, want about %v", remaining, DefaultTimeout)
+	}
+
+	item, err := newTestChecker().CheckSource(context.Background(), testCheckSource(), opts)
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.TimeoutMS != DefaultTimeout.Milliseconds() {
+		t.Fatalf("timeoutMs = %d", item.TimeoutMS)
 	}
 }
 
@@ -296,7 +408,7 @@ func TestCheckerUsesStageSpecificFailureCodeForUnsupportedSearchOption(t *testin
 	if item.FailureCode != FailureSearchFailed {
 		t.Fatalf("failureCode = %q, want %q", item.FailureCode, FailureSearchFailed)
 	}
-	if item.FailureClass != diagnosticapp.FailureClassSourceUnsupportedRule {
+	if item.FailureClass != diagnosticapp.FailureClassUnsupportedBrowser {
 		t.Fatalf("failureClass = %q", item.FailureClass)
 	}
 }
@@ -359,10 +471,12 @@ type fakeCheckSearch struct {
 	result searchapp.MultiSearchResult
 	err    error
 	input  searchapp.MultiSearchInput
+	calls  int
 }
 
 func (s *fakeCheckSearch) Search(ctx context.Context, input searchapp.MultiSearchInput) (searchapp.MultiSearchResult, error) {
 	s.input = input
+	s.calls++
 	if s.err != nil {
 		return searchapp.MultiSearchResult{}, s.err
 	}
@@ -393,10 +507,13 @@ func (d *fakeCheckDiscovery) Categories(ctx context.Context, sourceID string) ([
 }
 
 type fakeCheckBooks struct {
-	chapters []*book.BookChapter
-	saveErr  error
-	infoErr  error
-	tocErr   error
+	chapters  []*book.BookChapter
+	infoBook  book.Book
+	saveErr   error
+	infoErr   error
+	tocErr    error
+	infoCalls int
+	tocCalls  int
 }
 
 func (b *fakeCheckBooks) Save(ctx context.Context, item *book.Book) (*book.Book, error) {
@@ -407,17 +524,33 @@ func (b *fakeCheckBooks) Save(ctx context.Context, item *book.Book) (*book.Book,
 }
 
 func (b *fakeCheckBooks) RefreshInfo(ctx context.Context, id string) (book.Book, error) {
-	return book.Book{BookURL: "https://book.test/1", Name: "斗破苍穹", Author: "天蚕土豆"}, b.infoErr
+	b.infoCalls++
+	if b.infoBook.BookURL == "" {
+		b.infoBook = book.Book{BookURL: "https://book.test/1", Name: "斗破苍穹", Author: "天蚕土豆"}
+	}
+	return b.infoBook, b.infoErr
 }
 
 func (b *fakeCheckBooks) RefreshToc(ctx context.Context, id string) ([]*book.BookChapter, *book.Book, error) {
+	b.tocCalls++
 	return b.chapters, &book.Book{BookURL: "https://book.test/1", Name: "斗破苍穹", Author: "天蚕土豆"}, b.tocErr
 }
 
 type fakeCheckContent struct {
-	err error
+	err   error
+	calls int
 }
 
 func (c *fakeCheckContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
+	c.calls++
 	return contentapp.Result{Content: "正文", Chapter: book.BookChapter{Index: index}}, &book.Book{}, c.err
+}
+
+func stageStatus(stages []task.CheckStageResult, flow task.CheckStageFlow, stage task.CheckStageName) task.CheckTaskItemStatus {
+	for _, value := range stages {
+		if value.Flow == flow && value.Stage == stage {
+			return value.Status
+		}
+	}
+	return ""
 }

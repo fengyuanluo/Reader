@@ -9,6 +9,9 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,8 +128,12 @@ func (h *SourceHandler) WithDebug(service *debugapp.Service, publisher *debugapp
 	return h
 }
 
-func (h *SourceHandler) WithCheck(check *checkapp.Manager) *SourceHandler {
+func (h *SourceHandler) WithCheck(check *checkapp.Manager, concurrency ...int) *SourceHandler {
 	h.check = check
+	h.checkConcurrency = 1
+	if len(concurrency) > 0 && concurrency[0] > 0 {
+		h.checkConcurrency = concurrency[0]
+	}
 	return h
 }
 
@@ -407,6 +414,75 @@ func (h *SourceHandler) GetBookChapterContent(w http.ResponseWriter, r *http.Req
 		Chapter: &chapter,
 		Book:    mapBookPtr(b),
 	})
+}
+
+func (h *SourceHandler) ExportBookTxt(w http.ResponseWriter, r *http.Request, bookId string) {
+	if h.books == nil || h.content == nil {
+		writeNotConfigured(w, r, "book or content service is not configured")
+		return
+	}
+	b, err := h.books.Get(r.Context(), bookId)
+	if err != nil {
+		writeBookError(w, r, err)
+		return
+	}
+	tmp, err := os.CreateTemp("", "reader-export-*.txt")
+	if err != nil {
+		writeBookError(w, r, err)
+		return
+	}
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}()
+	stats, err := h.content.ExportTXT(r.Context(), bookId, tmp)
+	if err != nil {
+		writeBookError(w, r, err)
+		return
+	}
+	if err := tmp.Sync(); err != nil {
+		writeBookError(w, r, err)
+		return
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		writeBookError(w, r, err)
+		return
+	}
+	filename := exportFilename(b.Name)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", exportContentDisposition(filename))
+	w.Header().Set("Content-Length", strconv.FormatInt(stats.Bytes, 10))
+	http.ServeContent(w, r, filename, time.Time{}, tmp)
+}
+
+func exportFilename(name string) string {
+	name = strings.TrimSpace(name)
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r < 0x20 || strings.ContainsRune(`\\/:*?"<>|`, r):
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	name = strings.TrimSpace(b.String())
+	if name == "" {
+		name = "book"
+	}
+	return name + ".txt"
+}
+
+func exportContentDisposition(filename string) string {
+	var fallback strings.Builder
+	for _, r := range filename {
+		if r >= 0x20 && r <= 0x7e && r != '"' && r != '\\' {
+			fallback.WriteRune(r)
+		} else {
+			fallback.WriteByte('_')
+		}
+	}
+	return `attachment; filename="` + fallback.String() + `"; filename*=UTF-8''` + url.PathEscape(filename)
 }
 
 func (h *SourceHandler) ProxyImage(w http.ResponseWriter, r *http.Request, params generated.ProxyImageParams) {
@@ -792,6 +868,10 @@ func writeBookError(w http.ResponseWriter, r *http.Request, err error) {
 		middleware.WriteError(w, r, http.StatusInternalServerError, "content_empty", "content is empty", nil)
 	case errors.Is(err, contentapp.ErrUnsupportedContentBrowserFlow):
 		middleware.WriteError(w, r, http.StatusBadRequest, "unsupported_rule_feature", err.Error(), nil)
+	case errors.Is(err, contentapp.ErrExportFileSource):
+		middleware.WriteError(w, r, http.StatusBadRequest, "export_unsupported", err.Error(), nil)
+	case errors.Is(err, contentapp.ErrExportTocEmpty):
+		middleware.WriteError(w, r, http.StatusInternalServerError, "toc_empty", "toc is empty", nil)
 	case errors.Is(err, bookapp.ErrTocEmpty):
 		middleware.WriteError(w, r, http.StatusInternalServerError, "toc_empty", "toc is empty", nil)
 	default:

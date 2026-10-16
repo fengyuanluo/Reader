@@ -35,6 +35,15 @@ func TestCustomURLAttributePreserved(t *testing.T) {
 	}
 }
 
+func TestAbsolutePreservingOptionsKeepsOriginalText(t *testing.T) {
+	raw := `chapter/1.txt, {"headers": {"X-Test": "ok"}, "type": "txt"}`
+	got := AbsolutePreservingOptions("https://example.test/book/", raw)
+	want := `https://example.test/book/chapter/1.txt, {"headers": {"X-Test": "ok"}, "type": "txt"}`
+	if got != want {
+		t.Fatalf("AbsolutePreservingOptions() = %q, want %q", got, want)
+	}
+}
+
 func TestCustomURLParsesLooseAttributeJSON(t *testing.T) {
 	got := ParseCustom(`chapter/1.html,{method:'POST',headers:{'X-Test':'1'},body:{keyword:'斗破'},webView:“true”}`)
 	if got.URL != "chapter/1.html" || got.Attribute["method"] != "POST" || got.Attribute["webView"] != "true" {

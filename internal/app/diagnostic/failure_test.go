@@ -50,6 +50,15 @@ func TestClassifyFailureCoversCommonFailureFamilies(t *testing.T) {
 			wantClass: FailureClassNetworkTLSInvalid,
 		},
 		{
+			// 远端加入的用例：TLS handshake timeout 归 network_tls_invalid（与我方 E2E 口径一致），
+			// 消息本身没有独立 failureCode 映射，因此阶段兜底 code 生效。
+			name:      "tls handshake timeout with stage fallback",
+			err:       errors.New(`Get "https://x": net/http: TLS handshake timeout`),
+			fallback:  FailureSearchFailed,
+			wantCode:  FailureSearchFailed,
+			wantClass: FailureClassNetworkTLSInvalid,
+		},
+		{
 			name:      "content eof",
 			err:       errors.New(`Post "http://119.45.176.116:5006/chapterContent": EOF`),
 			wantCode:  FailureWebsiteFailed,
@@ -75,6 +84,14 @@ func TestClassifyFailureCoversCommonFailureFamilies(t *testing.T) {
 			wantClass: FailureClassNetworkConnectionReset,
 		},
 		{
+			// 远端加入的用例：裸 EOF 与带 URL 前缀的 EOF 同属 connection_reset 口径（E2E 快照网络类）。
+			name:      "standalone eof",
+			err:       errors.New("EOF"),
+			fallback:  FailureSearchFailed,
+			wantCode:  FailureSearchFailed,
+			wantClass: FailureClassNetworkConnectionReset,
+		},
+		{
 			name:      "upstream 404",
 			err:       errors.New("unexpected status: 404"),
 			wantCode:  FailureWebsiteFailed,
@@ -84,7 +101,7 @@ func TestClassifyFailureCoversCommonFailureFamilies(t *testing.T) {
 			name:      "unsupported browser flow option",
 			err:       errors.New("unsupported url option: webView"),
 			wantCode:  FailureWebsiteFailed,
-			wantClass: FailureClassSourceUnsupportedRule,
+			wantClass: FailureClassUnsupportedBrowser,
 		},
 		{
 			name:      "search empty",
@@ -143,8 +160,39 @@ func TestClassifyFailureAllowsStageFallbackWhenMessageIsGenericWebsiteFailure(t 
 	if details.Code != FailureSearchFailed {
 		t.Fatalf("code = %q, want %q", details.Code, FailureSearchFailed)
 	}
-	if details.Class != FailureClassSourceUnsupportedRule {
-		t.Fatalf("class = %q, want %q", details.Class, FailureClassSourceUnsupportedRule)
+	if details.Class != FailureClassUnsupportedBrowser {
+		t.Fatalf("class = %q, want %q", details.Class, FailureClassUnsupportedBrowser)
+	}
+}
+
+func TestClassifyFailureDoesNotTreatGenericStageFailureAsEmpty(t *testing.T) {
+	tests := []struct {
+		name     string
+		fallback string
+	}{
+		{name: "search", fallback: FailureSearchFailed},
+		{name: "discovery", fallback: FailureDiscoveryFailed},
+		{name: "toc", fallback: FailureTocFailed},
+		{name: "content", fallback: FailureContentFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			details := ClassifyFailure(errors.New("upstream rule failed"), tt.fallback)
+			if details.Class != FailureClassUnknown {
+				t.Fatalf("class = %q, want %q", details.Class, FailureClassUnknown)
+			}
+		})
+	}
+}
+
+func TestClassifyFailurePreservesAnyUpstreamHTTPStatus(t *testing.T) {
+	for _, status := range []string{"405", "410", "429", "444", "451", "502", "503", "504", "520", "521", "522"} {
+		t.Run(status, func(t *testing.T) {
+			details := ClassifyFailure(errors.New("unexpected status: "+status), FailureSearchFailed)
+			if details.Class != "source_upstream_http_"+status {
+				t.Fatalf("class = %q", details.Class)
+			}
+		})
 	}
 }
 
@@ -263,8 +311,11 @@ func TestClassifyFailureKeepsExistingCorrectClasses(t *testing.T) {
 			wantClass: FailureClassSecurityPolicyBlocked,
 		},
 		{
+			// webView 之类的浏览器专属能力在合并后的分类器里归 unsupported_browser_capability
+			// （见 TestClassifyFailureCoversCommonFailureFamilies），其余不支持的 URL 选项仍归
+			// source_unsupported_rule_feature。
 			name:      "unsupported rule feature",
-			message:   "unsupported url option: webView",
+			message:   "unsupported url option: customOption",
 			wantCode:  FailureWebsiteFailed,
 			wantClass: FailureClassSourceUnsupportedRule,
 		},

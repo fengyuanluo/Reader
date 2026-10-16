@@ -158,18 +158,19 @@ func TestContentServiceUsesBookTocHTMLBeforeFetching(t *testing.T) {
 
 func TestContentServiceAppliesNetworkURLOptions(t *testing.T) {
 	tests := []struct {
-		name      string
-		header    string
-		option    string
-		wantProxy string
-		wantDNSIP string
-		wantErr   string
+		name        string
+		header      string
+		option      string
+		wantProxy   string
+		wantDNSIP   string
+		wantWebView bool
+		wantErr     string
 	}{
 		{name: "proxy option", option: `{"proxy":"http://127.0.0.1:8888"}`, wantProxy: "http://127.0.0.1:8888"},
 		{name: "dnsIp option", option: `{"dnsIp":"93.184.216.34"}`, wantDNSIP: "93.184.216.34"},
 		{name: "source header proxy", header: `{"proxy":"socks5://proxy.test:1080@u@p","X-Test":"1"}`, option: `{}`, wantProxy: "socks5://proxy.test:1080@u@p"},
 		{name: "serverID and webView delay ignored", option: `{"serverID":"1","webViewDelayTime":"500","webJs":"1"}`},
-		{name: "webView unsupported", option: `{"webView":true}`, wantErr: "unsupported url option"},
+		{name: "webView falls back to plain HTTP", option: `{"webView":true}`, wantWebView: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -194,6 +195,9 @@ func TestContentServiceAppliesNetworkURLOptions(t *testing.T) {
 			if req.Proxy != tt.wantProxy || req.DNSIP != tt.wantDNSIP {
 				t.Fatalf("Proxy/DNSIP = %q/%q, want %q/%q", req.Proxy, req.DNSIP, tt.wantProxy, tt.wantDNSIP)
 			}
+			if req.WebViewFallback != tt.wantWebView {
+				t.Fatalf("WebViewFallback = %v, want %v", req.WebViewFallback, tt.wantWebView)
+			}
 			if _, ok := req.Headers["proxy"]; ok {
 				t.Fatalf("proxy leaked into headers: %#v", req.Headers)
 			}
@@ -212,9 +216,28 @@ func TestContentServiceRejectsSourceRegexBrowserFlow(t *testing.T) {
 	}
 }
 
+func TestContentServiceContinuesWhenOptionalContentExtensionsAreConfigured(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.SubContent = ".note@text"
+	src.RuleContent.Value.CallBackJS = `throw new Error("must not run")`
+	chapter := testContentChapter()
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL: {URL: chapter.URL, Body: []byte(`<div class="content">正文</div><div class="note">注释</div>`)},
+	}}
+	service := NewService(&fakeChapterRepo{}, fetcher, script.NewRuntime(script.Policy{Timeout: time.Second}))
+
+	got, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Content != "正文" {
+		t.Fatalf("content = %q", got.Content)
+	}
+}
+
 // 缓存保存净化前正文（对齐 Legado BookContent.kt:150-153 needSave 的时机），用户替换规则在读取时应用，
 // 这样用户事后改规则对已抓章节立即生效。
-func TestContentServiceCachesRawContentAndAppliesProcessorOnRead(t *testing.T) {
+func TestContentServiceAppliesProcessorBeforeCaching(t *testing.T) {
 	src := testContentSource()
 	src.RuleContent.Value.ReplaceRegex = ""
 	b := testContentBook()
@@ -328,7 +351,7 @@ func TestContentServiceAppliesChapterURLOptions(t *testing.T) {
 	if got.Content != "第一段" {
 		t.Fatalf("content = %q", got.Content)
 	}
-	if fetcher.lastReq.Method != "POST" || string(fetcher.lastReq.Body) != `{"chapter_ids":"1","novelId":7}` || fetcher.lastReq.Headers["Content-Type"] != "application/json" || fetcher.lastReq.Headers["User-Agent"] != "Reader-Test" {
+	if fetcher.lastReq.Method != "POST" || string(fetcher.lastReq.Body) != `{"chapter_ids":"1","novelId":7}` || fetcher.lastReq.Headers["Content-Type"] != "application/json; charset=UTF-8" || fetcher.lastReq.Headers["User-Agent"] != "Reader-Test" {
 		t.Fatalf("last request = %#v", fetcher.lastReq)
 	}
 	if !fetcher.lastReq.UseCookieJar {
@@ -360,7 +383,7 @@ func TestContentServiceAppliesRetryOption(t *testing.T) {
 
 func TestContentServiceAppliesLoginCheckJS(t *testing.T) {
 	src := testContentSource()
-	src.LoginCheckJS = `result.replace("old", "")`
+	src.LoginCheckJS = `result.body.replace("old", "")`
 	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
 		"https://site.example.test/c/1": {URL: "https://site.example.test/c/1", Body: []byte(`old<html><body><h1>第一章</h1><div class="content">正文</div></body></html>`)},
 	}}
@@ -377,7 +400,7 @@ func TestContentServiceAppliesLoginCheckJS(t *testing.T) {
 
 func TestContentServiceAppliesContentWebJSAfterLoginCheck(t *testing.T) {
 	src := testContentSource()
-	src.LoginCheckJS = `result.replace("old", "")`
+	src.LoginCheckJS = `result.body.replace("old", "")`
 	src.RuleContent.Value.Content = ".content@text"
 	src.RuleContent.Value.WebJS = `result.replace("mid", "")`
 	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
@@ -1056,7 +1079,7 @@ func TestContentServiceWidensNonStringHeaderValues(t *testing.T) {
 
 // 正文抓取与目录抓取共用同一套 URL 选项语义：表单正文只编码一次（R-053）。
 func TestBuildContentFetchRequestEncodesFormBodyOnce(t *testing.T) {
-	req, err := buildContentFetchRequest(context.Background(), `https://site.example.test/api,{"method":"POST","body":"a=1&b=中文"}`, testContentSource(), nil)
+	req, err := buildContentFetchRequest(context.Background(), `https://site.example.test/api,{"method":"POST","body":"a=1&b=中文"}`, testContentSource(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildContentFetchRequest() error = %v", err)
 	}
@@ -1070,7 +1093,7 @@ func TestBuildContentFetchRequestEncodesFormBodyOnce(t *testing.T) {
 
 // 显式设置了 Content-Type 时正文原样发送（R-053）。
 func TestBuildContentFetchRequestKeepsBodyWhenContentTypeSet(t *testing.T) {
-	req, err := buildContentFetchRequest(context.Background(), `https://site.example.test/api,{"method":"POST","headers":{"Content-Type":"text/plain"},"body":"a=1&b=中文"}`, testContentSource(), nil)
+	req, err := buildContentFetchRequest(context.Background(), `https://site.example.test/api,{"method":"POST","headers":{"Content-Type":"text/plain"},"body":"a=1&b=中文"}`, testContentSource(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildContentFetchRequest() error = %v", err)
 	}

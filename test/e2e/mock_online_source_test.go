@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -94,6 +95,18 @@ func TestMockOnlineSourceFullFlow(t *testing.T) {
 		t.Fatalf("content cache miss: before=%d after=%d", firstContentRequests, mock.contentRequests)
 	}
 
+	var exported bytes.Buffer
+	stats, err := env.content.ExportTXT(ctx, bookID, &exported)
+	if err != nil {
+		t.Fatalf("export txt: %v", err)
+	}
+	if stats.ChapterCount != 1 || stats.ContentChapterCount != 1 || stats.Bytes != int64(exported.Len()) {
+		t.Fatalf("export stats = %#v, bytes=%d", stats, exported.Len())
+	}
+	if !strings.Contains(exported.String(), "斗破苍穹") || !strings.Contains(exported.String(), "作者：天蚕土豆") || !strings.Contains(exported.String(), "第一章") || !strings.Contains(exported.String(), "真正正文") || strings.Contains(exported.String(), "广告") {
+		t.Fatalf("exported txt = %q", exported.String())
+	}
+
 	progressed, err := env.books.SaveProgress(ctx, bookID, book.BookProgress{Name: saved.Name, Author: saved.Author, DurChapterIndex: 0, DurChapterPos: 12, DurChapterTitle: "第一章", DurChapterTime: 123})
 	if err != nil {
 		t.Fatalf("save progress: %v", err)
@@ -132,6 +145,54 @@ func TestMockOnlineSourceFullFlow(t *testing.T) {
 	}
 	if checked.Status != task.CheckTaskSucceeded || checked.Finished != 1 {
 		t.Fatalf("checked = %#v", checked)
+	}
+}
+
+func TestMockTextSourceRequestScriptsFullFlow(t *testing.T) {
+	ctx := context.Background()
+	mock := newMockSourceServer(t)
+	env := newE2EEnv(t)
+
+	imported, err := env.importer.Import(ctx, sourceapp.ImportInput{Payload: []byte(mock.scriptedSourceJSON())})
+	if err != nil {
+		t.Fatalf("import scripted source: %v", err)
+	}
+	if imported.Added != 1 {
+		t.Fatalf("import result = %#v", imported)
+	}
+
+	searchResult, err := env.search.Search(ctx, searchapp.MultiSearchInput{Keyword: "斗破", Page: 1, EnabledOnly: true, Concurrency: 1})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(searchResult.Items) != 1 || searchResult.Items[0].Name != "斗破苍穹" {
+		t.Fatalf("search result = %#v", searchResult)
+	}
+
+	saved, err := env.books.Save(ctx, ptr(searchResult.Items[0].ToBook()))
+	if err != nil {
+		t.Fatalf("save book: %v", err)
+	}
+	bookID := book.IDFromURL(saved.BookURL)
+	if _, err := env.books.RefreshInfo(ctx, bookID); err != nil {
+		t.Fatalf("refresh info: %v", err)
+	}
+	chapters, _, err := env.books.RefreshToc(ctx, bookID)
+	if err != nil {
+		t.Fatalf("refresh toc: %v", err)
+	}
+	if len(chapters) != 1 {
+		t.Fatalf("chapters = %#v", chapters)
+	}
+	content, _, err := env.content.GetChapterContent(ctx, bookID, 0)
+	if err != nil {
+		t.Fatalf("content: %v", err)
+	}
+	if strings.TrimSpace(content.Content) != "脚本正文" {
+		t.Fatalf("content = %q", content.Content)
+	}
+	if mock.scriptSearchRequests != 1 || mock.scriptContentRequests != 1 {
+		t.Fatalf("script requests: search=%d content=%d", mock.scriptSearchRequests, mock.scriptContentRequests)
 	}
 }
 
@@ -194,7 +255,9 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 
 type mockSourceServer struct {
 	*httptest.Server
-	contentRequests int
+	contentRequests       int
+	scriptSearchRequests  int
+	scriptContentRequests int
 }
 
 func newMockSourceServer(t *testing.T) *mockSourceServer {
@@ -218,6 +281,32 @@ func newMockSourceServer(t *testing.T) *mockSourceServer {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(`<div class="content">广告
 真正正文</div>`))
+	})
+	mux.HandleFunc("/script/search", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("token") != "ok" {
+			http.Error(w, "missing token", http.StatusForbidden)
+			return
+		}
+		mock.scriptSearchRequests++
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`wrapped:<div class="item"><a class="name" href="/script/book/1">斗破苍穹</a><span class="author">天蚕土豆</span></div>`))
+	})
+	mux.HandleFunc("/script/book/1", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<h1>斗破苍穹</h1><span class="author">天蚕土豆</span><a class="toc" href='/script/toc/1,{"bodyJs":"result.replace(\"wrapped:\", \"\")"}'>目录</a>`))
+	})
+	mux.HandleFunc("/script/toc/1", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`wrapped:<ul><li class="chapter"><a href='/script/content/1,{"js":"result + \"?token=ok\"","bodyJs":"result.replace(\"wrapped:\", \"\")"}'>第一章</a></li></ul>`))
+	})
+	mux.HandleFunc("/script/content/1", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("token") != "ok" {
+			http.Error(w, "missing token", http.StatusForbidden)
+			return
+		}
+		mock.scriptContentRequests++
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`wrapped:<div class="content">脚本正文</div>`))
 	})
 	mock.Server = httptest.NewServer(mux)
 	t.Cleanup(mock.Close)
@@ -270,6 +359,20 @@ func (m *mockSourceServer) sourceJSON() string {
 			"content": ".content@text",
 		},
 	}
+	raw, _ := json.Marshal(source)
+	return string(raw)
+}
+
+func (m *mockSourceServer) scriptedSourceJSON() string {
+	var source map[string]any
+	_ = json.Unmarshal([]byte(m.sourceJSON()), &source)
+	searchOptions, _ := json.Marshal(map[string]any{
+		"js":     `result + "&token=ok"`,
+		"bodyJs": `result.replace("wrapped:", "")`,
+	})
+	source["bookSourceUrl"] = m.URL + "/script-source"
+	source["bookSourceName"] = "Mock Scripted Source"
+	source["searchUrl"] = m.URL + "/script/search?key={{key}}," + string(searchOptions)
 	raw, _ := json.Marshal(source)
 	return string(raw)
 }

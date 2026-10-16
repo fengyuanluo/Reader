@@ -179,11 +179,11 @@ type queryer interface {
 const upsertBookSourceSQL = `
 INSERT INTO book_sources (
   source_id, book_source_url, book_source_name, book_source_group, book_source_type, book_url_pattern,
-  custom_order, enabled, enabled_explore, js_lib, enabled_cookie_jar, concurrent_rate, header, login_url,
+  custom_order, enabled, enabled_explore, event_listener, custom_button, js_lib, enabled_cookie_jar, concurrent_rate, header, login_url,
   login_ui, login_check_js, cover_decode_js, book_source_comment, variable_comment, last_update_time,
   respond_time, weight, explore_url, explore_screen, rule_explore, search_url, rule_search, rule_book_info,
   rule_toc, rule_content, rule_review, raw_json, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 ON CONFLICT(source_id) DO UPDATE SET
   book_source_url = excluded.book_source_url,
   book_source_name = excluded.book_source_name,
@@ -193,6 +193,8 @@ ON CONFLICT(source_id) DO UPDATE SET
   custom_order = excluded.custom_order,
   enabled = excluded.enabled,
   enabled_explore = excluded.enabled_explore,
+  event_listener = excluded.event_listener,
+  custom_button = excluded.custom_button,
   js_lib = excluded.js_lib,
   enabled_cookie_jar = excluded.enabled_cookie_jar,
   concurrent_rate = excluded.concurrent_rate,
@@ -226,6 +228,8 @@ ON CONFLICT(book_source_url) DO UPDATE SET
   custom_order = excluded.custom_order,
   enabled = excluded.enabled,
   enabled_explore = excluded.enabled_explore,
+  event_listener = excluded.event_listener,
+  custom_button = excluded.custom_button,
   js_lib = excluded.js_lib,
   enabled_cookie_jar = excluded.enabled_cookie_jar,
   concurrent_rate = excluded.concurrent_rate,
@@ -275,7 +279,7 @@ func bookSourceArgs(src *source.BookSource) ([]any, error) {
 	}
 	return []any{
 		src.SourceID, src.BookSourceURL, src.BookSourceName, nullable(src.BookSourceGroup), src.BookSourceType, nullable(src.BookURLPattern),
-		src.CustomOrder, boolInt(src.Enabled), boolInt(src.EnabledExplore), nullable(src.JSLib), boolInt(src.EnabledCookieJar), nullable(src.ConcurrentRate), nullable(src.Header), nullable(src.LoginURL),
+		src.CustomOrder, boolInt(src.Enabled), boolInt(src.EnabledExplore), boolInt(src.EventListener), boolInt(src.CustomButton), nullable(src.JSLib), boolInt(src.EnabledCookieJar), nullable(src.ConcurrentRate), nullable(src.Header), nullable(src.LoginURL),
 		nullable(src.LoginUI), nullable(src.LoginCheckJS), nullable(src.CoverDecodeJS), nullable(src.BookSourceComment), nullable(src.VariableComment), src.LastUpdateTime,
 		src.RespondTime, src.Weight, nullable(src.ExploreURL), nullable(src.ExploreScreen), string(ruleExplore), nullable(src.SearchURL), string(ruleSearch), string(ruleBookInfo),
 		string(ruleToc), string(ruleContent), string(src.RuleReview), string(src.RawJSON),
@@ -293,7 +297,7 @@ func isUniqueViolation(err error) bool {
 }
 
 const selectBookSourceSQL = `SELECT source_id, book_source_url, book_source_name, coalesce(book_source_group, ''),
-book_source_type, coalesce(book_url_pattern, ''), custom_order, enabled, enabled_explore, coalesce(js_lib, ''),
+book_source_type, coalesce(book_url_pattern, ''), custom_order, enabled, enabled_explore, event_listener, custom_button, coalesce(js_lib, ''),
 enabled_cookie_jar, coalesce(concurrent_rate, ''), coalesce(header, ''), coalesce(login_url, ''), coalesce(login_ui, ''),
 coalesce(login_check_js, ''), coalesce(cover_decode_js, ''), coalesce(book_source_comment, ''), coalesce(variable_comment, ''),
 last_update_time, respond_time, weight, coalesce(explore_url, ''), coalesce(explore_screen, ''), coalesce(nullif(rule_explore, ''), 'null'),
@@ -306,11 +310,11 @@ type scanner interface {
 
 func scanBookSource(s scanner) (*source.BookSource, error) {
 	var src source.BookSource
-	var enabled, enabledExplore, enabledCookieJar int
+	var enabled, enabledExplore, eventListener, customButton, enabledCookieJar int
 	var ruleExplore, ruleSearch, ruleBookInfo, ruleToc, ruleContent, ruleReview, rawJSON string
 	err := s.Scan(
 		&src.SourceID, &src.BookSourceURL, &src.BookSourceName, &src.BookSourceGroup,
-		&src.BookSourceType, &src.BookURLPattern, &src.CustomOrder, &enabled, &enabledExplore, &src.JSLib,
+		&src.BookSourceType, &src.BookURLPattern, &src.CustomOrder, &enabled, &enabledExplore, &eventListener, &customButton, &src.JSLib,
 		&enabledCookieJar, &src.ConcurrentRate, &src.Header, &src.LoginURL, &src.LoginUI,
 		&src.LoginCheckJS, &src.CoverDecodeJS, &src.BookSourceComment, &src.VariableComment,
 		&src.LastUpdateTime, &src.RespondTime, &src.Weight, &src.ExploreURL, &src.ExploreScreen, &ruleExplore,
@@ -324,6 +328,8 @@ func scanBookSource(s scanner) (*source.BookSource, error) {
 	}
 	src.Enabled = enabled == 1
 	src.EnabledExplore = enabledExplore == 1
+	src.EventListener = eventListener == 1
+	src.CustomButton = customButton == 1
 	src.EnabledCookieJar = enabledCookieJar == 1
 	for _, col := range []struct {
 		name string

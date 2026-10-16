@@ -38,6 +38,9 @@ func TestRunnerRunsSourcesConcurrentlyAndPersistsProgress(t *testing.T) {
 	if got.Finished != 2 || len(got.Items) != 2 {
 		t.Fatalf("task = %#v", got)
 	}
+	if len(repo.progressUpdates) == 0 || repo.progressUpdates[len(repo.progressUpdates)-1] != 2 {
+		t.Fatalf("progress updates = %#v", repo.progressUpdates)
+	}
 }
 
 func TestRunnerAppliesSourceDiagnostics(t *testing.T) {
@@ -386,11 +389,12 @@ func (c *blockingRunnerContent) GetChapterContent(ctx context.Context, id string
 }
 
 type fakeCheckRepo struct {
-	mu          sync.Mutex
-	cond        *sync.Cond
-	tasks       map[string]*task.CheckTask
-	items       map[string][]*task.CheckTaskItem
-	saveItemErr error
+	mu              sync.Mutex
+	cond            *sync.Cond
+	tasks           map[string]*task.CheckTask
+	items           map[string][]*task.CheckTaskItem
+	saveItemErr     error
+	progressUpdates []int
 }
 
 type runnerSourceRepo struct {
@@ -450,6 +454,18 @@ func (r *fakeCheckRepo) UpdateTaskStatus(ctx context.Context, taskID string, sta
 	item.Status = status
 	item.Finished = finished
 	item.CompletedAt = completedAt
+	r.cond.Broadcast()
+	return nil
+}
+
+func (r *fakeCheckRepo) UpdateTaskProgress(ctx context.Context, taskID string, finished int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item := r.tasks[taskID]
+	if item.Status == task.CheckTaskRunning && finished > item.Finished {
+		item.Finished = finished
+		r.progressUpdates = append(r.progressUpdates, finished)
+	}
 	r.cond.Broadcast()
 	return nil
 }

@@ -48,6 +48,25 @@ func TestSingleSourceSearchParsesMockHTML(t *testing.T) {
 	}
 }
 
+func TestSingleSourceSearchEmptyListWithoutBookInfoRuleDoesNotPanic(t *testing.T) {
+	src := searchTestSource()
+	src.RuleSearch.Value.BookList = ".missing"
+	src.RuleBookInfo.Value = nil
+	searcher := NewSingleSourceSearcher(fakeFetcher{resp: &fetch.Response{
+		StatusCode: 200,
+		URL:        "https://example.test/search?q=test&page=1",
+		Body:       []byte(`<html><body>no results</body></html>`),
+	}}, nil)
+
+	books, err := searcher.Search(context.Background(), SearchInput{Source: src, Keyword: "test", Page: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("books = %#v", books)
+	}
+}
+
 func TestSingleSourceSearchStoresPutVariables(t *testing.T) {
 	src := searchTestSource()
 	src.RuleSearch.Value.BookList = "$.data"
@@ -121,6 +140,37 @@ func TestSingleSourceSearchSupportsLeadingAtAttributeThenJSStep(t *testing.T) {
 	}
 	if books[0].BookURL != "http://m.suixkan.com/book/42.html" {
 		t.Fatalf("bookURL = %q", books[0].BookURL)
+	}
+}
+
+func TestSingleSourceSearchWrapsJSoupElementsInBookListScript(t *testing.T) {
+	src := searchTestSource()
+	src.BookSourceURL = "https://m.suixkan.com"
+	src.SearchURL = "/s/1.html?keyword={{key}}"
+	src.RuleSearch.Value.BookList = `class.v-list-item
+@js:
+list=result.toArray();
+list1=[];
+for(i in list){
+  if(list[i].text().indexOf("斗罗")>-1){ list1.push(list[i]); }
+}
+list1.map(x=>x)`
+	src.RuleSearch.Value.Name = ".v-title@text"
+	src.RuleSearch.Value.Author = ".v-author@text"
+	src.RuleSearch.Value.BookURL = `##="newWebView\('([^']+)'##$1###`
+	fetcher := fakeFetcher{resp: &fetch.Response{
+		StatusCode: 200,
+		URL:        "https://m.suixkan.com/s/1.html?keyword=斗罗大陆",
+		Body:       []byte(`<div class="v-list-item" onclick="newWebView('/b/1.html', '', '')"><div class="v-title">斗罗大陆</div><div class="v-author">唐家三少</div></div>`),
+	}}
+	searcher := NewSingleSourceSearcher(fetcher, script.NewRuntime(script.Policy{Timeout: time.Second, SourceKey: src.BookSourceURL}))
+
+	books, err := searcher.Search(context.Background(), SearchInput{Source: src, Keyword: "斗罗大陆", Page: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(books) != 1 || books[0].Name != "斗罗大陆" || books[0].Author != "唐家三少" {
+		t.Fatalf("books = %#v", books)
 	}
 }
 
@@ -433,12 +483,28 @@ func TestBuildSearchRequestRejectsUnsupportedScript(t *testing.T) {
 	}
 }
 
-func TestBuildSearchRequestRejectsUnsupportedURLOption(t *testing.T) {
+func TestBuildSearchRequestMarksWebViewHTTPFallback(t *testing.T) {
 	src := searchTestSource()
 	src.SearchURL = `https://example.test/search,{"webView":true}`
-	_, err := buildSearchRequest(context.Background(), nil, src, "斗破", 1)
-	if !errors.Is(err, ErrUnsupportedSearchURL) {
-		t.Fatalf("error = %v, want ErrUnsupportedSearchURL", err)
+	req, err := buildSearchRequest(context.Background(), nil, src, "斗破", 1)
+	if err != nil {
+		t.Fatalf("buildSearchRequest() error = %v", err)
+	}
+	if !req.WebViewFallback {
+		t.Fatalf("request = %#v", req)
+	}
+}
+
+func TestBuildSearchRequestAcceptsWebJSURLOption(t *testing.T) {
+	src := searchTestSource()
+	src.SearchURL = `https://example.test/search,{"webView":true,"webJs":"document.body.innerText"}`
+	req, err := buildSearchRequest(context.Background(), nil, src, "斗破", 1)
+	if err != nil {
+		t.Fatalf("buildSearchRequest() error = %v", err)
+	}
+	// webJs 只接受不生效：webView 生效，webJs 不写入 BodyJS。
+	if !req.WebViewFallback || req.BodyJS != "" {
+		t.Fatalf("request = %#v", req)
 	}
 }
 
@@ -497,8 +563,22 @@ func TestBuildSearchRequestEvaluatesURLScriptAndInlineExpressions(t *testing.T) 
 	if string(req.Body) != `{"keyword":"斗破","page":3,"page_size":20}` {
 		t.Fatalf("json body = %q", string(req.Body))
 	}
-	if req.Headers["Content-Type"] != "application/json" {
+	if req.Headers["Content-Type"] != "application/json; charset=UTF-8" {
 		t.Fatalf("headers = %#v", req.Headers)
+	}
+}
+
+func TestBuildSearchRequestDefinesNullResultForInlineExpression(t *testing.T) {
+	src := searchTestSource()
+	src.SearchURL = `https://example.test/search?q={{java.put("keyword", key);result}}`
+	runtime := script.NewRuntime(script.Policy{SourceKey: src.BookSourceURL, Source: src})
+
+	req, err := buildSearchRequest(context.Background(), runtime, src, "斗罗大陆", 1)
+	if err != nil {
+		t.Fatalf("buildSearchRequest() error = %v", err)
+	}
+	if req.URL != "https://example.test/search?q=" {
+		t.Fatalf("URL = %q", req.URL)
 	}
 }
 

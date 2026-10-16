@@ -88,6 +88,31 @@ func TestDiagnosticsUpdaterClearsFailureGroupsOnPass(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsUpdaterPreservesSourceMetadataOnNetworkFailure(t *testing.T) {
+	repo := &fakeSourceRepo{src: &source.BookSource{
+		SourceID:          "source-1",
+		BookSourceURL:     "https://source.test",
+		BookSourceName:    "Source",
+		BookSourceGroup:   "玄幻,自定义",
+		BookSourceComment: "keep",
+	}}
+	updater := NewDiagnosticsUpdater(repo)
+	err := updater.Apply(context.Background(), &task.CheckTaskItem{
+		SourceID:     "source-1",
+		Status:       task.CheckItemFailed,
+		FailureCode:  FailureSearchFailed,
+		FailureClass: diagnosticapp.FailureClassNetworkTimeout,
+		Message:      "context deadline exceeded",
+		RespondTime:  180000,
+	})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if repo.src.RespondTime != 180000 || repo.src.BookSourceGroup != "玄幻,自定义" || repo.src.BookSourceComment != "keep" {
+		t.Fatalf("source = %#v", repo.src)
+	}
+}
+
 type fakeSourceRepo struct {
 	src *source.BookSource
 }

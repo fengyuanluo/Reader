@@ -29,6 +29,8 @@ type BookSource struct {
 	CustomOrder       int                              `json:"customOrder"`
 	Enabled           bool                             `json:"enabled"`
 	EnabledExplore    bool                             `json:"enabledExplore"`
+	EventListener     bool                             `json:"eventListener"`
+	CustomButton      bool                             `json:"customButton"`
 	JSLib             string                           `json:"jsLib,omitempty"`
 	EnabledCookieJar  bool                             `json:"enabledCookieJar"`
 	ConcurrentRate    string                           `json:"concurrentRate,omitempty"`
@@ -74,7 +76,8 @@ func (s *BookSource) Normalize() error {
 	if s.SourceID == "" {
 		s.SourceID = SourceIDFromURL(s.BookSourceURL)
 	}
-	// 0 为无效值，按 Legado 默认响应时间补齐。
+	// 0 为无效值，按 Legado 默认响应时间补齐；JSON 路径随后由 ApplyLegadoDefaults
+	// 按“字段是否存在”覆盖回显式写出的值（含 0）。
 	if s.RespondTime <= 0 {
 		s.RespondTime = DefaultRespondTime
 	}
@@ -102,16 +105,26 @@ func (s *BookSource) ApplyLegadoDefaults(data []byte) error {
 	if err := json.Unmarshal(data, &present); err != nil {
 		return err
 	}
-	if !jsonFieldPresent(present, "enabled") {
-		s.Enabled = true
+	applyBool := func(name string, target *bool, fallback bool) {
+		raw, ok := present[name]
+		if !ok || string(bytes.TrimSpace(raw)) == "null" {
+			*target = fallback
+			return
+		}
+		var value bool
+		if err := json.Unmarshal(raw, &value); err == nil {
+			*target = value
+		}
 	}
-	if !jsonFieldPresent(present, "enabledExplore") {
-		s.EnabledExplore = true
-	}
-	if !jsonFieldPresent(present, "enabledCookieJar") {
-		s.EnabledCookieJar = true
-	}
-	if !jsonFieldPresent(present, "respondTime") {
+	applyBool("enabled", &s.Enabled, true)
+	applyBool("enabledExplore", &s.EnabledExplore, true)
+	applyBool("enabledCookieJar", &s.EnabledCookieJar, true)
+	if raw, ok := present["respondTime"]; ok && string(bytes.TrimSpace(raw)) != "null" {
+		var value int64
+		if err := json.Unmarshal(raw, &value); err == nil {
+			s.RespondTime = value
+		}
+	} else {
 		s.RespondTime = DefaultRespondTime
 	}
 	return nil
@@ -138,6 +151,10 @@ func ParseBookSource(data []byte) (*BookSource, error) {
 	}
 	source.RawJSON = append(source.RawJSON[:0], data...)
 	if err := source.Normalize(); err != nil {
+		return nil, err
+	}
+	// Normalize 会把 respondTime 的零值补成默认值，这里再按 JSON 原文回填显式字段。
+	if err := source.ApplyLegadoDefaults(data); err != nil {
 		return nil, err
 	}
 	return &source, nil

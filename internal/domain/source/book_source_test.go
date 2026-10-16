@@ -40,6 +40,43 @@ func TestParseBookSourceAcceptsRuleString(t *testing.T) {
 	}
 }
 
+func TestParseBookSourceAppliesLegadoDefaultsOnlyWhenMissing(t *testing.T) {
+	src, err := ParseBookSource([]byte(`{"bookSourceUrl":"https://example.test","bookSourceName":"Example"}`))
+	if err != nil {
+		t.Fatalf("ParseBookSource() error = %v", err)
+	}
+	if !src.Enabled || !src.EnabledExplore || !src.EnabledCookieJar || src.RespondTime != 180000 {
+		t.Fatalf("defaults = %#v", src)
+	}
+
+	explicit, err := ParseBookSource([]byte(`{"bookSourceUrl":"https://example.test","bookSourceName":"Example","enabled":false,"enabledExplore":false,"enabledCookieJar":false,"respondTime":0}`))
+	if err != nil {
+		t.Fatalf("ParseBookSource(explicit) error = %v", err)
+	}
+	if explicit.Enabled || explicit.EnabledExplore || explicit.EnabledCookieJar || explicit.RespondTime != 0 {
+		t.Fatalf("explicit values = %#v", explicit)
+	}
+}
+
+func TestParseBookSourcePreservesCurrentLegadoCompatibilityFields(t *testing.T) {
+	src, err := ParseBookSource([]byte(`{
+		"bookSourceUrl":"https://example.test",
+		"bookSourceName":"Example",
+		"eventListener":true,
+		"customButton":true,
+		"ruleContent":{"content":".content@text","subContent":".note@text","callBackJs":"result"}
+	}`))
+	if err != nil {
+		t.Fatalf("ParseBookSource() error = %v", err)
+	}
+	if !src.EventListener || !src.CustomButton {
+		t.Fatalf("source fields = %#v", src)
+	}
+	if src.RuleContent.Value == nil || src.RuleContent.Value.SubContent != ".note@text" || src.RuleContent.Value.CallBackJS != "result" {
+		t.Fatalf("content rule = %#v", src.RuleContent.Value)
+	}
+}
+
 func TestBookSourceValidateRequiredFields(t *testing.T) {
 	tests := []struct {
 		name string

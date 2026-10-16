@@ -10,6 +10,7 @@ import (
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/source"
 	ruleinfra "reader/internal/infra/rule"
+	urlrule "reader/internal/infra/rule/url"
 	"reader/internal/infra/script"
 )
 
@@ -62,7 +63,7 @@ func (s *InfoService) RefreshInfo(ctx context.Context, input InfoInput) (book.Bo
 		if err != nil {
 			return book.Book{}, err
 		}
-		resp, err := s.fetcher.Fetch(ctx, req)
+		resp, err := executeBookFetchRequest(ctx, s.fetcher, req, src, &b, s.script)
 		if err != nil {
 			return book.Book{}, err
 		}
@@ -145,8 +146,19 @@ func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseUR
 	if src.BookSourceType == bookSourceTypeWebFile {
 		b.DownloadURLs = nil
 		if strings.TrimSpace(infoRule.DownloadURLs) != "" {
-			if values, err := analyzer.GetURLList(ctx, infoRule.DownloadURLs, content); err == nil {
-				b.DownloadURLs = values
+			if values, err := analyzer.GetStringListRaw(ctx, infoRule.DownloadURLs, content); err == nil {
+				downloads := make([]string, 0, len(values))
+				for _, value := range values {
+					value = strings.TrimSpace(value)
+					if value == "" {
+						continue
+					}
+					if absolute := urlrule.AbsolutePreservingOptions(redirectURL, value); absolute != "" {
+						value = absolute
+					}
+					downloads = append(downloads, value)
+				}
+				b.DownloadURLs = downloads
 			}
 		}
 		if len(b.DownloadURLs) == 0 {

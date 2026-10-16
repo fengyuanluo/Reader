@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -36,6 +37,8 @@ type HTTPFetcher struct {
 	// dial 负责建立到已校验地址的 TCP 连接；测试可替换以观察实际连接目标。
 	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
 	cookies *CookieManager
+	// rateLimiter 按书源 concurrentRate 限速；这是全仓唯一的按源速率限速点。
+	rateLimiter *sourceRateLimiter
 
 	mu      sync.Mutex
 	clients map[routeKey]*http.Client
@@ -55,13 +58,14 @@ func NewHTTPFetcher(opts ...Option) *HTTPFetcher {
 	f := &HTTPFetcher{
 		timeout:          30 * time.Second,
 		maxRedirects:     5,
-		defaultUserAgent: "Reader/0.0.1",
+		defaultUserAgent: "Reader/0.1.0",
 		maxBodyBytes:     10 * 1024 * 1024,
 		resolver: func(ctx context.Context, host string) ([]net.IP, error) {
 			return net.DefaultResolver.LookupIP(ctx, "ip", host)
 		},
-		dial:    dialer.DialContext,
-		clients: map[routeKey]*http.Client{},
+		dial:        dialer.DialContext,
+		clients:     map[routeKey]*http.Client{},
+		rateLimiter: newSourceRateLimiter(),
 	}
 	for _, opt := range opts {
 		opt(f)
@@ -112,6 +116,15 @@ func WithAllowPrivateNetwork(allow bool) Option {
 }
 
 func (f *HTTPFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
+	if req.WebViewFallback {
+		slog.WarnContext(ctx, "Legado webView request is using plain HTTP fallback")
+	}
+	// 按源 concurrentRate 限速（远端语义）；SkipRateLimit 的请求直接放行。
+	if !req.SkipRateLimit && f.rateLimiter != nil {
+		if err := f.rateLimiter.wait(ctx, req.SourceKey, req.ConcurrentRate); err != nil {
+			return nil, err
+		}
+	}
 	// 代理与 DNS 固定配置错误是确定性的，在重试循环外解析一次。
 	client, err := f.clientFor(req)
 	if err != nil {

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -34,6 +35,8 @@ import (
 	"github.com/dop251/goja/ast"
 	"github.com/dop251/goja/parser"
 	"golang.org/x/net/publicsuffix"
+	"golang.org/x/text/encoding/htmlindex"
+	"golang.org/x/text/transform"
 
 	domainbook "reader/internal/domain/book"
 	"reader/internal/domain/fetch"
@@ -41,7 +44,9 @@ import (
 	"reader/internal/infra/chinese"
 	fetcherinfra "reader/internal/infra/fetcher"
 	"reader/internal/infra/logging"
+	"reader/internal/infra/requestoption"
 	ruleinfra "reader/internal/infra/rule"
+	"reader/internal/infra/rule/jsonpath"
 	urlrule "reader/internal/infra/rule/url"
 )
 
@@ -184,7 +189,13 @@ func (r *Runtime) EvalWithBindings(ctx context.Context, script string, bindings 
 		if isForbiddenBinding(key) {
 			return nil, fmt.Errorf("%w: %s", ErrUnsafeGlobal, key)
 		}
-		if err := vm.Set(key, r.prepareBindingValue(runCtx, key, value)); err != nil {
+		// source 绑定只暴露白名单对象，原始 *BookSource 指针不进脚本（JsExtensions/BaseSource 对齐）。
+		if key == "source" {
+			if src, ok := value.(*domainsource.BookSource); ok {
+				value = r.SourceBindings(runCtx.ctx, src)
+			}
+		}
+		if err := vm.Set(key, prepareBindingValue(vm, key, value)); err != nil {
 			return nil, runCtx.wrap(ErrScriptFailed, err)
 		}
 	}
@@ -242,23 +253,40 @@ func (r *Runtime) sourceKeyForBindings(src *domainsource.BookSource, bindings Bi
 	return stripSourceSuffix(sourceKeyFromBindings(src, bindings))
 }
 
+// sourceFromBindings 解析书源对象：先取 policy 兜底，再取 Go 侧专用的 __source，最后取脚本可见的 source。
 func sourceFromBindings(fallback *domainsource.BookSource, bindings Bindings) *domainsource.BookSource {
 	if fallback != nil {
 		return fallback
 	}
-	src, _ := bindings["source"].(*domainsource.BookSource)
-	return src
+	for _, key := range []string{"__source", "source"} {
+		if src, ok := bindings[key].(*domainsource.BookSource); ok && src != nil {
+			return src
+		}
+	}
+	return nil
 }
 
-func (r *Runtime) prepareBindingValue(runCtx evalContext, key string, value any) any {
+// prepareBindingValue 把 Go 侧 binding 转成脚本可见对象：响应、选择器、result 数组与 book/chapter 白名单。
+func prepareBindingValue(vm *goja.Runtime, key string, value any) any {
+	if resp, ok := value.(*fetch.Response); ok && resp != nil && key == "result" {
+		return newScriptHTTPResponse(vm, resp, nil)
+	}
 	if sel, ok := value.(*goquery.Selection); ok && sel != nil {
-		return newSelectionBinding(sel)
+		return newSelectionBinding(vm, sel)
+	}
+	if key == "result" {
+		reflected := reflect.ValueOf(value)
+		if reflected.IsValid() && (reflected.Kind() == reflect.Slice || reflected.Kind() == reflect.Array) {
+			if _, isBytes := value.([]byte); !isBytes {
+				values := make([]any, reflected.Len())
+				for i := range values {
+					values[i] = reflected.Index(i).Interface()
+				}
+				return newElementCollection(vm, values)
+			}
+		}
 	}
 	switch key {
-	case "source":
-		if src, ok := value.(*domainsource.BookSource); ok {
-			return r.SourceBindings(runCtx.ctx, src)
-		}
 	case "book":
 		if b, ok := value.(*domainbook.Book); ok && b != nil {
 			return map[string]any{
@@ -374,6 +402,9 @@ func (r *Runtime) installSafeGlobals(vm *goja.Runtime, runCtx evalContext) error
 	if err := vm.Set("java", r.javaBindings(vm, runCtx)); err != nil {
 		return err
 	}
+	if err := vm.Set("org", jsoupBindings(vm)); err != nil {
+		return err
+	}
 	if _, err := vm.RunString(`
 if (!java.ajaxAll) {
   java.ajaxAll = function(urls) {
@@ -457,7 +488,28 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 			return newScriptHTTPResponse(vm, resp, err)
 		}
 	}
-	bindings := map[string]any{
+	// analyzerContent/analyzerBaseURL 记录 java.setContent 设置的待分析内容与基准地址，未设置时回落到 result 与 baseUrl 绑定。
+	var analyzerContent any
+	analyzerContentSet := false
+	analyzerBaseURL := ""
+	currentAnalyzerContent := func() any {
+		if analyzerContentSet {
+			return analyzerContent
+		}
+		value := vm.Get("result")
+		if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
+			return nil
+		}
+		return value.Export()
+	}
+	currentAnalyzerBaseURL := func() string {
+		if analyzerBaseURL != "" {
+			return analyzerBaseURL
+		}
+		return scriptAnalyzerBaseURL(vm)
+	}
+	var java map[string]any
+	java = map[string]any{
 		"getSource": func() any {
 			if src == nil {
 				return nil
@@ -473,6 +525,9 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 		},
 		"getWebViewUA": func() string {
 			return defaultWebViewUserAgent
+		},
+		"getUserAgent": func() string {
+			return sourceUserAgent(src)
 		},
 		"t2s": func(value any) string {
 			return chinese.T2S(fmt.Sprint(value))
@@ -509,8 +564,14 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 		"md5Encode16": func(value any) string {
 			return md5Encode16(fmt.Sprint(value))
 		},
+		"digestHex": func(data any, algorithm any) string {
+			return digestHex(fmt.Sprint(data), fmt.Sprint(algorithm))
+		},
 		"HMacHex": func(data any, algorithm any, key any) string {
 			return hmacHex(fmt.Sprint(data), fmt.Sprint(algorithm), fmt.Sprint(key))
+		},
+		"HMacBase64": func(data any, algorithm any, key any) string {
+			return base64.StdEncoding.EncodeToString(hmacBytes([]byte(fmt.Sprint(data)), fmt.Sprint(algorithm), []byte(fmt.Sprint(key))))
 		},
 		"hexDecodeToString": func(value any) string {
 			decoded, err := hex.DecodeString(fmt.Sprint(value))
@@ -557,6 +618,13 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 			}
 			return decoded
 		},
+		"aesEncodeToBase64String": func(data any, key any, transformation any, iv any) string {
+			encoded, err := aesEncodeToBase64String(fmt.Sprint(data), fmt.Sprint(key), fmt.Sprint(transformation), fmt.Sprint(iv))
+			if err != nil {
+				return ""
+			}
+			return encoded
+		},
 		"desEncodeToBase64String": func(data any, key any, transformation any, iv any) string {
 			encoded, err := desEncodeToBase64String(fmt.Sprint(data), fmt.Sprint(key), fmt.Sprint(transformation), fmt.Sprint(iv))
 			if err != nil {
@@ -577,25 +645,25 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 		"androidId": func() string {
 			return readerAndroidID
 		},
-		"timeFormatUTC": func(value any, pattern any, offsetHours any) string {
+		// timeFormatUTC(value, pattern, offset)：offset 是毫秒级的 UTC 时区偏移（Legado DateUtil 的 utc 偏移），
+		// 与 yyyy 等模式一起按 UTC+offset 格式化。
+		"timeFormatUTC": func(value any, pattern any, offsetMilliseconds any) string {
 			t, ok := coerceTimeValue(value)
 			if !ok {
 				return ""
 			}
-			offset := 0
-			switch v := offsetHours.(type) {
+			offset := int64(0)
+			switch v := offsetMilliseconds.(type) {
 			case int:
-				offset = v
+				offset = int64(v)
 			case int64:
-				offset = int(v)
+				offset = v
 			case float64:
-				offset = int(v)
+				offset = int64(v)
 			case string:
-				parsed, _ := strconv.Atoi(strings.TrimSpace(v))
-				offset = parsed
+				offset, _ = strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 			}
-			loc := time.FixedZone("UTCOffset", offset*3600)
-			return t.In(loc).Format(javaTimeLayout(fmt.Sprint(pattern)))
+			return t.UTC().Add(time.Duration(offset) * time.Millisecond).Format(javaTimeLayout(fmt.Sprint(pattern)))
 		},
 		"timeFormat": func(value any) string {
 			return timeFormat(value)
@@ -639,18 +707,79 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 			}
 			return fetchResponse("GET")(call)
 		},
-		"head":    fetchResponse("HEAD"),
+		// setContent(html[, baseUrl])：设置待分析内容，返回 java 对象本身以便链式调用。
+		"setContent": func(call goja.FunctionCall) goja.Value {
+			if len(call.Arguments) == 0 || goja.IsUndefined(call.Argument(0)) || goja.IsNull(call.Argument(0)) {
+				panic("content cannot be null")
+			}
+			analyzerContent = call.Argument(0).Export()
+			analyzerContentSet = true
+			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Argument(1)) && !goja.IsNull(call.Argument(1)) {
+				analyzerBaseURL = call.Argument(1).String()
+			}
+			return vm.ToValue(java)
+		},
+		// head(url[, headers][, timeout])：第三个参数是本次请求的超时毫秒数（JsExtensions.kt）。
+		"head": func(call goja.FunctionCall) goja.Value {
+			callCtx, cancel := scriptCallContext(runCtx.ctx, call, 2)
+			defer cancel()
+			headCtx := runCtx
+			headCtx.ctx = callCtx
+			resp, err := r.fetchScriptCall(headCtx, vm, "HEAD", call)
+			return newScriptHTTPResponse(vm, resp, err)
+		},
 		"post":    fetchResponse("POST"),
 		"connect": fetchResponse("GET"),
-		"getString": func(rule any) string {
+		// getString(rule[, unescape|input][, absolute])：默认反转义 HTML 实体，与 Legado JsExtensions.getString 一致。
+		"getString": func(call goja.FunctionCall) goja.Value {
+			if len(call.Arguments) == 0 {
+				return vm.ToValue("")
+			}
+			input := currentAnalyzerContent()
 			var fallback any
 			if srcValue := vm.Get("src"); srcValue != nil && !goja.IsUndefined(srcValue) && !goja.IsNull(srcValue) {
 				fallback = srcValue.Export()
 			}
-			return scriptGetString(runCtx.ctx, vm, vm.Get("result").Export(), fallback, fmt.Sprint(rule))
+			unescape := true
+			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Argument(1)) && !goja.IsNull(call.Argument(1)) {
+				if enabled, ok := call.Argument(1).Export().(bool); ok {
+					unescape = enabled
+				} else {
+					input = call.Argument(1).Export()
+					fallback = nil
+				}
+			}
+			value := r.scriptGetStringAt(runCtx.ctx, vm, input, fallback, call.Argument(0).String(), currentAnalyzerBaseURL())
+			if unescape {
+				value = html.UnescapeString(value)
+			}
+			if len(call.Arguments) > 2 && call.Argument(2).ToBoolean() {
+				return vm.ToValue(urlrule.Absolute(currentAnalyzerBaseURL(), value))
+			}
+			return vm.ToValue(value)
 		},
-		"getElements": func(rule any) []any {
-			return scriptGetElements(runCtx.ctx, vm, vm.Get("result").Export(), fmt.Sprint(rule))
+		// getStringList(rule[, input][, absolute])：第三个参数为 true 时按基准地址绝对化结果。
+		"getStringList": func(call goja.FunctionCall) goja.Value {
+			if len(call.Arguments) == 0 {
+				return goja.Null()
+			}
+			input := currentAnalyzerContent()
+			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Argument(1)) && !goja.IsNull(call.Argument(1)) {
+				input = call.Argument(1).Export()
+			}
+			values := r.scriptGetStringListAt(runCtx.ctx, vm, input, call.Argument(0).String(), currentAnalyzerBaseURL())
+			if len(call.Arguments) > 2 && call.Argument(2).ToBoolean() {
+				for i, value := range values {
+					values[i] = urlrule.Absolute(currentAnalyzerBaseURL(), value)
+				}
+			}
+			return vm.ToValue(values)
+		},
+		"getElements": func(rule any) goja.Value {
+			return newElementCollection(vm, r.scriptGetElementsAt(runCtx.ctx, vm, currentAnalyzerContent(), fmt.Sprint(rule), currentAnalyzerBaseURL()))
+		},
+		"getElement": func(rule any) goja.Value {
+			return r.scriptGetElementAt(runCtx.ctx, vm, currentAnalyzerContent(), fmt.Sprint(rule), currentAnalyzerBaseURL())
 		},
 		// ajax 失败时返回错误文本，与 Legado JsExtensions.kt:93-111 的 getOrElse { stackTraceStr } 一致。
 		"ajax": func(raw goja.Value) string {
@@ -667,11 +796,53 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 			}
 			return string(resp.Body)
 		},
+		// getResponse/getStrResponse 读取当前 VM 绑定的响应（__response），供 jsLib 复用上次请求结果。
+		"getResponse": func() goja.Value {
+			return newScriptHTTPResponse(vm, currentBoundResponse(vm), nil)
+		},
+		"getStrResponse": func(_ ...any) goja.Value {
+			return newScriptHTTPResponse(vm, currentBoundResponse(vm), nil)
+		},
+		// ajaxTestAll(urls[, timeoutMillis][, skipRateLimit])：并发批量请求，返回响应数组（JsExtensions.kt:161）。
+		"ajaxTestAll": func(call goja.FunctionCall) goja.Value {
+			if len(call.Arguments) == 0 {
+				return vm.NewArray()
+			}
+			urls := jsStringArray(vm, call.Argument(0))
+			timeoutIndex := 1
+			skipRate := len(call.Arguments) > 2 && call.Argument(2).ToBoolean()
+			responses := make([]goja.Value, 0, len(urls))
+			if r.policy.Fetcher == nil {
+				for range urls {
+					responses = append(responses, newScriptHTTPResponse(vm, nil, ErrScriptFailed))
+				}
+				return vm.ToValue(responses)
+			}
+			for _, rawURL := range urls {
+				callCtx, cancel := scriptCallContext(runCtx.ctx, call, timeoutIndex)
+				urlCtx := runCtx
+				urlCtx.ctx = callCtx
+				req, err := r.buildScriptRequest(urlCtx, vm, rawURL, nil)
+				if err == nil {
+					req.SkipRateLimit = skipRate
+					var resp *fetch.Response
+					resp, err = requestoption.Fetch(callCtx, r.policy.Fetcher, req, vmRequestEvaluator(vm))
+					responses = append(responses, newScriptHTTPResponse(vm, resp, err))
+				} else {
+					responses = append(responses, newScriptHTTPResponse(vm, nil, err))
+				}
+				cancel()
+			}
+			return vm.ToValue(responses)
+		},
 		"getCookie": func(call goja.FunctionCall) goja.Value {
 			if key := optionalString(call, 1); key != "" {
 				return vm.ToValue(r.cookie.GetKey(call.Argument(0).String(), key))
 			}
 			return vm.ToValue(r.cookie.GetCookie(call.Argument(0).String()))
+		},
+		"removeCookie": func(rawURL any) {
+			r.cookie.RemoveCookie(fmt.Sprint(rawURL))
 		},
 		"cacheFile": func(call goja.FunctionCall) goja.Value {
 			var saveTime int64
@@ -703,9 +874,13 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 			}
 			return text
 		},
-		"log": func(msg any) any {
-			r.log(fmt.Sprint(msg))
-			return msg
+		// log(...args)：写入脚本日志；单参数时返回该参数以便脚本链式使用。
+		"log": func(args ...any) any {
+			r.log(fmt.Sprint(args...))
+			if len(args) == 1 {
+				return args[0]
+			}
+			return nil
 		},
 		"logType": func(value goja.Value) {
 			if goja.IsUndefined(value) || goja.IsNull(value) {
@@ -726,23 +901,29 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 		},
 	}
 	for _, name := range []string{"webView", "webViewGetSource", "webViewGetOverrideUrl", "startBrowser", "startBrowserAwait", "getVerificationCode", "openUrl"} {
-		bindings[name] = unsupportedAPI(vm, name)
+		java[name] = unsupportedAPI(vm, name)
 	}
 	for name, fn := range r.fileBindings(runCtx, vm) {
-		bindings[name] = fn
+		java[name] = fn
 	}
-	return bindings
+	return java
 }
 
 func installJavaImporterCompat(vm *goja.Runtime) error {
+	if err := vm.Set("__readerStringBytes", func(value any, charset ...any) []byte {
+		charsetName := ""
+		if len(charset) > 0 {
+			charsetName = fmt.Sprint(charset[0])
+		}
+		return encodeStringBytes(fmt.Sprint(value), charsetName)
+	}); err != nil {
+		return err
+	}
 	if _, err := vm.RunString(`
 if (!String.prototype.getBytes) {
   Object.defineProperty(String.prototype, "getBytes", {
-    value: function(){
-      var s = this.toString();
-      var out = new Array(s.length);
-      for (var i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 255;
-      return out;
+    value: function(charset){
+      return __readerStringBytes(this.toString(), charset || "UTF-8");
     },
     configurable: true
   });
@@ -791,6 +972,10 @@ if (!String.prototype.headers) {
 	javaPkg := vm.NewObject()
 	javaLangPkg := vm.NewObject()
 	javaIoPkg := vm.NewObject()
+	javaNetPkg := vm.NewObject()
+	javaSecurityPkg := vm.NewObject()
+	javaSecurityInterfacesPkg := vm.NewObject()
+	javaSecuritySpecPkg := vm.NewObject()
 	javaUtilPkg := vm.NewObject()
 	javaUtilUUIDPkg := vm.NewObject()
 	javaUtilZipPkg := vm.NewObject()
@@ -799,6 +984,7 @@ if (!String.prototype.headers) {
 	javaxCryptoSpecPkg := vm.NewObject()
 	okhttpPkg := vm.NewObject()
 	androidPkg := vm.NewObject()
+	androidUtilPkg := vm.NewObject()
 	androidOsPkg := vm.NewObject()
 	androidBuildPkg := vm.NewObject()
 	cnPkg := vm.NewObject()
@@ -808,6 +994,39 @@ if (!String.prototype.headers) {
 	hutoolCoreCodecPkg := vm.NewObject()
 	hutoolCryptoPkg := vm.NewObject()
 	hutoolCryptoDigestPkg := vm.NewObject()
+	hutoolCryptoSymmetricPkg := vm.NewObject()
+	orgPkg := vm.NewObject()
+	orgJsoupPkg := vm.NewObject()
+	orgJsoupNodesPkg := vm.NewObject()
+
+	javaStringConstructor := func(value any, charset ...any) *goja.Object {
+		charsetName := ""
+		if len(charset) > 0 {
+			charsetName = fmt.Sprint(charset[0])
+		}
+		return javaStringCompat(vm, stringFromJavaValue(value, charsetName))
+	}
+	if err := javaLangPkg.Set("String", javaStringConstructor); err != nil {
+		return err
+	}
+	urlEncoder := map[string]any{
+		"encode": func(value any, charset ...any) string {
+			charsetName := ""
+			if len(charset) > 0 {
+				charsetName = fmt.Sprint(charset[0])
+			}
+			return urlrule.EncodeURI(fmt.Sprint(value), charsetName)
+		},
+	}
+	if err := javaNetPkg.Set("URLEncoder", urlEncoder); err != nil {
+		return err
+	}
+	if err := javaSecurityPkg.Set("interfaces", javaSecurityInterfacesPkg); err != nil {
+		return err
+	}
+	if err := javaSecurityPkg.Set("spec", javaSecuritySpecPkg); err != nil {
+		return err
+	}
 	if err := javaUtilUUIDPkg.Set("randomUUID", func() *goja.Object {
 		return javaStringCompat(vm, randomUUIDString())
 	}); err != nil {
@@ -823,6 +1042,12 @@ if (!String.prototype.headers) {
 		return err
 	}
 	if err := javaPkg.Set("io", javaIoPkg); err != nil {
+		return err
+	}
+	if err := javaPkg.Set("net", javaNetPkg); err != nil {
+		return err
+	}
+	if err := javaPkg.Set("security", javaSecurityPkg); err != nil {
 		return err
 	}
 	if err := javaPkg.Set("util", javaUtilPkg); err != nil {
@@ -843,6 +1068,9 @@ if (!String.prototype.headers) {
 	if err := androidOsPkg.Set("Build", androidBuildPkg); err != nil {
 		return err
 	}
+	if err := androidPkg.Set("util", androidUtilPkg); err != nil {
+		return err
+	}
 	if err := androidPkg.Set("os", androidOsPkg); err != nil {
 		return err
 	}
@@ -853,6 +1081,9 @@ if (!String.prototype.headers) {
 		return err
 	}
 	if err := hutoolCryptoPkg.Set("digest", hutoolCryptoDigestPkg); err != nil {
+		return err
+	}
+	if err := hutoolCryptoPkg.Set("symmetric", hutoolCryptoSymmetricPkg); err != nil {
 		return err
 	}
 	if err := hutoolPkg.Set("core", hutoolCorePkg); err != nil {
@@ -879,7 +1110,32 @@ if (!String.prototype.headers) {
 	if err := packages.Set("cn", cnPkg); err != nil {
 		return err
 	}
+	jsoupClass := jsoupClassBindings(vm)
+	if err := orgJsoupPkg.Set("Jsoup", jsoupClass); err != nil {
+		return err
+	}
+	if err := orgJsoupPkg.Set("nodes", orgJsoupNodesPkg); err != nil {
+		return err
+	}
+	if err := orgPkg.Set("jsoup", orgJsoupPkg); err != nil {
+		return err
+	}
+	if err := packages.Set("org", orgPkg); err != nil {
+		return err
+	}
 	if err := vm.Set("Packages", packages); err != nil {
+		return err
+	}
+	if err := vm.Set("android", androidPkg); err != nil {
+		return err
+	}
+	if err := vm.Set("URLEncoder", urlEncoder); err != nil {
+		return err
+	}
+	if err := vm.Set("Jsoup", jsoupClass); err != nil {
+		return err
+	}
+	if err := vm.Set("importClass", func(args ...any) {}); err != nil {
 		return err
 	}
 	if err := vm.Set("DigestUtil", map[string]any{
@@ -912,19 +1168,35 @@ if (!String.prototype.headers) {
 	}); err != nil {
 		return err
 	}
-	if err := vm.Set("Base64", map[string]any{
+	base64Compat := map[string]any{
+		"DEFAULT":    0,
+		"NO_PADDING": 1,
+		"NO_WRAP":    2,
+		"CRLF":       4,
+		"URL_SAFE":   8,
+		"encodeToString": func(value any, flags ...int) string {
+			return androidBase64Encoding(firstInt(flags)).EncodeToString(bytesFromJS(value))
+		},
+		"decode": func(value any, flags ...int) []byte {
+			encoding := androidBase64Encoding(firstInt(flags))
+			decoded, err := encoding.DecodeString(strings.TrimSpace(string(bytesFromJS(value))))
+			if err != nil {
+				return decodeBase64Bytes(strings.TrimSpace(string(bytesFromJS(value))))
+			}
+			return decoded
+		},
 		"getDecoder": func() map[string]any {
 			return map[string]any{
 				"decode": func(value any) []byte {
-					decoded, err := base64.StdEncoding.DecodeString(fmt.Sprint(value))
-					if err != nil {
-						return nil
-					}
-					return decoded
+					return decodeBase64Bytes(fmt.Sprint(value))
 				},
 			}
 		},
-	}); err != nil {
+	}
+	if err := vm.Set("Base64", base64Compat); err != nil {
+		return err
+	}
+	if err := androidUtilPkg.Set("Base64", base64Compat); err != nil {
 		return err
 	}
 	if err := vm.Set("Arrays", map[string]any{
@@ -944,17 +1216,59 @@ if (!String.prototype.headers) {
 	}); err != nil {
 		return err
 	}
-	if err := vm.Set("SecretKeySpec", func(value any, algorithm any) map[string]any {
+	secretKeySpec := func(value any, algorithm any) map[string]any {
 		return map[string]any{"key": bytesFromJS(value), "algorithm": fmt.Sprint(algorithm)}
-	}); err != nil {
+	}
+	if err := vm.Set("SecretKeySpec", secretKeySpec); err != nil {
 		return err
 	}
-	if err := vm.Set("IvParameterSpec", func(value any) map[string]any {
+	if err := javaxCryptoSpecPkg.Set("SecretKeySpec", secretKeySpec); err != nil {
+		return err
+	}
+	desKeySpec := func(value any) map[string]any {
+		return map[string]any{"key": bytesFromJS(value), "algorithm": "DES"}
+	}
+	if err := vm.Set("DESKeySpec", desKeySpec); err != nil {
+		return err
+	}
+	if err := javaxCryptoSpecPkg.Set("DESKeySpec", desKeySpec); err != nil {
+		return err
+	}
+	ivParameterSpec := func(value any) map[string]any {
 		return map[string]any{"iv": bytesFromJS(value)}
-	}); err != nil {
+	}
+	if err := vm.Set("IvParameterSpec", ivParameterSpec); err != nil {
 		return err
 	}
-	if err := vm.Set("Cipher", map[string]any{
+	if err := javaxCryptoSpecPkg.Set("IvParameterSpec", ivParameterSpec); err != nil {
+		return err
+	}
+	secretKeyFactory := map[string]any{
+		"getInstance": func(_ any) map[string]any {
+			return map[string]any{"generateSecret": func(spec any) any { return spec }}
+		},
+	}
+	if err := vm.Set("SecretKeyFactory", secretKeyFactory); err != nil {
+		return err
+	}
+	if err := javaxCryptoPkg.Set("SecretKeyFactory", secretKeyFactory); err != nil {
+		return err
+	}
+	macCompat := map[string]any{
+		"getInstance": func(algorithm any) map[string]any {
+			state := &javaMacCompat{algorithm: fmt.Sprint(algorithm)}
+			return map[string]any{"init": state.init, "doFinal": state.doFinal}
+		},
+	}
+	if err := vm.Set("Mac", macCompat); err != nil {
+		return err
+	}
+	if err := javaxCryptoPkg.Set("Mac", macCompat); err != nil {
+		return err
+	}
+	cipherCompat := map[string]any{
+		"ENCRYPT_MODE": 1,
+		"DECRYPT_MODE": 2,
 		"getInstance": func(transformation any) map[string]any {
 			state := &javaCipherCompat{transformation: fmt.Sprint(transformation)}
 			return map[string]any{
@@ -962,7 +1276,33 @@ if (!String.prototype.headers) {
 				"doFinal": state.doFinal,
 			}
 		},
-	}); err != nil {
+	}
+	if err := vm.Set("Cipher", cipherCompat); err != nil {
+		return err
+	}
+	if err := javaxCryptoPkg.Set("Cipher", cipherCompat); err != nil {
+		return err
+	}
+	newHutoolCipher := func(algorithm string) func(any, any, any, ...any) map[string]any {
+		return func(mode any, padding any, key any, iv ...any) map[string]any {
+			var ivValue any
+			if len(iv) > 0 {
+				ivValue = iv[0]
+			}
+			transformation := fmt.Sprintf("%s/%s/%s", algorithm, mode, padding)
+			return newSymmetricCryptoCompat(transformation, key, ivValue)
+		}
+	}
+	if err := hutoolCryptoSymmetricPkg.Set("AES", newHutoolCipher("AES")); err != nil {
+		return err
+	}
+	if err := hutoolCryptoSymmetricPkg.Set("DES", newHutoolCipher("DES")); err != nil {
+		return err
+	}
+	if err := orgJsoupNodesPkg.Set("Document", vm.NewObject()); err != nil {
+		return err
+	}
+	if err := orgJsoupNodesPkg.Set("Element", vm.NewObject()); err != nil {
 		return err
 	}
 	if err := vm.Set("ByteArrayInputStream", func(value any) map[string]any {
@@ -1071,6 +1411,7 @@ func rewriteJavaCompatScript(script string) string {
 
 type javaCipherCompat struct {
 	transformation string
+	mode           int
 	key            []byte
 	iv             []byte
 }
@@ -1142,19 +1483,6 @@ func (c *symmetricCryptoCompat) decryptBytes(value any) ([]byte, error) {
 
 func (c *symmetricCryptoCompat) encryptBytes(value any) ([]byte, error) {
 	return encryptSymmetricBytes(bytesFromJS(value), c.transformation, c.key, c.iv)
-}
-
-func (c *javaCipherCompat) init(mode int, keySpec map[string]any, ivSpec map[string]any) {
-	c.key = bytesFromJS(keySpec["key"])
-	c.iv = bytesFromJS(ivSpec["iv"])
-}
-
-func (c *javaCipherCompat) doFinal(value any) string {
-	decoded, err := aesCBCDecrypt(bytesFromJS(value), c.key, c.iv, c.transformation)
-	if err != nil {
-		return ""
-	}
-	return string(decoded)
 }
 
 type javaByteArrayOutputStream struct {
@@ -1363,37 +1691,61 @@ func (r *Runtime) fetchScriptURL(runCtx evalContext, vm *goja.Runtime, raw strin
 	if err != nil {
 		return nil, err
 	}
-	return r.policy.Fetcher.Fetch(runCtx.ctx, req)
+	// 走 requestoption.Fetch：bodyJs 链与 app 层请求保持同一套语义。
+	return requestoption.Fetch(runCtx.ctx, r.policy.Fetcher, req, vmRequestEvaluator(vm))
 }
 
-func scriptGetString(ctx context.Context, vm *goja.Runtime, input any, fallback any, rule string) string {
+func (r *Runtime) scriptGetStringAt(ctx context.Context, vm *goja.Runtime, input any, fallback any, rule string, baseURL string) string {
 	rule = strings.TrimSpace(rule)
 	if rule == "" {
 		return ""
 	}
 	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
-		RedirectURL: scriptAnalyzerBaseURL(vm),
+		BaseURL:     baseURL,
+		RedirectURL: baseURL,
 		SourceURL:   scriptAnalyzerSourceURL(vm),
+		Script:      vmAnalyzerScript{vm: vm},
 	})
-	if value, err := analyzer.GetString(ctx, rule, input); err == nil && value != "" {
+	// 反转义由 JS 绑定层按 unescape 参数决定，这里取原始文本，避免双重反转义。
+	if value, err := analyzer.GetStringRaw(ctx, rule, input); err == nil && value != "" {
 		return value
 	}
 	if fallback != nil {
-		if value, err := analyzer.GetString(ctx, rule, fallback); err == nil {
+		if value, err := analyzer.GetStringRaw(ctx, rule, fallback); err == nil {
 			return value
 		}
 	}
 	return ""
 }
 
-func scriptGetElements(ctx context.Context, vm *goja.Runtime, input any, rule string) []any {
+func (r *Runtime) scriptGetStringListAt(ctx context.Context, vm *goja.Runtime, input any, rule string, baseURL string) []string {
 	rule = strings.TrimSpace(rule)
 	if rule == "" {
 		return nil
 	}
 	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
-		RedirectURL: scriptAnalyzerBaseURL(vm),
+		BaseURL:     baseURL,
+		RedirectURL: baseURL,
 		SourceURL:   scriptAnalyzerSourceURL(vm),
+		Script:      vmAnalyzerScript{vm: vm},
+	})
+	values, err := analyzer.GetStringList(ctx, rule, input)
+	if err != nil {
+		return nil
+	}
+	return values
+}
+
+func (r *Runtime) scriptGetElementsAt(ctx context.Context, vm *goja.Runtime, input any, rule string, baseURL string) []any {
+	rule = strings.TrimSpace(rule)
+	if rule == "" {
+		return nil
+	}
+	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
+		BaseURL:     baseURL,
+		RedirectURL: baseURL,
+		SourceURL:   scriptAnalyzerSourceURL(vm),
+		Script:      vmAnalyzerScript{vm: vm},
 	})
 	elements, err := analyzer.GetElements(ctx, rule, input)
 	if err != nil {
@@ -1402,12 +1754,257 @@ func scriptGetElements(ctx context.Context, vm *goja.Runtime, input any, rule st
 	out := make([]any, 0)
 	for _, element := range elements {
 		if sel, ok := element.(*goquery.Selection); ok {
-			out = append(out, newSelectionBinding(sel))
+			out = append(out, newSelectionBinding(vm, sel))
 			continue
 		}
 		out = append(out, element)
 	}
 	return out
+}
+
+// scriptGetElementAt 先按 JSONPath 取单个值，取不到时回落到元素集合（Legado getElement 语义）。
+func (r *Runtime) scriptGetElementAt(ctx context.Context, vm *goja.Runtime, input any, rule string, baseURL string) goja.Value {
+	text := strings.TrimSpace(scriptInputString(input))
+	if json.Valid([]byte(text)) {
+		if adapter, err := jsonpath.New(text); err == nil {
+			if value, err := adapter.Object(normalizeScriptJSONRule(rule)); err == nil {
+				return vm.ToValue(value)
+			}
+		}
+	}
+	return newElementCollection(vm, r.scriptGetElementsAt(ctx, vm, input, rule, baseURL))
+}
+
+// normalizeScriptJSONRule 把裸字段名/点号路径补成 JSONPath 规则（@Json: 前缀与 $ 前缀原样保留）。
+func normalizeScriptJSONRule(rule string) string {
+	rule = strings.TrimSpace(rule)
+	if lower := strings.ToLower(rule); strings.HasPrefix(lower, "@json:") {
+		rule = strings.TrimSpace(rule[len("@json:"):])
+	}
+	if rule == "" || strings.HasPrefix(rule, "$") || strings.HasPrefix(rule, "@") {
+		if strings.HasPrefix(rule, "$.[") {
+			return "$" + strings.TrimPrefix(rule, "$.")
+		}
+		return rule
+	}
+	if strings.HasPrefix(rule, ".[") {
+		return "$" + strings.TrimPrefix(rule, ".")
+	}
+	if strings.HasPrefix(rule, ".") {
+		return "$" + rule
+	}
+	return "$." + rule
+}
+
+// scriptInputString 把分析输入统一成文本：JSON 对象/数组序列化后再分析。
+func scriptInputString(input any) string {
+	switch value := input.(type) {
+	case nil:
+		return ""
+	case string:
+		return value
+	case []byte:
+		return string(value)
+	default:
+		raw, err := json.Marshal(value)
+		if err == nil {
+			return string(raw)
+		}
+		return fmt.Sprint(value)
+	}
+}
+
+// vmAnalyzerScript 让规则分析器里的 @js 表达式在当前 VM 上求值，上下文与 java.* 绑定一致。
+type vmAnalyzerScript struct {
+	vm *goja.Runtime
+}
+
+func (s vmAnalyzerScript) Eval(ctx context.Context, scriptText string, input any) (any, error) {
+	return vmRequestEvaluator(s.vm)(ctx, scriptText, input)
+}
+
+// vmRequestEvaluator 用当前 VM 求值 URL 选项 js/bodyJs 等脚本表达式：求值期间把 result 绑定指向输入。
+func vmRequestEvaluator(vm *goja.Runtime) requestoption.Evaluator {
+	return func(ctx context.Context, scriptText string, input any) (any, error) {
+		previous := vm.Get("result")
+		if previous == nil {
+			previous = goja.Undefined()
+		}
+		if err := vm.Set("result", prepareBindingValue(vm, "result", input)); err != nil {
+			return nil, err
+		}
+		defer func() { _ = vm.Set("result", previous) }()
+		value, err := vm.RunString(rewriteJavaCompatScript(scriptText))
+		if err != nil {
+			return nil, err
+		}
+		return value.Export(), nil
+	}
+}
+
+// currentBoundResponse 读取 app 层写入的 __response 绑定，供 java.getResponse/getStrResponse 复用。
+func currentBoundResponse(vm *goja.Runtime) *fetch.Response {
+	if vm == nil {
+		return nil
+	}
+	value := vm.Get("__response")
+	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
+		return nil
+	}
+	switch response := value.Export().(type) {
+	case *fetch.Response:
+		return response
+	case fetch.Response:
+		return &response
+	default:
+		return nil
+	}
+}
+
+// newElementCollection 把元素列表包装成带 toArray/size/get/first 的 JS 集合（对齐 Legado Elements）。
+func newElementCollection(vm *goja.Runtime, values []any) *goja.Object {
+	normalized := make([]any, 0, len(values))
+	for _, value := range values {
+		if selection, ok := value.(*goquery.Selection); ok && selection != nil {
+			normalized = append(normalized, newSelectionBinding(vm, selection))
+			continue
+		}
+		normalized = append(normalized, value)
+	}
+	values = normalized
+	collection := vm.NewArray()
+	for i, value := range values {
+		_ = collection.Set(strconv.Itoa(i), value)
+	}
+	defineMethod := func(name string, method any) {
+		_ = collection.DefineDataProperty(name, vm.ToValue(method), goja.FLAG_TRUE, goja.FLAG_TRUE, goja.FLAG_FALSE)
+	}
+	defineMethod("toArray", func() *goja.Object { return collection })
+	defineMethod("size", func() int { return len(values) })
+	defineMethod("get", func(index int) goja.Value {
+		if index < 0 || index >= len(values) {
+			return goja.Undefined()
+		}
+		return collection.Get(strconv.Itoa(index))
+	})
+	defineMethod("first", func() goja.Value {
+		if len(values) == 0 {
+			return goja.Null()
+		}
+		return collection.Get("0")
+	})
+	defineMethod("text", func() string {
+		parts := make([]string, 0, len(values))
+		for _, value := range values {
+			if selection := selectionFromBinding(value); selection != nil {
+				if text := strings.TrimSpace(selection.Text()); text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		return strings.Join(parts, " ")
+	})
+	defineMethod("attr", func(name string) string {
+		for _, value := range values {
+			if selection := selectionFromBinding(value); selection != nil {
+				attribute, _ := selection.Attr(name)
+				return attribute
+			}
+		}
+		return ""
+	})
+	defineMethod("html", func() string {
+		parts := make([]string, 0, len(values))
+		for _, value := range values {
+			if selection := selectionFromBinding(value); selection != nil {
+				if content, err := selection.Html(); err == nil {
+					parts = append(parts, content)
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	})
+	defineMethod("select", func(selector string) *goja.Object {
+		selected := make([]any, 0)
+		for _, value := range values {
+			selection := selectionFromBinding(value)
+			if selection == nil {
+				continue
+			}
+			selection.Find(selector).Each(func(_ int, item *goquery.Selection) {
+				selected = append(selected, newSelectionBinding(vm, item))
+			})
+		}
+		return newElementCollection(vm, selected)
+	})
+	defineMethod("selectFirst", func(selector string) goja.Value {
+		selected := make([]any, 0, 1)
+		for _, value := range values {
+			selection := selectionFromBinding(value)
+			if selection == nil {
+				continue
+			}
+			if first := selection.Find(selector).First(); first.Length() > 0 {
+				selected = append(selected, first)
+				break
+			}
+		}
+		if len(selected) == 0 {
+			return goja.Null()
+		}
+		return vm.ToValue(newSelectionBinding(vm, selected[0].(*goquery.Selection)))
+	})
+	defineMethod("not", func(selector string) *goja.Object {
+		filtered := make([]any, 0, len(values))
+		for _, value := range values {
+			selection := selectionFromBinding(value)
+			if selection != nil && !selection.Is(selector) {
+				filtered = append(filtered, value)
+			}
+		}
+		return newElementCollection(vm, filtered)
+	})
+	return collection
+}
+
+// scriptCallContext 按调用的超时参数派生本次请求的 ctx（毫秒；未传或 <=0 时只做取消）。
+func scriptCallContext(parent context.Context, call goja.FunctionCall, timeoutIndex int) (context.Context, context.CancelFunc) {
+	if timeoutIndex >= 0 && len(call.Arguments) > timeoutIndex && !goja.IsUndefined(call.Argument(timeoutIndex)) && !goja.IsNull(call.Argument(timeoutIndex)) {
+		milliseconds := call.Argument(timeoutIndex).ToInteger()
+		if milliseconds > 0 {
+			return context.WithTimeout(parent, time.Duration(milliseconds)*time.Millisecond)
+		}
+	}
+	return context.WithCancel(parent)
+}
+
+// jsStringArray 把 JS 数组转成字符串切片。
+func jsStringArray(vm *goja.Runtime, value goja.Value) []string {
+	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
+		return nil
+	}
+	obj := value.ToObject(vm)
+	if obj == nil {
+		return nil
+	}
+	length := int(obj.Get("length").ToInteger())
+	out := make([]string, 0, length)
+	for i := range length {
+		out = append(out, obj.Get(strconv.Itoa(i)).String())
+	}
+	return out
+}
+
+// sourceUserAgent 取书源 header 里的 User-Agent（@js 形式除外），缺省时用 Reader 默认 UA。
+func sourceUserAgent(src *domainsource.BookSource) string {
+	if src != nil {
+		for key, value := range parseHeaderJSONString(src.Header) {
+			if strings.EqualFold(key, "User-Agent") && strings.TrimSpace(value) != "" {
+				return value
+			}
+		}
+	}
+	return "Reader/0.1.0"
 }
 
 func scriptAnalyzerBaseURL(vm *goja.Runtime) string {
@@ -1442,14 +2039,39 @@ func scriptAnalyzerSourceURL(vm *goja.Runtime) string {
 	return ""
 }
 
-func newSelectionBinding(sel *goquery.Selection) map[string]any {
-	return map[string]any{
+func newSelectionBinding(vm *goja.Runtime, sel *goquery.Selection) map[string]any {
+	var binding map[string]any
+	binding = map[string]any{
 		"__selection": sel,
-		"select": func(rule string) map[string]any {
-			return newSelectionBinding(sel.Find(rule).First())
+		"select": func(rule string) *goja.Object {
+			values := make([]any, 0, sel.Find(rule).Length())
+			sel.Find(rule).Each(func(_ int, item *goquery.Selection) {
+				values = append(values, newSelectionBinding(vm, item))
+			})
+			return newElementCollection(vm, values)
 		},
 		"parentNode": func() map[string]any {
-			return newSelectionBinding(sel.Parent().First())
+			return newSelectionBinding(vm, sel.Parent().First())
+		},
+		"previousElementSibling": func() any {
+			previous := sel.Prev().First()
+			if previous.Length() == 0 {
+				return nil
+			}
+			return newSelectionBinding(vm, previous)
+		},
+		"first": func() map[string]any {
+			return binding
+		},
+		"selectFirst": func(rule string) any {
+			first := sel.Find(rule).First()
+			if first.Length() == 0 {
+				return nil
+			}
+			return newSelectionBinding(vm, first)
+		},
+		"hasClass": func(name string) bool {
+			return sel.HasClass(name)
 		},
 		"text": func() string {
 			return strings.TrimSpace(sel.Text())
@@ -1462,7 +2084,12 @@ func newSelectionBinding(sel *goquery.Selection) map[string]any {
 			value, _ := sel.Html()
 			return value
 		},
+		"toString": func() string {
+			value, _ := goquery.OuterHtml(sel)
+			return value
+		},
 	}
+	return binding
 }
 
 func getRuntimeVariable(vm *goja.Runtime, key string) (any, bool) {
@@ -1708,12 +2335,13 @@ func (r *Runtime) fetchScriptCall(runCtx evalContext, vm *goja.Runtime, method s
 	}
 	if present(headerIndex) {
 		mergeHeaders(req.Headers, normalizeScriptOptions(call.Argument(headerIndex).Export()))
+		// headers 里的 proxy 键是代理配置而非 HTTP 头（AnalyzeUrl.kt:128-131）。
 		if proxy, ok := req.Headers["proxy"]; ok {
 			delete(req.Headers, "proxy")
 			req.Proxy = strings.TrimSpace(proxy)
 		}
 	}
-	return r.policy.Fetcher.Fetch(runCtx.ctx, req)
+	return requestoption.Fetch(runCtx.ctx, r.policy.Fetcher, req, vmRequestEvaluator(vm))
 }
 
 type scriptHTTPRequest struct {
@@ -1754,6 +2382,19 @@ func newScriptHTTPResponse(vm *goja.Runtime, resp *fetch.Response, err error) go
 	_ = obj.Set("url", urlValue)
 	_ = obj.Set("statusCode", resp.StatusCode)
 	_ = obj.Set("headers", headersValue)
+	_ = obj.Set("cookies", func() map[string]string {
+		cookies := map[string]string{}
+		if resp.Headers == nil {
+			return cookies
+		}
+		for _, raw := range resp.Headers.Values("Set-Cookie") {
+			cookie, parseErr := http.ParseSetCookie(raw)
+			if parseErr == nil {
+				cookies[cookie.Name] = cookie.Value
+			}
+		}
+		return cookies
+	})
 	_ = obj.Set("code", func() int {
 		return resp.StatusCode
 	})
@@ -1784,8 +2425,20 @@ func newScriptHTTPResponse(vm *goja.Runtime, resp *fetch.Response, err error) go
 	return obj
 }
 
+// callableString 生成既能当字符串用（隐式转换）、又能像方法一样调用（`res.body()`）的值；
+// 同时把 String.prototype 的方法转发到真实字符串，使 Legado 书源里 `result.body.replace(...)`
+// 这类按属性直接调用字符串方法的写法同样可用。
 func callableString(vm *goja.Runtime, value string) *goja.Object {
-	fn, err := vm.RunString("(function(v){ var f = function(){ return v; }; f.toString = function(){ return v; }; f.valueOf = function(){ return v; }; return f; })")
+	fn, err := vm.RunString(`(function(v){
+  var f = function(){ return v; };
+  f.toString = function(){ return v; };
+  f.valueOf = function(){ return v; };
+  Object.getOwnPropertyNames(String.prototype).forEach(function(name){
+    if (name === 'constructor' || typeof String.prototype[name] !== 'function') { return; }
+    f[name] = function(){ return String.prototype[name].apply(v, arguments); };
+  });
+  return f;
+})`)
 	if err != nil {
 		panic(err)
 	}
@@ -1840,20 +2493,18 @@ func (r *Runtime) buildScriptRequest(runCtx evalContext, vm *goja.Runtime, raw s
 	if err != nil {
 		return fetch.Request{}, err
 	}
-	custom := parseCustomURL(expanded)
-	if err := validateRuntimeSupportedURLOptions(custom.Attribute, scriptSupportedURLOptions...); err != nil {
+	if err := validateRuntimeSupportedURLOptions(urlrule.ParseCustom(expanded).Attribute, scriptSupportedURLOptions...); err != nil {
 		return fetch.Request{}, runCtx.wrap(ErrScriptFailed, err)
 	}
 	baseURL := r.policy.BaseURL
 	if baseURL == "" && src != nil {
 		baseURL = stripSourceSuffix(src.BookSourceURL)
 	}
-	targetURL := urlrule.Absolute(baseURL, custom.URL)
-	if targetURL == "" {
-		targetURL = custom.URL
-	}
-	req := fetch.Request{URL: targetURL, Method: "GET", Headers: map[string]string{}, UseCookieJar: src != nil && src.EnabledCookieJar}
+	req := fetch.Request{Method: http.MethodGet, Headers: map[string]string{}}
 	if src != nil {
+		req.UseCookieJar = src.EnabledCookieJar
+		req.SourceKey = stripSourceSuffix(src.BookSourceURL)
+		req.ConcurrentRate = src.ConcurrentRate
 		headers, err := r.runtimeHeaderMap(runCtx, vm)
 		if err != nil {
 			return fetch.Request{}, runCtx.wrap(ErrScriptFailed, err)
@@ -1865,12 +2516,17 @@ func (r *Runtime) buildScriptRequest(runCtx evalContext, vm *goja.Runtime, raw s
 	for key, value := range extraHeaders {
 		req.Headers[key] = value
 	}
-	applyURLOptions(&req, custom.Attribute)
+	// URL 选项（js/bodyJs/retry/webView/proxy/dnsIp/body…）与 app 层共用 requestoption，语义不分叉。
+	req, err = requestoption.Build(runCtx.ctx, expanded, baseURL, req, vmRequestEvaluator(vm))
+	if err != nil {
+		return fetch.Request{}, runCtx.wrap(ErrScriptFailed, err)
+	}
 	return req, nil
 }
 
 // scriptSupportedURLOptions 是脚本网络请求可识别的 URL 选项；serverID 仅用于 Legado WebDav，接受后忽略。
-var scriptSupportedURLOptions = []string{"method", "body", "headers", "type", "charset", "origin", "retry", "proxy", "dnsIp", "serverID"}
+// webView 只作为 HTTP 回落使用，webJs/webViewDelayTime 需要真实 WebView，非零值时按不支持处理。
+var scriptSupportedURLOptions = []string{"method", "body", "headers", "type", "charset", "origin", "retry", "proxy", "dnsIp", "serverID", "js", "bodyJs", "webView"}
 
 func (r *Runtime) runtimeHeaderMap(runCtx evalContext, vm *goja.Runtime) (map[string]string, error) {
 	src := runCtx.src
@@ -1905,6 +2561,17 @@ func (r *Runtime) runtimeHeaderMap(runCtx evalContext, vm *goja.Runtime) (map[st
 	}
 	for key, value := range parseHeaderJSONString(loginHeader) {
 		headers[key] = value
+	}
+	// 书源 header 的 proxy 键是网络代理配置而非 HTTP 头（AnalyzeUrl.kt:128-131）：空值丢弃，
+	// 非空值需要代理客户端支持，脚本侧按不支持报错，避免被当成请求头发出去。
+	for key, value := range headers {
+		if !strings.EqualFold(strings.TrimSpace(key), "proxy") {
+			continue
+		}
+		delete(headers, key)
+		if strings.TrimSpace(value) != "" {
+			return nil, fmt.Errorf("%w: source proxy is not supported", requestoption.ErrUnsupportedURLOption)
+		}
 	}
 	return headers, nil
 }
@@ -1972,81 +2639,6 @@ func parseHeaderJSONString(raw string) map[string]string {
 		out[key] = fmt.Sprint(value)
 	}
 	return out
-}
-
-// applyURLOptions 对齐 AnalyzeUrl.UrlOption：body 可为字符串或对象/数组（序列化为 JSON），
-// type 非空时响应按 hex 返回，origin 写入 Origin/Referer；proxy/dnsIp 交给 fetcher 处理。
-func applyURLOptions(req *fetch.Request, opts map[string]any) {
-	var (
-		charsetName string
-		rawFormBody string
-	)
-	for key, value := range opts {
-		switch strings.ToLower(key) {
-		case "method":
-			if method, ok := value.(string); ok && strings.TrimSpace(method) != "" {
-				req.Method = strings.ToUpper(strings.TrimSpace(method))
-			}
-		case "body":
-			switch body := value.(type) {
-			case string:
-				rawFormBody = body
-				if urlrule.LooksLikeFormBody(body) {
-					req.Body = []byte(urlrule.EncodeFormString(body, ""))
-					if req.Headers["Content-Type"] == "" {
-						req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
-					}
-				} else {
-					req.Body = []byte(body)
-				}
-			case map[string]any, []any:
-				if encoded, err := json.Marshal(body); err == nil {
-					req.Body = encoded
-					if req.Headers["Content-Type"] == "" {
-						req.Headers["Content-Type"] = "application/json"
-					}
-				}
-			}
-		case "headers":
-			mergeHeaders(req.Headers, value)
-		case "type":
-			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-				req.EncodeBodyAsHex = true
-			}
-		case "origin":
-			if origin, ok := value.(string); ok && strings.TrimSpace(origin) != "" {
-				req.Headers["Origin"] = strings.TrimSpace(origin)
-				if req.Headers["Referer"] == "" {
-					req.Headers["Referer"] = strings.TrimSpace(origin)
-				}
-			}
-		case "charset":
-			if text, ok := value.(string); ok {
-				charsetName = strings.TrimSpace(text)
-			}
-		case "proxy":
-			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-				req.Proxy = strings.TrimSpace(text)
-			}
-		case "dnsip":
-			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-				req.DNSIP = strings.TrimSpace(text)
-			}
-		case "retry":
-			urlrule.ApplyRetryOption(req, value)
-		}
-	}
-	// 书源 header 中的 proxy 键是代理配置而非 HTTP 头（AnalyzeUrl.kt:128-131）；URL 选项 proxy 优先。
-	if proxy, ok := req.Headers["proxy"]; ok {
-		delete(req.Headers, "proxy")
-		if req.Proxy == "" {
-			req.Proxy = strings.TrimSpace(proxy)
-		}
-	}
-	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
-	if rawFormBody != "" && urlrule.LooksLikeFormBody(rawFormBody) {
-		req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
-	}
 }
 
 func mergeHeaders(headers map[string]string, value any) {
@@ -2119,25 +2711,58 @@ func emptyCompatLookupMap() map[string]any {
 	}
 }
 
+// hmacHex 计算 HMAC 并返回十六进制摘要。
 func hmacHex(data string, algorithm string, key string) string {
+	return hex.EncodeToString(hmacBytes([]byte(data), algorithm, []byte(key)))
+}
+
+// hmacBytes 按算法名（HmacSHA256 / SHA-256 等写法均可）计算 HMAC，未知算法回落到 SHA-256。
+func hmacBytes(data []byte, algorithm string, key []byte) []byte {
 	normalized := strings.ToLower(strings.ReplaceAll(algorithm, "-", ""))
 	var mac hashWriter
 	switch normalized {
 	case "hmacmd5", "md5":
-		mac = hmac.New(md5.New, []byte(key))
+		mac = hmac.New(md5.New, key)
 	case "hmacsha1", "sha1":
-		mac = hmac.New(sha1.New, []byte(key))
+		mac = hmac.New(sha1.New, key)
 	case "hmacsha256", "sha256":
-		mac = hmac.New(sha256.New, []byte(key))
+		mac = hmac.New(sha256.New, key)
 	case "hmacsha384", "sha384":
-		mac = hmac.New(sha512.New384, []byte(key))
+		mac = hmac.New(sha512.New384, key)
 	case "hmacsha512", "sha512":
-		mac = hmac.New(sha512.New, []byte(key))
+		mac = hmac.New(sha512.New, key)
 	default:
-		mac = hmac.New(sha256.New, []byte(key))
+		mac = hmac.New(sha256.New, key)
 	}
-	_, _ = mac.Write([]byte(data))
-	return hex.EncodeToString(mac.Sum(nil))
+	_, _ = mac.Write(data)
+	return mac.Sum(nil)
+}
+
+// digestHex 按摘要算法名（MD5/SHA-1/SHA-256 等）返回十六进制摘要，未知算法返回空串。
+func digestHex(data string, algorithm string) string {
+	normalized := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToUpper(algorithm))
+	switch normalized {
+	case "MD5":
+		sum := md5.Sum([]byte(data))
+		return hex.EncodeToString(sum[:])
+	case "SHA1":
+		sum := sha1.Sum([]byte(data))
+		return hex.EncodeToString(sum[:])
+	case "SHA224":
+		sum := sha256.Sum224([]byte(data))
+		return hex.EncodeToString(sum[:])
+	case "SHA256":
+		sum := sha256.Sum256([]byte(data))
+		return hex.EncodeToString(sum[:])
+	case "SHA384":
+		sum := sha512.Sum384([]byte(data))
+		return hex.EncodeToString(sum[:])
+	case "SHA512":
+		sum := sha512.Sum512([]byte(data))
+		return hex.EncodeToString(sum[:])
+	default:
+		return ""
+	}
 }
 
 type hashWriter interface {
@@ -2220,8 +2845,21 @@ func javaStringCompat(vm *goja.Runtime, value string) *goja.Object {
 	_ = obj.Set("replace", func(oldValue any, newValue any) *goja.Object {
 		return javaStringCompat(vm, strings.ReplaceAll(value, fmt.Sprint(oldValue), fmt.Sprint(newValue)))
 	})
+	_ = obj.Set("getBytes", func(charset ...any) []byte {
+		charsetName := ""
+		if len(charset) > 0 {
+			charsetName = fmt.Sprint(charset[0])
+		}
+		return encodeStringBytes(value, charsetName)
+	})
 	_ = obj.Set("toLowerCase", func() string {
 		return strings.ToLower(value)
+	})
+	_ = obj.Set("toUpperCase", func() *goja.Object {
+		return javaStringCompat(vm, strings.ToUpper(value))
+	})
+	_ = obj.Set("trim", func() *goja.Object {
+		return javaStringCompat(vm, strings.TrimSpace(value))
 	})
 	_ = obj.Set("split", func(sep any) []string {
 		return strings.Split(value, fmt.Sprint(sep))
@@ -2245,6 +2883,14 @@ func aesBase64DecodeToString(data string, key string, transformation string, iv 
 		return "", err
 	}
 	return string(plain), nil
+}
+
+func aesEncodeToBase64String(data string, key string, transformation string, iv string) (string, error) {
+	cipherText, err := encryptSymmetricBytes([]byte(data), transformation, []byte(key), []byte(iv))
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(cipherText), nil
 }
 
 func desEncodeToBase64String(data string, key string, transformation string, iv string) (string, error) {
@@ -2515,4 +3161,261 @@ func isZeroLikeRuntimeOption(value any) bool {
 	default:
 		return false
 	}
+}
+
+// ==== 合并自 origin/master 的兼容层辅助实现 ====
+
+func androidBase64Encoding(flags int) *base64.Encoding {
+	encoding := base64.StdEncoding
+	if flags&8 != 0 {
+		encoding = base64.URLEncoding
+	}
+	if flags&1 != 0 {
+		encoding = encoding.WithPadding(base64.NoPadding)
+	}
+	return encoding
+}
+
+func chineseNumber(value string) (int, bool) {
+	digits := map[rune]int{'零': 0, '〇': 0, '一': 1, '壹': 1, '二': 2, '贰': 2, '两': 2, '三': 3, '叁': 3, '四': 4, '肆': 4, '五': 5, '伍': 5, '六': 6, '陆': 6, '七': 7, '柒': 7, '八': 8, '捌': 8, '九': 9, '玖': 9}
+	units := map[rune]int{'十': 10, '拾': 10, '百': 100, '佰': 100, '千': 1000, '仟': 1000, '万': 10000, '亿': 100000000}
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) == 0 {
+		return 0, false
+	}
+	onlyDigits := true
+	for _, r := range runes {
+		if _, ok := units[r]; ok {
+			onlyDigits = false
+			break
+		}
+	}
+	if onlyDigits {
+		var b strings.Builder
+		for _, r := range runes {
+			switch {
+			case r >= '0' && r <= '9':
+				b.WriteRune(r)
+			case r >= '０' && r <= '９':
+				b.WriteRune('0' + (r - '０'))
+			default:
+				digit, ok := digits[r]
+				if !ok {
+					return 0, false
+				}
+				b.WriteByte(byte('0' + digit))
+			}
+		}
+		parsed, err := strconv.Atoi(b.String())
+		return parsed, err == nil
+	}
+	total, section, current := 0, 0, 0
+	for _, r := range runes {
+		if r >= '0' && r <= '9' {
+			current = current*10 + int(r-'0')
+			continue
+		}
+		if r >= '０' && r <= '９' {
+			current = current*10 + int(r-'０')
+			continue
+		}
+		if digit, ok := digits[r]; ok {
+			current = digit
+			continue
+		}
+		unit, ok := units[r]
+		if !ok {
+			return 0, false
+		}
+		if unit < 10000 {
+			if current == 0 {
+				current = 1
+			}
+			section += current * unit
+		} else {
+			section += current
+			if section == 0 {
+				section = 1
+			}
+			total += section * unit
+			section = 0
+		}
+		current = 0
+	}
+	return total + section + current, true
+}
+
+func decodeBase64Bytes(value string) []byte {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	encodings := []*base64.Encoding{
+		base64.StdEncoding,
+		base64.RawStdEncoding,
+		base64.URLEncoding,
+		base64.RawURLEncoding,
+	}
+	for _, encoding := range encodings {
+		if decoded, err := encoding.DecodeString(value); err == nil {
+			return decoded
+		}
+	}
+	return nil
+}
+
+func decodeStringBytes(value any, charsetName string) string {
+	data := bytesFromJS(value)
+	charsetName = normalizeCharsetName(charsetName)
+	if strings.EqualFold(charsetName, "UTF-8") || strings.EqualFold(charsetName, "UTF8") {
+		return string(data)
+	}
+	encoding, err := htmlindex.Get(charsetName)
+	if err != nil || encoding == nil {
+		return string(data)
+	}
+	decoded, _, err := transform.Bytes(encoding.NewDecoder(), data)
+	if err != nil {
+		return string(data)
+	}
+	return string(decoded)
+}
+
+func encodeStringBytes(value string, charsetName string) []byte {
+	charsetName = normalizeCharsetName(charsetName)
+	if strings.EqualFold(charsetName, "UTF-8") || strings.EqualFold(charsetName, "UTF8") {
+		return []byte(value)
+	}
+	encoding, err := htmlindex.Get(charsetName)
+	if err != nil || encoding == nil {
+		return []byte(value)
+	}
+	encoded, _, err := transform.Bytes(encoding.NewEncoder(), []byte(value))
+	if err != nil {
+		return []byte(value)
+	}
+	return encoded
+}
+
+func firstInt(values []int) int {
+	if len(values) == 0 {
+		return 0
+	}
+	return values[0]
+}
+
+func jsoupBindings(vm *goja.Runtime) map[string]any {
+	return map[string]any{
+		"jsoup": map[string]any{
+			"Jsoup": jsoupClassBindings(vm),
+		},
+	}
+}
+
+func jsoupClassBindings(vm *goja.Runtime) map[string]any {
+	parse := func(raw any) (*goja.Object, error) {
+		doc, err := goquery.NewDocumentFromReader(strings.NewReader(fmt.Sprint(raw)))
+		if err != nil {
+			return nil, err
+		}
+		return newElementCollection(vm, []any{newSelectionBinding(vm, doc.Selection)}), nil
+	}
+	return map[string]any{
+		"parse": parse,
+	}
+}
+
+func normalizeCharsetName(charsetName string) string {
+	charsetName = strings.TrimSpace(strings.ReplaceAll(charsetName, "_", "-"))
+	if charsetName == "" {
+		return "UTF-8"
+	}
+	return charsetName
+}
+
+func putRuntimeVariable(vm *goja.Runtime, key string, value any) {
+	vars := vm.Get("__variables")
+	if goja.IsUndefined(vars) || goja.IsNull(vars) {
+		obj := vm.NewObject()
+		_ = vm.Set("__variables", obj)
+		vars = obj
+	}
+	if obj := vars.ToObject(vm); obj != nil {
+		_ = obj.Set(key, value)
+	}
+}
+
+func selectionFromBinding(value any) *goquery.Selection {
+	if selection, ok := value.(*goquery.Selection); ok {
+		return selection
+	}
+	binding, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	selection, _ := binding["__selection"].(*goquery.Selection)
+	return selection
+}
+
+func stringFromJavaValue(value any, charsetName string) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return decodeStringBytes(value, charsetName)
+}
+
+var chapterNumberPattern = regexp.MustCompile(`第([^章]+)章`)
+
+func toNumericChapter(value string) string {
+	match := chapterNumberPattern.FindStringSubmatchIndex(value)
+	if len(match) != 4 {
+		return value
+	}
+	number, ok := chineseNumber(value[match[2]:match[3]])
+	if !ok {
+		return value
+	}
+	return value[:match[2]] + strconv.Itoa(number) + value[match[3]:]
+}
+
+func (s *javaByteArrayOutputStream) ToString() string {
+	return s.buf.String()
+}
+
+type javaMacCompat struct {
+	algorithm string
+	key       []byte
+}
+
+// ==== 合并自 origin/master 的兼容层辅助实现 ====
+
+func (m *javaMacCompat) init(keySpec any) {
+	m.key = bytesFromJS(keySpec)
+}
+
+func (m *javaMacCompat) doFinal(value any) []byte {
+	return hmacBytes(bytesFromJS(value), m.algorithm, m.key)
+}
+
+func (c *javaCipherCompat) init(mode int, keySpec any, ivSpec ...any) {
+	c.mode = mode
+	c.key = bytesFromJS(keySpec)
+	if len(ivSpec) > 0 {
+		c.iv = bytesFromJS(ivSpec[0])
+	}
+}
+
+func (c *javaCipherCompat) doFinal(value any) any {
+	if c.mode == 1 {
+		encoded, err := encryptSymmetricBytes(bytesFromJS(value), c.transformation, c.key, c.iv)
+		if err != nil {
+			return []byte(nil)
+		}
+		return encoded
+	}
+	decoded, err := decryptSymmetricBytes(bytesFromJS(value), c.transformation, c.key, c.iv)
+	if err != nil {
+		return ""
+	}
+	return string(decoded)
 }

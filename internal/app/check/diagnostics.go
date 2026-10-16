@@ -27,9 +27,12 @@ func (u *DiagnosticsUpdater) Apply(ctx context.Context, item *task.CheckTaskItem
 		return err
 	}
 	src.RespondTime = item.RespondTime
-	src.BookSourceComment = removeErrorComment(src.BookSourceComment)
-	src.BookSourceGroup = removeFailureGroups(src.BookSourceGroup)
-	if item.Status == task.CheckItemFailed {
+	if item.Status == task.CheckItemPassed {
+		src.BookSourceComment = removeErrorComment(src.BookSourceComment)
+		src.BookSourceGroup = removeFailureGroups(src.BookSourceGroup)
+	} else if item.Status == task.CheckItemFailed && isDefinitiveSourceFailure(item.FailureClass) {
+		src.BookSourceComment = removeErrorComment(src.BookSourceComment)
+		src.BookSourceGroup = removeFailureGroups(src.BookSourceGroup)
 		group := groupForFailure(item.FailureCode, item.Path)
 		src.BookSourceGroup = addGroup(src.BookSourceGroup, group)
 		if item.Message != "" {
@@ -51,6 +54,8 @@ func groupForFailure(code string, path task.CheckItemPath) string {
 		return "搜索失效"
 	case FailureDiscoveryFailed:
 		return "发现失效"
+	case FailureInfoFailed:
+		return "详情失效"
 	case FailureSearchRuleEmpty:
 		return "搜索链接规则为空"
 	case FailureDiscoveryRuleEmpty:
@@ -69,6 +74,26 @@ func pathPrefix(path task.CheckItemPath) string {
 		return "发现"
 	}
 	return "搜索"
+}
+
+// isDefinitiveSourceFailure 判断失败是否已经足够确定，可以把书源写进“失效”分组和 // Error: 注释：
+// 只有确定的源空结果与规则失败可以污染书源元数据，网络/HTTP/浏览器边界等失败只保留任务诊断。
+func isDefinitiveSourceFailure(class string) bool {
+	if class == "" {
+		return true
+	}
+	switch class {
+	case "source_search_empty_result",
+		"source_discovery_empty_result",
+		"source_toc_empty",
+		"source_content_empty",
+		"source_download_urls_empty",
+		"source_rule_script_syntax_error",
+		"source_rule_script_failed":
+		return true
+	default:
+		return false
+	}
 }
 
 func addErrorComment(comment string, message string) string {

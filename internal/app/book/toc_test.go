@@ -121,7 +121,7 @@ func TestTocServiceAppliesTocURLOptions(t *testing.T) {
 
 func TestTocServiceAppliesLoginCheckJS(t *testing.T) {
 	src := testTocSource()
-	src.LoginCheckJS = `result.replace("old", "")`
+	src.LoginCheckJS = `result.body.replace("old", "")`
 	fetcher := &fakeTocFetcher{pages: map[string]fetch.Response{
 		"https://site.example.test/toc/1": {URL: "https://site.example.test/toc/1", Body: []byte(`old` + tocHTML(false))},
 	}}

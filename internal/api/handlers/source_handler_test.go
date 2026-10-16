@@ -65,6 +65,8 @@ func TestSourceHandlersCreateListGetAndUpdate(t *testing.T) {
 		"customOrder":7,
 		"enabled":true,
 		"enabledExplore":true,
+		"eventListener":true,
+		"customButton":true,
 		"enabledCookieJar":true,
 		"lastUpdateTime":10,
 		"ruleSearch":{"bookList":".item"}
@@ -78,7 +80,7 @@ func TestSourceHandlersCreateListGetAndUpdate(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
-	if created.SourceId == "" || created.BookSourceName != "Example" {
+	if created.SourceId == "" || created.BookSourceName != "Example" || created.EventListener == nil || !*created.EventListener || created.CustomButton == nil || !*created.CustomButton {
 		t.Fatalf("created = %#v", created)
 	}
 
@@ -477,6 +479,61 @@ func TestBookHandlersRefreshInfoExposesDownloadURLs(t *testing.T) {
 	if got.DownloadUrls == nil || len(*got.DownloadUrls) != 2 {
 		t.Fatalf("book = %#v", got)
 	}
+}
+
+func TestBookHandlerExportsCompleteTXT(t *testing.T) {
+	router, bookRepo, chapterRepo := newBookHandlerTestRouter(t)
+	b := &book.Book{
+		BookURL:    "https://site.example.test/book/export",
+		Origin:     "https://source.example.test",
+		OriginName: "Source",
+		Name:       "斗破苍穹/测试",
+		Author:     "天蚕土豆",
+		Intro:      "少年成长",
+	}
+	if err := bookRepo.Save(context.Background(), b); err != nil {
+		t.Fatalf("save book: %v", err)
+	}
+	bookID := repositoryBookID(b.BookURL)
+	if err := chapterRepo.ReplaceByBook(context.Background(), bookID, []*book.BookChapter{{
+		BookURL: b.BookURL,
+		URL:     "https://site.example.test/content/export",
+		Title:   "第一章",
+		Index:   0,
+	}}); err != nil {
+		t.Fatalf("save chapters: %v", err)
+	}
+	if err := chapterRepo.SaveContent(context.Background(), bookID, 0, "正文内容"); err != nil {
+		t.Fatalf("save content: %v", err)
+	}
+
+	rec := authedRequest(router, http.MethodGet, "/api/v1/books/"+bookID+"/export.txt", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Fatalf("content type = %q", got)
+	}
+	if got := rec.Header().Get("Content-Disposition"); !strings.Contains(got, "attachment") || !strings.Contains(got, "filename*=UTF-8''%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9_%E6%B5%8B%E8%AF%95.txt") {
+		t.Fatalf("content disposition = %q", got)
+	}
+	// 导出走阅读路径（Legado ExportBookService.getExportData 同样调用 ContentProcessor.getContent），
+	// 因此正文按替换规则/分段格式化，段首带两个全角空格。
+	want := "斗破苍穹/测试\n作者：天蚕土豆\n简介：少年成长\n\n第一章\n　　正文内容\n\n"
+	if rec.Body.String() != want {
+		t.Fatalf("body = %q, want %q", rec.Body.String(), want)
+	}
+	if err := chapterRepo.SaveContent(context.Background(), bookID, 0, ""); err != nil {
+		t.Fatalf("clear content: %v", err)
+	}
+	rec = authedRequest(router, http.MethodGet, "/api/v1/books/"+bookID+"/export.txt", "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("failed export status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Disposition"); got != "" {
+		t.Fatalf("failed export content disposition = %q", got)
+	}
+	assertErrorCode(t, rec, "content_empty")
 }
 
 func TestBookContentHandlerAppliesReplaceProcessor(t *testing.T) {

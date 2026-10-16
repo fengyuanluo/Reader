@@ -265,6 +265,8 @@ BookSource
   customOrder: int
   enabled: bool
   enabledExplore: bool
+  eventListener: bool
+  customButton: bool
   jsLib: string?
   enabledCookieJar: bool
   concurrentRate: string?
@@ -568,6 +570,7 @@ URL 归一化必须参考：
 
 - 规则提取 URL 时，以 redirect URL 优先作为 base。
 - 如果 URL 带自定义属性，属性必须被保留。
+- 文件源 `downloadUrls` 只绝对化逗号前的 URL，逗号后的 option 文本逐字保留。
 - 空 URL 不应 panic，应返回空值或明确错误，取决于调用场景。
 - **只有 URL 类字段**（`bookUrl`、`coverUrl`、`tocUrl`、`nextTocUrl`、`nextContentUrl`、`downloadUrls`）按 Legado `isUrl` 语义做绝对化；普通文本字段不再被绝对化（例如 `1.2万` 不会被改写成 URL）。
 - `bookUrlPattern` 为整串匹配（对齐 Legado `baseUrl.matches(pattern)`），编译失败返回明确错误。
@@ -588,13 +591,14 @@ Fetcher 必须支持：
 - Cookie 持久化与合并。
 - 登录 Header。
 - `loginCheckJs` 响应处理。
+- 统一解析 `method/body/headers/type/charset/origin/retry/js/bodyJs`。
 - 代理：只来自书源 `header` 中的 `proxy` 键（Legado 约定）或 URL 选项 `proxy`，**忽略 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量**；支持 `http`/`https`/`socks5`/`socks5h`，凭证支持 Legado 的 `host:port@user@pass` 写法与标准 userinfo 写法；不支持 `socks4`。
 - URL 选项 `dnsIp`：直连指定 IP，保留 Host 头与 TLS SNI；该 IP 同样过 SSRF 校验，且不可与 `proxy` 同时使用。
 - URL 选项 `charset`：对 query/body 做指定编码。
 - GET/HEAD 不发送请求体（对齐 Legado `AnalyzeUrl`：忽略 body 选项）。
 - 响应无 `Content-Type` 时，按 BOM 与前 4 KiB 内 `<meta charset>` 嗅探编码（不做 Legado 的统计式编码探测）；有 `Content-Type` 时按 charset 把文本响应解码为 UTF-8。
-
-URL 选项 `serverID`、`webJs`、`webViewDelayTime` 接受但不生效；`webView: true` 与依赖浏览器的 `js` 明确不支持。
+- `webView:true` 使用普通 HTTP 降级并写告警日志，不做真实渲染。
+- URL 选项 `serverID`、`webJs`、`webViewDelayTime` 接受但不生效；未知 URL option 键只有零值才放行，非零值返回明确错误。
 
 ### 10.2 安全策略
 
@@ -610,7 +614,7 @@ URL 选项 `serverID`、`webJs`、`webViewDelayTime` 接受但不生效；`webVi
 - 最大 redirect 次数默认 5。
 - 响应大小默认限制，例如 10 MiB。
 - 请求超时默认 30 秒。
-- 每源并发默认由 `concurrentRate` 或全局配置控制。
+- `concurrentRate` 按 `bookSourceUrl` 使用固定窗口限速，等待服从 context 取消；未配置时使用全局策略。
 
 SSRF 校验在**拨号阶段**执行：每次建立连接只解析一次域名，校验全部解析结果后直接连接已校验的 IP，因此 DNS rebinding 与重定向都无法绕过；重定向目标重新拨号，同样过校验。封禁范围除回环/私网/链路本地外，还包含 CGN（`100.64.0.0/10`）、NAT64（`64:ff9b::/96`、`64:ff9b:1::/48`）、6to4（`2002::/16`）、文档段（`192.0.2.0/24`、`198.51.100.0/24`、`203.0.113.0/24`、`2001:db8::/32`）等特殊用途地址段。
 
@@ -650,6 +654,8 @@ Go 实现建议：
 - `cache.get`、`cache.put`：受命名空间限制的键值缓存。
 - `log`：调试日志输出。
 - `url.resolve`：URL 解析。
+- `java.ajax` / `ajaxTestAll` / `getCookie` 等网络与 Cookie helper：只能经受控 Fetcher/CookieStore 执行。
+- `timeFormat`、`toNumChapter`、`getStringList`、`getElement`、`setContent`、摘要/base64/User-Agent 等纯 helper。
 - `JSON`、`String`、`Math`、`Date` 等 JS 内建能力。
 - 兼容补齐的 Legado helper：`java.ajax`、`java.head`、`java.timeFormat`、`java.htmlFormat`、`java.toNumChapter`、`java.strToBytes`/`java.bytesToStr`、`java.base64DecodeToByteArray`、`java.hexDecodeToByteArray`、`java.md5Encode16`、`java.getCookie`、`java.cacheFile`、`java.importScript`、`java.getSource`、`java.toURL`、`androidId`、`java.logType`、`java.queryTTF`/`java.queryBase64TTF`/`java.replaceFont`。
 - 本地文件 API（`java.readFile`/`java.writeFile`/`java.downloadFile`、zip 解压等）限定在 `<DataDir>/script-files` 沙箱内；未配置沙箱根时抛 `script_unsupported`。
@@ -661,7 +667,7 @@ Go 实现建议：
 
 - 任意文件系统访问（仅允许上述沙箱内文件 API）。
 - 进程执行。
-- 任意网络请求。
+- 绕过受控 Fetcher 的任意网络请求。
 - Go 指针或反射。
 - 环境变量。
 - 未脱敏 Cookie 和 Token。
@@ -733,7 +739,9 @@ Import request
 load source
   -> validate enabled or debug override
   -> build AnalyzeUrl from searchUrl
+  -> run request js
   -> fetch response
+  -> run bodyJs
   -> run loginCheckJs if configured
   -> check redirect/direct detail pattern
   -> parse BookList
@@ -754,7 +762,7 @@ resolve source scope
 并发与容错：
 
 - `READER_GLOBAL_CONCURRENCY` 是全局抓取并发上限，同时作为多源搜索与发现的并发度；`READER_SOURCE_CONCURRENCY` 是单源并发上限。
-- 书源 `concurrentRate`（`n` 为同一源两次访问的最小毫秒间隔，`n/ms` 为窗口内次数）按 Legado `ConcurrentRateLimiter` 语义按源限流，已接入多源搜索、发现与单源搜索抓取入口（book/content 抓取路径尚未接线，可后续在共享 fetcher 中间件统一注入）。
+- 书源 `concurrentRate`（`n` 为同一源两次访问的最小毫秒间隔，`n/ms` 为窗口内次数）按 Legado `ConcurrentRateLimiter` 语义按源限流，统一由 fetcher 承担（由 `fetch.Request` 的 `SourceKey`/`ConcurrentRate`/`SkipRateLimit` 驱动），搜索、发现、详情、目录、正文与脚本请求共用同一实现，避免同一请求被双重限速；`internal/infra/ratelimit.Limiter` 只保留 `READER_GLOBAL_CONCURRENCY`/`READER_SOURCE_CONCURRENCY` 并发上限。
 - 每个源的 goroutine 有 panic 隔离：单源 panic 只转成该源的 Warning，其余源结果照常返回。
 - 无效 sourceId 转成 Warning（`source_unavailable`），不使整个请求 500。
 - 搜索结果按 Legado 语义清洗：书名去装饰、作者去前后缀、`wordCount`、`intro` 去 HTML。
@@ -781,6 +789,7 @@ load source and book
   -> run BookInfoRule.init
   -> extract fields
   -> normalize coverUrl and tocUrl
+  -> for type=3, extract downloadUrls while preserving option text
   -> save/update book
 ```
 
@@ -808,7 +817,7 @@ load source and book
 ```text
 check chapter content cache
   -> load source, book, chapter
-  -> fetch chapter URL
+  -> build/fetch chapter request and run js/bodyJs
   -> parse content and nextContentUrl
   -> fetch next content pages
   -> apply contentRule.replaceRegex
@@ -826,6 +835,8 @@ check chapter content cache
 - `contentRule.sourceRegex` 不支持：Legado 仅通过 BackstageWebView 资源嗅探实现（属 WebView-only），Reader 在校验阶段提前给出明确失败项，抓取阶段返回 `ErrUnsupportedContentBrowserFlow`。
 - 正文图片经安全代理获取时复用书源 `coverDecodeJs` / `imageDecode` 上下文（`image_decode` 阶段）。
 
+`subContent` 与 `callBackJs` 可导入和持久化，但当前不执行；检测到配置时写内部诊断日志并继续主 `content` 规则。`sourceRegex` 仍因需要浏览器流而明确返回不支持。
+
 ### 12.7 书源登录
 
 openapi-first 的登录能力（`GET/POST/DELETE /book-sources/{sourceId}/login`）：
@@ -835,6 +846,22 @@ openapi-first 的登录能力（`GET/POST/DELETE /book-sources/{sourceId}/login`
 - `loginUi` 为空且 `loginUrl` 非脚本时返回 501 `unsupported_login_flow`（不引入无头浏览器）；书源不存在 404，未声明 `loginUrl` 或表单值非法 400，脚本失败 502。
 - `DELETE` 清除持久化的 `loginInfo` 与 `loginHeader`（204）。
 - 状态存储与书源级脚本状态共用 `source_variables` 表（见 11.4）。
+
+### 12.8 全书 TXT 导出
+
+```text
+load book and ordered chapters
+  -> create temporary UTF-8 text file
+  -> write book metadata
+  -> for each chapter in order:
+       volume: write volume title
+       content: reuse cache or execute GetChapterContent
+       write chapter title and normalized body
+  -> on any error: discard temporary file
+  -> on success: return attachment and remove temporary file after response
+```
+
+导出按目录顺序串行执行，避免改变书源脚本、Cookie 和限速语义；正文失败时不发送部分结果，已成功章节仍保留正文缓存。
 
 ## 13. 替换净化设计
 
@@ -955,32 +982,40 @@ cancelled
 
 ```text
 start checking
-  -> remove invalid groups and stale error comments equivalent
-  -> search check if enabled
-  -> discovery check if enabled and configured
-  -> info check
-  -> toc check
-  -> content check
+  -> choose valid ruleSearch.checkKeyWord or request/default fallback
+  -> apply the effective 180s default timeout
+  -> search check if enabled -> its own info/toc/content stages
+  -> discovery check if enabled and configured -> its own info/toc/content stages
+  -> for file source: info/downloadUrls only; toc/content not applicable
   -> classify failures
-  -> record respondTime
-  -> persist result
+  -> persist item, keywordUsed, timeoutMs and stage results
+  -> monotonically persist task progress
 ```
 
 校验关键字（对齐 Legado `BookSource.getCheckKeyword`）：书源自身的 `RuleSearch.CheckKeyWord` 优先，其次请求指定的 keyword，最后回退默认关键字“我的”；缺少搜索规则或地址时直接给出明确失败项。
 
 任务级状态规则：任一源失败 → 任务 failed，但每个源的独立结果仍完整保留。
 
-失败分类：
+搜索或发现服务返回 per-source warning 时，校验器使用 warning 原文；只有没有 warning 且列表确实为空时才生成空结果。搜索和发现即使同时启用也分别执行后续阶段，不能用一条链路的结果替代另一条。
+
+`failureCode` 保留阶段兼容值，`failureClass` 表达根因：
 
 | 分类 | 触发 |
 |---|---|
-| `timeout` | context deadline exceeded |
-| `js_failed` | JS runtime error |
-| `website_failed` | fetch error or unclassified runtime error |
-| `search_failed` | 搜索空结果 |
-| `discovery_failed` | 发现空结果 |
-| `toc_failed` | 目录为空或目录解析失败 |
-| `content_failed` | 正文为空或正文解析失败 |
+| `source_*_empty*` | 明确的搜索、发现、目录、正文或文件下载地址为空 |
+| `source_upstream_*` | 上游 HTTP、空 JSON 或非 JSON 响应 |
+| `network_*` | DNS、TLS、超时、重置和瞬态传输失败 |
+| `source_rule_*` | 规则脚本语法或执行失败 |
+| `unsupported_runtime_api` | 受限 JS runtime 尚未支持的确定性 API |
+| `unsupported_browser_capability` | WebView/浏览器专属能力 |
+| `implementation_or_rule_failed` | 证据不足，保留原文等待同请求 A/B |
+
+### 15.3 任务与诊断持久化
+
+- `finished` 使用仓储层单调更新，不能被乱序并发写回较小值。
+- worker 的失败状态与计数在同一同步域内更新，必须通过 race detector。
+- 只有确定性的源空结果或规则失败可更新“失效”分组和 `// Error:`；网络、HTTP、安全策略、浏览器边界和未确认错误只保留任务诊断。
+- 创建/取消异步任务返回 202；pending/running SSE 使用 `check.progress`，终态才使用 completed/cancelled 事件。
 
 在上述标准 `failureCode` 之外，check/debug 还通过统一诊断器写入更细的 `failureClass`（持久化到 `check_task_items.failure_class` 与调试事件），用于区分安全策略拦截、授权失败、DNS/TLS/超时/连接重置、上游 4xx/5xx、上游空 JSON/非 JSON、脚本语法错误等，避免一律折叠成 `website_failed`。
 
@@ -1043,6 +1078,7 @@ start checking
 - URL 归一化。
 - 替换净化。
 - JS 沙箱。
+- 文件源 `downloadUrls` option 原文保留。
 - 错误分类。
 
 ### 17.2 Repository 测试
@@ -1094,6 +1130,8 @@ import source
 ```
 
 mock E2E 的目的，是在不访问真实外网的情况下稳定覆盖导入、搜索、详情、目录、正文、替换、书架、进度、调试和校验闭环。mock E2E 必须进入默认 CI。
+
+另有轻量兼容关键路径：文本书源的搜索和正文请求执行 `js/bodyJs` 后完成搜索 -> 详情 -> 目录 -> 正文；文件型书源从详情规则提取 TXT `downloadUrls` 并保留其请求 option 原文。
 
 ### 17.6 真实远程书源集合 E2E
 
@@ -1162,7 +1200,7 @@ READER_DATA_DIR                     默认 data
 READER_SQLITE_DSN                   默认 data/reader.db
 READER_TOKEN                        默认空
 READER_ENV                          默认 development
-READER_DEFAULT_USER_AGENT           默认 Reader/0.0.1
+READER_DEFAULT_USER_AGENT           默认 Reader/0.1.0
 READER_FETCH_TIMEOUT                默认 30s
 READER_FETCH_MAX_BODY_BYTES         默认 10 MiB
 READER_FETCH_MAX_REDIRECTS          默认 5
@@ -1189,6 +1227,15 @@ READER_CONTENT_CHINESE_CONVERTER_TYPE 默认 0
 非应用配置：
 
 - `READER_REAL_E2E_ENABLED`、`READER_REAL_E2E_SOURCE_COLLECTION_URL`、`READER_REAL_E2E_KEYWORD`、`READER_REAL_E2E_MAX_CANDIDATES` 等 `READER_REAL_E2E_*` 不再是应用配置：`config.Load` 不读取，只由 `test/e2e` 直接读环境变量。
+
+### 18.1 容器与发布
+
+- 构建阶段使用 Go 1.26 Alpine，通过 `CGO_ENABLED=0` 交叉构建静态二进制。
+- 运行阶段使用 Alpine，安装 CA 证书和时区数据，以非 root `reader` 用户启动。
+- 容器监听 8080，SQLite DSN 固定为 `/data/reader.db`，`/data` 由命名卷持久化，TXT 导出临时文件使用 `/tmp`。
+- GitHub Action 在 `master`、`v*` 和手动触发时先运行测试与 vet，再向 GHCR 发布 `linux/amd64`、`linux/arm64` 镜像。
+- `master` 生成 `latest`，版本标签生成完整 SemVer 和 `major.minor`，所有发布生成短提交 SHA 标签。
+- 发布权限仅包含读取仓库和写入 Packages；不使用额外 PAT，不启用自动清理或签名。
 
 ## 19. 未来扩展
 

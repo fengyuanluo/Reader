@@ -2,10 +2,10 @@ package contentapp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -15,6 +15,7 @@ import (
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/source"
 	"reader/internal/infra/concurrency"
+	"reader/internal/infra/requestoption"
 	ruleinfra "reader/internal/infra/rule"
 	"reader/internal/infra/rule/regex"
 	urlrule "reader/internal/infra/rule/url"
@@ -81,10 +82,18 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 	if src == nil || src.RuleContent.Value == nil {
 		return Result{}, ErrContentRuleMissing
 	}
+	contentRule := src.RuleContent.Value
+	if strings.TrimSpace(contentRule.SubContent) != "" || strings.TrimSpace(contentRule.CallBackJS) != "" {
+		slog.WarnContext(ctx, "Legado content extension rules are preserved but not executed",
+			"source_id", src.SourceID,
+			"sub_content", strings.TrimSpace(contentRule.SubContent) != "",
+			"callback_js", strings.TrimSpace(contentRule.CallBackJS) != "",
+		)
+	}
 	// contentRule.sourceRegex 在 Legado 中只由 BackstageWebView 通过 WebViewClient.onLoadResource
 	// 嗅探页面加载的资源 URL（BackstageWebView.kt:283-296）并把命中的 URL 当作响应体返回，
 	// 没有浏览器拿不到这些资源请求；本项目明确不引入 webView，因此统一返回“不支持”而不是静默忽略规则。
-	if strings.TrimSpace(src.RuleContent.Value.SourceRegex) != "" {
+	if strings.TrimSpace(contentRule.SourceRegex) != "" {
 		return Result{}, ErrUnsupportedContentBrowserFlow
 	}
 	bookValue := input.Book
@@ -134,7 +143,7 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 		if expanded, err := expander.ExpandString(ctx, chapterURL, map[string]any{}); err == nil && strings.TrimSpace(expanded) != "" {
 			chapterURL = expanded
 		}
-		req, err := buildContentFetchRequest(ctx, chapterURL, src, s.script)
+		req, err := buildContentFetchRequest(ctx, chapterURL, src, &bookValue, &chapter, s.script)
 		if err != nil {
 			return Result{}, err
 		}
@@ -143,7 +152,7 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 				req.Body = []byte(expandedBody)
 			}
 		}
-		resp, err := s.fetcher.Fetch(ctx, req)
+		resp, err := executeContentFetchRequest(ctx, s.fetcher, req, src, &bookValue, &chapter, input.NextChapterURL, s.script)
 		if err != nil {
 			return Result{}, err
 		}
@@ -276,11 +285,11 @@ func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *
 
 // fetchPage 抓取单个分页 URL，并按 Legado BookContent.kt 对每一页依次应用登录检查与正文 WebJS。
 func (s *Service) fetchPage(ctx context.Context, src *source.BookSource, b *book.Book, chapter *book.BookChapter, url string, nextChapterURL string) (*fetch.Response, error) {
-	req, err := buildContentFetchRequest(ctx, url, src, s.script)
+	req, err := buildContentFetchRequest(ctx, url, src, b, chapter, s.script)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := s.fetcher.Fetch(ctx, req)
+	resp, err := executeContentFetchRequest(ctx, s.fetcher, req, src, b, chapter, nextChapterURL, s.script)
 	if err != nil {
 		return nil, err
 	}
@@ -329,101 +338,36 @@ func (s *Service) applyContentWebJS(ctx context.Context, src *source.BookSource,
 	return &next, nil
 }
 
-func buildContentFetchRequest(ctx context.Context, rawURL string, src *source.BookSource, scriptRuntime *script.Runtime) (fetch.Request, error) {
-	custom := urlrule.ParseCustom(rawURL)
-	if err := sourceapp.ValidateSupportedURLOptions(custom.Attribute); err != nil {
-		return fetch.Request{}, err
-	}
-	req := fetch.Request{URL: custom.URL, Method: "GET", Headers: map[string]string{}, AllowNonSuccess: true, UseCookieJar: src != nil && src.EnabledCookieJar}
+func buildContentFetchRequest(ctx context.Context, rawURL string, src *source.BookSource, b *book.Book, chapter *book.BookChapter, scriptRuntime *script.Runtime) (fetch.Request, error) {
 	headers, err := sourceapp.NewScriptIntegration(scriptRuntime).HeaderMap(ctx, src)
 	if err != nil {
 		return fetch.Request{}, err
 	}
-	for key, value := range headers {
-		req.Headers[key] = value
+	req := fetch.Request{Method: "GET", Headers: headers, AllowNonSuccess: true}
+	if src != nil {
+		req.UseCookieJar = src.EnabledCookieJar
+		req.SourceKey = src.BookSourceURL
+		req.ConcurrentRate = src.ConcurrentRate
 	}
-	var (
-		charsetName string
-		rawFormBody string
-	)
-	for key, value := range custom.Attribute {
-		switch strings.ToLower(key) {
-		case "method":
-			if method, ok := value.(string); ok && strings.TrimSpace(method) != "" {
-				req.Method = strings.ToUpper(strings.TrimSpace(method))
-			}
-		case "body":
-			switch body := value.(type) {
-			case string:
-				// 表单编码推迟到 charset 与全部 URL 选项（含 headers）解析完成后统一做一次（见下方）。
-				if urlrule.LooksLikeFormBody(body) {
-					rawFormBody = body
-				} else {
-					req.Body = []byte(body)
-				}
-			case map[string]any, []any:
-				if encoded, err := json.Marshal(body); err == nil {
-					req.Body = encoded
-					if req.Headers["Content-Type"] == "" {
-						req.Headers["Content-Type"] = "application/json"
-					}
-				}
-			}
-		case "headers":
-			mergeContentHeaders(req.Headers, value)
-		case "type":
-			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-				req.EncodeBodyAsHex = true
-			}
-		case "origin":
-			if origin, ok := value.(string); ok && strings.TrimSpace(origin) != "" {
-				req.Headers["Origin"] = strings.TrimSpace(origin)
-				if req.Headers["Referer"] == "" {
-					req.Headers["Referer"] = strings.TrimSpace(origin)
-				}
-			}
-		case "charset":
-			if text, ok := value.(string); ok {
-				charsetName = strings.TrimSpace(text)
-			}
-		case "retry":
-			urlrule.ApplyRetryOption(&req, value)
-		}
+	bindings := script.Bindings{"baseUrl": rawURL}
+	if b != nil {
+		bindings["book"] = b
 	}
-	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
-	// 对齐 Legado AnalyzeUrl.kt:262-283：body 不是 JSON/XML 且未显式设置 Content-Type 时才按表单编码，
-	// 且只编码一次（旧实现先按空 charset 编码、末尾再按 charset 编码，正文被 percent 编码两次导致服务端解析失败）。
-	if rawFormBody != "" {
-		if req.Headers["Content-Type"] == "" {
-			req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
-			req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
-		} else {
-			req.Body = []byte(rawFormBody)
-		}
+	if chapter != nil {
+		bindings["chapter"] = chapter
 	}
-	sourceapp.ApplyNetworkOptions(&req, custom.Attribute)
-	return req, nil
+	return requestoption.Build(ctx, rawURL, src.BookSourceURL, req, sourceapp.RequestEvaluator(scriptRuntime, src, bindings))
 }
 
-func mergeContentHeaders(headers map[string]string, value any) {
-	switch typed := value.(type) {
-	case map[string]any:
-		// 对齐 Legado AnalyzeUrl.kt:235-237 entry.value.toString()：非字符串头值（数字、布尔）统一转字符串。
-		for key, raw := range typed {
-			headers[key] = fmt.Sprint(raw)
-		}
-	case string:
-		nested := map[string]string{}
-		if err := json.Unmarshal([]byte(typed), &nested); err == nil {
-			for key, text := range nested {
-				headers[key] = text
-			}
-			return
-		}
-		for key, raw := range urlrule.ParseAttributeObject(typed) {
-			headers[key] = fmt.Sprint(raw)
-		}
+func executeContentFetchRequest(ctx context.Context, fetcher fetch.Fetcher, req fetch.Request, src *source.BookSource, b *book.Book, chapter *book.BookChapter, nextChapterURL string, runtime *script.Runtime) (*fetch.Response, error) {
+	bindings := script.Bindings{"baseUrl": req.URL, "nextChapterUrl": nextChapterURL}
+	if b != nil {
+		bindings["book"] = b
 	}
+	if chapter != nil {
+		bindings["chapter"] = chapter
+	}
+	return requestoption.Fetch(ctx, fetcher, req, sourceapp.RequestEvaluator(runtime, src, bindings))
 }
 
 func applyContentReplace(ctx context.Context, redirectURL string, rule string, content string, scriptRuntime *script.Runtime) (string, error) {

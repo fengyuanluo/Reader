@@ -63,7 +63,7 @@ func (s *TocService) RefreshToc(ctx context.Context, input TocInput) ([]*book.Bo
 		if err != nil {
 			return nil, err
 		}
-		resp, err := s.fetcher.Fetch(ctx, req)
+		resp, err := executeBookFetchRequest(ctx, s.fetcher, req, src, &b, s.script)
 		if err != nil {
 			return nil, err
 		}
@@ -118,11 +118,11 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 			break
 		}
 		seenPages[next] = struct{}{}
-		req, err := buildBookFetchRequest(ctx, next, src, s.script)
+		req, err := buildBookFetchRequest(ctx, next, src, b, s.script)
 		if err != nil {
 			return nil, err
 		}
-		resp, err := s.fetcher.Fetch(ctx, req)
+		resp, err := executeBookFetchRequest(ctx, s.fetcher, req, src, b, s.script)
 		if err != nil {
 			return nil, err
 		}
@@ -154,11 +154,11 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 		// 对齐 Legado BookChapterList.kt:101-113：多分页并发抓取，章节按规则返回顺序拼接。
 		// 每个分页用 book 快照，避免脚本并发写书变量造成数据竞争。
 		pageChapters, err := concurrency.Map(ctx, tocPageConcurrency, targets, func(ctx context.Context, _ int, target string) ([]*book.BookChapter, error) {
-			req, err := buildBookFetchRequest(ctx, target, src, s.script)
+			req, err := buildBookFetchRequest(ctx, target, src, b, s.script)
 			if err != nil {
 				return nil, err
 			}
-			resp, err := s.fetcher.Fetch(ctx, req)
+			resp, err := executeBookFetchRequest(ctx, s.fetcher, req, src, b, s.script)
 			if err != nil {
 				return nil, err
 			}

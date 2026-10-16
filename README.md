@@ -62,6 +62,32 @@ go run ./cmd/reader download "$BOOK_ID" --from 0 --to 2 --export /tmp/book.txt
 
 Full reference: `docs/CLI.md`.
 
+## Docker
+
+Pull and run the latest image:
+
+```bash
+docker pull ghcr.io/fengyuanluo/reader:latest
+docker run -d \
+  --name reader \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -e READER_ENV=production \
+  -e READER_TOKEN=replace-with-a-secret \
+  -v reader-data:/data \
+  ghcr.io/fengyuanluo/reader:latest
+```
+
+Or use Compose without storing the token in `compose.yaml`:
+
+```bash
+READER_TOKEN=replace-with-a-secret docker compose up -d
+```
+
+The container listens on port 8080, stores SQLite data under `/data`, and uses `/tmp` only for temporary TXT exports. The image sets `READER_DATA_DIR=/data` and `READER_SQLITE_DSN=/data/reader.db`; the named `reader-data` volume preserves the database across container replacement. Production mode requires a non-empty `READER_TOKEN`.
+
+Published image tags include `latest`, SemVer tags such as `0.1.0` and `0.1`, and immutable commit tags such as `sha-abcdef0`.
+
 ## Verification
 
 ```bash
@@ -90,3 +116,7 @@ The real remote source collection release gate is opt-in:
 READER_REAL_E2E_ENABLED=true \
 go test ./test/e2e -run TestRealSourceCollectionE2E -count=1
 ```
+
+## License
+
+Reader is licensed under `AGPL-3.0-only`.

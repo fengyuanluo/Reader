@@ -22,6 +22,9 @@ func TestLoadUsesSafeDefaultsInTestEnvironment(t *testing.T) {
 	if cfg.FetchTimeout != 30*time.Second {
 		t.Fatalf("FetchTimeout = %s, want 30s", cfg.FetchTimeout)
 	}
+	if cfg.DefaultUserAgent != "Reader/0.1.0" {
+		t.Fatalf("DefaultUserAgent = %q, want Reader/0.1.0", cfg.DefaultUserAgent)
+	}
 	if cfg.FetchMaxBodyBytes != 10*1024*1024 {
 		t.Fatalf("FetchMaxBodyBytes = %d, want 10485760", cfg.FetchMaxBodyBytes)
 	}

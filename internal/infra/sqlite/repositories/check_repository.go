@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -84,10 +85,24 @@ func (r *CheckRepository) FailInterruptedTasks(ctx context.Context, completedAt 
 	return res.RowsAffected()
 }
 
+func (r *CheckRepository) UpdateTaskProgress(ctx context.Context, taskID string, finished int) error {
+	if finished < 0 {
+		finished = 0
+	}
+	_, err := r.db.ExecContext(ctx, `UPDATE check_tasks
+SET finished = CASE WHEN finished < ? THEN ? ELSE finished END
+WHERE task_id = ? AND status = ?`, finished, finished, taskID, string(task.CheckTaskRunning))
+	return err
+}
+
 func (r *CheckRepository) SaveItem(ctx context.Context, item *task.CheckTaskItem) error {
-	_, err := r.db.ExecContext(ctx, `
-INSERT INTO check_task_items(task_id, source_id, book_source_url, book_source_name, status, failure_code, failure_class, message, respond_time, trace_id, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	stagesJSON, err := json.Marshal(item.Stages)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.ExecContext(ctx, `
+INSERT INTO check_task_items(task_id, source_id, book_source_url, book_source_name, status, failure_code, failure_class, message, respond_time, keyword_used, timeout_ms, stages_json, trace_id, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(task_id, source_id) DO UPDATE SET
   book_source_url = excluded.book_source_url,
   book_source_name = excluded.book_source_name,
@@ -96,14 +111,17 @@ ON CONFLICT(task_id, source_id) DO UPDATE SET
   failure_class = excluded.failure_class,
   message = excluded.message,
   respond_time = excluded.respond_time,
+  keyword_used = excluded.keyword_used,
+  timeout_ms = excluded.timeout_ms,
+  stages_json = excluded.stages_json,
   trace_id = excluded.trace_id,
   updated_at = excluded.updated_at`,
-		item.TaskID, item.SourceID, nullable(item.BookSourceURL), nullable(item.BookSourceName), string(item.Status), nullable(item.FailureCode), nullable(item.FailureClass), nullable(item.Message), item.RespondTime, nullable(item.TraceID), formatTime(item.CreatedAt), formatTime(item.UpdatedAt))
+		item.TaskID, item.SourceID, nullable(item.BookSourceURL), nullable(item.BookSourceName), string(item.Status), nullable(item.FailureCode), nullable(item.FailureClass), nullable(item.Message), item.RespondTime, nullable(item.KeywordUsed), item.TimeoutMS, string(stagesJSON), nullable(item.TraceID), formatTime(item.CreatedAt), formatTime(item.UpdatedAt))
 	return err
 }
 
 func (r *CheckRepository) ListItems(ctx context.Context, taskID string) ([]*task.CheckTaskItem, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT task_id, source_id, coalesce(book_source_url, ''), coalesce(book_source_name, ''), status, coalesce(failure_code, ''), coalesce(failure_class, ''), coalesce(message, ''), coalesce(respond_time, 0), coalesce(trace_id, ''), created_at, updated_at
+	rows, err := r.db.QueryContext(ctx, `SELECT task_id, source_id, coalesce(book_source_url, ''), coalesce(book_source_name, ''), status, coalesce(failure_code, ''), coalesce(failure_class, ''), coalesce(message, ''), coalesce(respond_time, 0), coalesce(keyword_used, ''), coalesce(timeout_ms, 0), coalesce(stages_json, '[]'), coalesce(trace_id, ''), created_at, updated_at
 FROM check_task_items WHERE task_id = ? ORDER BY created_at ASC, source_id ASC`, taskID)
 	if err != nil {
 		return nil, err
@@ -150,11 +168,15 @@ func scanCheckTask(s scanner) (*task.CheckTask, error) {
 func scanCheckTaskItem(s scanner) (*task.CheckTaskItem, error) {
 	var item task.CheckTaskItem
 	var status string
+	var stagesJSON string
 	var createdAt, updatedAt string
-	if err := s.Scan(&item.TaskID, &item.SourceID, &item.BookSourceURL, &item.BookSourceName, &status, &item.FailureCode, &item.FailureClass, &item.Message, &item.RespondTime, &item.TraceID, &createdAt, &updatedAt); err != nil {
+	if err := s.Scan(&item.TaskID, &item.SourceID, &item.BookSourceURL, &item.BookSourceName, &status, &item.FailureCode, &item.FailureClass, &item.Message, &item.RespondTime, &item.KeywordUsed, &item.TimeoutMS, &stagesJSON, &item.TraceID, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	item.Status = task.CheckTaskItemStatus(status)
+	if err := json.Unmarshal([]byte(stagesJSON), &item.Stages); err != nil {
+		return nil, err
+	}
 	var err error
 	item.CreatedAt, err = parseDBTime(createdAt)
 	if err != nil {

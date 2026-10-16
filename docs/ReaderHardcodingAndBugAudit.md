@@ -23,7 +23,7 @@
 
 1. 默认抓取 UA：
    - `internal/infra/fetcher/http_fetcher.go`
-   - 默认值是 `Reader/0.0.1`
+   - 默认值是 `Reader/0.1.0`
 
 2. 默认 WebView UA 兼容字符串：
    - `internal/infra/script/runtime.go`

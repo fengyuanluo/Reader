@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Reader API
-  version: 0.0.1
+  version: 0.1.0
   description: OpenAPI-first API for the Reader Go Web service.
 servers:
   - url: /api/v1
@@ -720,6 +720,40 @@ paths:
           $ref: "#/components/responses/NotFound"
         "501":
           $ref: "#/components/responses/NotImplemented"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /books/{bookId}/export.txt:
+    get:
+      operationId: exportBookTxt
+      tags:
+        - books
+      summary: Export all book chapters as a UTF-8 TXT file.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: bookId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Complete book text export.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: Attachment filename for the exported TXT file.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
   /books/{bookId}/progress:
@@ -1447,6 +1481,12 @@ components:
               nullable: true
             enabledCookieJar:
               type: boolean
+            eventListener:
+              type: boolean
+              default: false
+            customButton:
+              type: boolean
+              default: false
             concurrentRate:
               type: string
               nullable: true
@@ -2258,6 +2298,42 @@ components:
         - content_failed
         - search_rule_empty
         - discovery_rule_empty
+    CheckStageFlow:
+      type: string
+      enum:
+        - search
+        - discovery
+    CheckStageName:
+      type: string
+      enum:
+        - search
+        - discovery
+        - info
+        - toc
+        - content
+    CheckStageResult:
+      type: object
+      required:
+        - flow
+        - stage
+        - status
+      properties:
+        flow:
+          $ref: "#/components/schemas/CheckStageFlow"
+        stage:
+          $ref: "#/components/schemas/CheckStageName"
+        status:
+          $ref: "#/components/schemas/CheckTaskItemStatus"
+        failureCode:
+          $ref: "#/components/schemas/CheckFailureCode"
+        failureClass:
+          type: string
+          nullable: true
+        message:
+          type: string
+        elapsedMs:
+          type: integer
+          format: int64
     CheckTaskItem:
       type: object
       required:
@@ -2283,6 +2359,15 @@ components:
         respondTime:
           type: integer
           format: int64
+        keywordUsed:
+          type: string
+        timeoutMs:
+          type: integer
+          format: int64
+        stages:
+          type: array
+          items:
+            $ref: "#/components/schemas/CheckStageResult"
         traceId:
           type: string
     CheckTask:
@@ -2337,6 +2422,7 @@ components:
             - check.item_started
             - check.item_passed
             - check.item_failed
+            - check.progress
             - check.completed
             - check.cancelled
         message:

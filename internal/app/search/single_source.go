@@ -15,6 +15,7 @@ import (
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/source"
 	"reader/internal/infra/ratelimit"
+	"reader/internal/infra/requestoption"
 	ruleinfra "reader/internal/infra/rule"
 	ruleregex "reader/internal/infra/rule/regex"
 	urlrule "reader/internal/infra/rule/url"
@@ -43,7 +44,8 @@ func NewSingleSourceSearcher(fetcher fetch.Fetcher, scriptRuntime *script.Runtim
 	return &SingleSourceSearcher{fetcher: fetcher, script: scriptRuntime}
 }
 
-// WithLimiter 注入全局/单源并发与 concurrentRate 限流器；未注入时不限流。
+// WithLimiter 注入全局与单源并发上限；按源 concurrentRate 的限速由 fetcher（fetch.Request.SourceKey/
+// ConcurrentRate）负责，这里不再重复限速。未注入时不限制并发。
 func (s *SingleSourceSearcher) WithLimiter(limiter *ratelimit.Limiter) *SingleSourceSearcher {
 	s.limiter = limiter
 	return s
@@ -59,8 +61,11 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 	if err != nil {
 		return nil, err
 	}
-	resp, err := ratelimit.Do(ctx, s.limiter, src.BookSourceURL, src.ConcurrentRate, func(ctx context.Context) (*fetch.Response, error) {
-		return s.fetcher.Fetch(ctx, req)
+	evaluator := sourceapp.RequestEvaluator(s.script, src, script.Bindings{
+		"key": input.Keyword, "page": input.Page, "baseUrl": req.URL,
+	})
+	resp, err := ratelimit.Do(ctx, s.limiter, src.BookSourceURL, func(ctx context.Context) (*fetch.Response, error) {
+		return requestoption.Fetch(ctx, s.fetcher, req, evaluator)
 	})
 	if err != nil {
 		return nil, err
@@ -197,23 +202,27 @@ func buildSearchRequest(ctx context.Context, runtime *script.Runtime, src *sourc
 	if strings.Contains(custom.URL, "{{") || strings.Contains(custom.URL, "}}") {
 		return fetch.Request{}, fmt.Errorf("%w: unresolved expression in %q", ErrUnsupportedSearchURL, src.SearchURL)
 	}
-	if err := sourceapp.ValidateSupportedURLOptions(custom.Attribute); err != nil {
-		return fetch.Request{}, fmt.Errorf("%w: %v", ErrUnsupportedSearchURL, err)
+	req := fetch.Request{
+		Method:         "GET",
+		Headers:        map[string]string{},
+		UseCookieJar:   src.EnabledCookieJar,
+		SourceKey:      src.BookSourceURL,
+		ConcurrentRate: src.ConcurrentRate,
 	}
-	targetURL := urlrule.Absolute(sourceRequestBase(src.BookSourceURL), custom.URL)
-	if targetURL == "" {
-		targetURL = custom.URL
-	}
-	req := fetch.Request{URL: targetURL, Method: "GET", Headers: map[string]string{}, UseCookieJar: src.EnabledCookieJar}
-	if headers, err := parseSearchHeaders(ctx, runtime, src, keyword, page); err != nil {
+	if headers, err := sourceapp.NewScriptIntegration(runtime).HeaderMapWithBindings(ctx, src, script.Bindings{"key": keyword, "page": page}); err != nil {
 		return fetch.Request{}, err
 	} else {
 		for key, value := range headers {
 			req.Headers[key] = value
 		}
 	}
-	applySearchURLOptions(&req, custom.Attribute)
-	sourceapp.ApplyNetworkOptions(&req, custom.Attribute)
+	evaluator := sourceapp.RequestEvaluator(runtime, src, script.Bindings{
+		"key": keyword, "page": page, "baseUrl": sourceRequestBase(src.BookSourceURL),
+	})
+	req, err = requestoption.Build(ctx, out, sourceRequestBase(src.BookSourceURL), req, evaluator)
+	if err != nil {
+		return fetch.Request{}, fmt.Errorf("%w: %v", ErrUnsupportedSearchURL, err)
+	}
 	return req, nil
 }
 
@@ -251,7 +260,7 @@ func applySearchURLScripts(ctx context.Context, runtime *script.Runtime, src *so
 	if len(matches) == 0 {
 		return raw, nil
 	}
-	bindings := searchURLBindings(src, keyword, page)
+	bindings := searchURLBindings(ctx, runtime, src, keyword, page)
 	start := 0
 	result := raw
 	for _, match := range matches {
@@ -301,7 +310,7 @@ func replaceInlineSearchExpressions(ctx context.Context, runtime *script.Runtime
 			return "", fmt.Errorf("%w: unterminated inline expression", ErrUnsupportedSearchURL)
 		}
 		expr := strings.TrimSpace(rest[:end])
-		value, err := runtime.EvalWithBindings(ctx, expr, searchURLBindings(src, keyword, page))
+		value, err := runtime.EvalWithBindings(ctx, expr, searchURLBindings(ctx, runtime, src, keyword, page))
 		if err != nil {
 			return "", err
 		}
@@ -399,13 +408,18 @@ func isSpace(value byte) bool {
 	}
 }
 
-func searchURLBindings(src *source.BookSource, keyword string, page int) script.Bindings {
-	return script.Bindings{
-		"key":     keyword,
-		"page":    page,
-		"source":  src,
-		"baseUrl": sourceRequestBase(src.BookSourceURL),
+func searchURLBindings(ctx context.Context, runtime *script.Runtime, src *source.BookSource, keyword string, page int) script.Bindings {
+	bindings := script.Bindings{
+		"key":      keyword,
+		"page":     page,
+		"result":   nil,
+		"__source": src,
+		"baseUrl":  sourceRequestBase(src.BookSourceURL),
 	}
+	if runtime != nil {
+		bindings["source"] = runtime.SourceBindings(ctx, src)
+	}
+	return bindings
 }
 
 func buildSearchURLPlaceholders(template string, keyword string, page int, includeDoubleBraces bool) string {
@@ -459,125 +473,6 @@ func sourceRequestBase(bookSourceURL string) string {
 	return base
 }
 
-func parseSearchHeaders(ctx context.Context, runtime *script.Runtime, src *source.BookSource, keyword string, page int) (map[string]string, error) {
-	raw := strings.TrimSpace(src.Header)
-	if raw == "" || strings.HasPrefix(strings.ToLower(raw), "@js:") || strings.HasPrefix(strings.ToLower(raw), "<js>") {
-		if raw == "" {
-			return map[string]string{}, nil
-		}
-		if runtime == nil {
-			return map[string]string{}, nil
-		}
-		scriptText := strings.TrimSpace(raw)
-		if strings.HasPrefix(strings.ToLower(scriptText), "@js:") {
-			scriptText = strings.TrimSpace(scriptText[4:])
-		} else if strings.HasPrefix(strings.ToLower(scriptText), "<js>") && strings.HasSuffix(strings.ToLower(scriptText), "</js>") {
-			scriptText = strings.TrimSpace(scriptText[4 : len(scriptText)-5])
-		}
-		value, err := runtime.EvalWithBindings(ctx, scriptText, searchURLBindings(src, keyword, page))
-		if err != nil {
-			return nil, err
-		}
-		return parseSearchHeaderValue(value)
-	}
-	headers := map[string]string{}
-	if err := json.Unmarshal([]byte(raw), &headers); err != nil {
-		loose := urlrule.ParseAttributeObject(raw)
-		if len(loose) == 0 {
-			return nil, err
-		}
-		for key, value := range loose {
-			headers[key] = fmt.Sprint(value)
-		}
-	}
-	return headers, nil
-}
-
-func parseSearchHeaderValue(value any) (map[string]string, error) {
-	var raw []byte
-	switch typed := value.(type) {
-	case string:
-		raw = []byte(typed)
-	default:
-		encoded, err := json.Marshal(typed)
-		if err != nil {
-			return nil, err
-		}
-		raw = encoded
-	}
-	headers := map[string]string{}
-	if err := json.Unmarshal(raw, &headers); err != nil {
-		loose := urlrule.ParseAttributeObject(string(raw))
-		if len(loose) == 0 {
-			return nil, err
-		}
-		for key, value := range loose {
-			headers[key] = fmt.Sprint(value)
-		}
-	}
-	return headers, nil
-}
-
-func applySearchURLOptions(req *fetch.Request, opts map[string]any) {
-	var (
-		charsetName string
-		rawFormBody string
-	)
-	for key, value := range opts {
-		switch strings.ToLower(key) {
-		case "method":
-			if method, ok := value.(string); ok && strings.TrimSpace(method) != "" {
-				req.Method = strings.ToUpper(strings.TrimSpace(method))
-			}
-		case "body":
-			switch body := value.(type) {
-			case string:
-				rawFormBody = body
-				req.Body = []byte(body)
-			case map[string]any, []any:
-				if raw, err := json.Marshal(body); err == nil {
-					req.Body = raw
-					if req.Headers["Content-Type"] == "" {
-						req.Headers["Content-Type"] = "application/json"
-					}
-				}
-			}
-		case "headers":
-			mergeSearchHeaders(req.Headers, value)
-		case "origin":
-			// 对齐 Legado 书源/正文路径：origin 同时作为 Origin 与缺省 Referer。
-			if origin, ok := value.(string); ok && strings.TrimSpace(origin) != "" {
-				req.Headers["Origin"] = strings.TrimSpace(origin)
-				if req.Headers["Referer"] == "" {
-					req.Headers["Referer"] = strings.TrimSpace(origin)
-				}
-			}
-		case "type":
-			// 对齐 Legado AnalyzeUrl：type 键存在且值非 null 时按 hex 二进制处理响应。
-			if value != nil {
-				req.EncodeBodyAsHex = true
-			}
-		case "charset":
-			if text, ok := value.(string); ok {
-				charsetName = strings.TrimSpace(text)
-			}
-		case "retry":
-			urlrule.ApplyRetryOption(req, value)
-		}
-	}
-	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
-	if rawFormBody != "" && urlrule.LooksLikeFormBody(rawFormBody) {
-		// 对齐 Legado AnalyzeUrl:279-283：只有显式设置了非表单 Content-Type 时才保留原文，
-		// 否则按表单编码一次（不再重复编码），并补上表单 Content-Type。
-		if strings.TrimSpace(req.Headers["Content-Type"]) == "" {
-			req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
-			req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
-		} else {
-			req.Body = []byte(rawFormBody)
-		}
-	}
-}
-
 // matchesBookURLPattern 对齐 Legado BookList.kt 的 baseUrl.matches(pattern)：整串匹配。
 // Legado 在 pattern 非法时会抛异常，这里同样返回错误，避免静默按“不匹配”处理。
 func matchesBookURLPattern(pattern string, value string) (bool, error) {
@@ -591,7 +486,6 @@ func matchesBookURLPattern(pattern string, value string) (bool, error) {
 	}
 	return matched, nil
 }
-
 func normalizeListRule(rule string) (string, bool) {
 	rule = strings.TrimSpace(rule)
 	reverse := false
@@ -607,27 +501,6 @@ func normalizeListRule(rule string) (string, bool) {
 func reverseSearchBooks(items []book.SearchBook) {
 	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
 		items[i], items[j] = items[j], items[i]
-	}
-}
-
-func mergeSearchHeaders(headers map[string]string, value any) {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, raw := range typed {
-			// 对齐 Legado AnalyzeUrl entry.value.toString()：非字符串值也统一转成字符串。
-			headers[key] = fmt.Sprint(raw)
-		}
-	case string:
-		nested := map[string]string{}
-		if err := json.Unmarshal([]byte(typed), &nested); err == nil {
-			for key, text := range nested {
-				headers[key] = text
-			}
-			return
-		}
-		for key, raw := range urlrule.ParseAttributeObject(typed) {
-			headers[key] = fmt.Sprint(raw)
-		}
 	}
 }
 

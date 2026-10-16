@@ -22,6 +22,8 @@ var migrations = []migration{
 	// 版本 5：正文缓存改为保存净化前正文，旧库里保存的是已应用用户替换规则的内容，清掉等待重新抓取。
 	{version: 5, name: "drop preprocessed content cache", apply: execSQL(`DELETE FROM cache_entries WHERE namespace = 'content'`)},
 	{version: 6, name: "books legado metadata columns", apply: addBookLegadoColumns},
+	// 版本 7：补齐书源与校验条目的新增列；旧库只有版本 1 的建表结果，缺这些列。
+	{version: 7, name: "book source and check item columns", apply: addExtraColumns},
 }
 
 // Migrate 把数据库升级到最新版本。连接级 PRAGMA（外键、busy_timeout、WAL）由 Open 通过 DSN 设置。
@@ -75,14 +77,40 @@ func execSQL(statements string) func(context.Context, *sql.Tx) error {
 
 // addCheckItemFailureClass 兼容旧库：版本机制引入前 failure_class 已可能被探测式补列添加过。
 func addCheckItemFailureClass(ctx context.Context, tx *sql.Tx) error {
+	return addColumnIfMissing(ctx, tx, "check_task_items", "failure_class", `ALTER TABLE check_task_items ADD COLUMN failure_class TEXT`)
+}
+
+// addExtraColumns 补齐版本 1 schema 之后新增的书源与校验条目列。
+func addExtraColumns(ctx context.Context, tx *sql.Tx) error {
+	columns := []struct {
+		table  string
+		column string
+		ddl    string
+	}{
+		{"book_sources", "event_listener", `ALTER TABLE book_sources ADD COLUMN event_listener INTEGER NOT NULL DEFAULT 0`},
+		{"book_sources", "custom_button", `ALTER TABLE book_sources ADD COLUMN custom_button INTEGER NOT NULL DEFAULT 0`},
+		{"check_task_items", "keyword_used", `ALTER TABLE check_task_items ADD COLUMN keyword_used TEXT`},
+		{"check_task_items", "timeout_ms", `ALTER TABLE check_task_items ADD COLUMN timeout_ms INTEGER`},
+		{"check_task_items", "stages_json", `ALTER TABLE check_task_items ADD COLUMN stages_json TEXT`},
+	}
+	for _, column := range columns {
+		if err := addColumnIfMissing(ctx, tx, column.table, column.column, column.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addColumnIfMissing 在列缺失时补列；版本机制引入前的旧库已由探测式补列建过同名列。
+func addColumnIfMissing(ctx context.Context, tx *sql.Tx, table string, column string, ddl string) error {
 	var exists int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('check_task_items') WHERE name = 'failure_class'`).Scan(&exists); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&exists); err != nil {
 		return err
 	}
 	if exists > 0 {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx, `ALTER TABLE check_task_items ADD COLUMN failure_class TEXT`)
+	_, err := tx.ExecContext(ctx, ddl)
 	return err
 }
 
@@ -130,6 +158,8 @@ CREATE TABLE IF NOT EXISTS book_sources (
   custom_order INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
   enabled_explore INTEGER NOT NULL DEFAULT 1,
+  event_listener INTEGER NOT NULL DEFAULT 0,
+  custom_button INTEGER NOT NULL DEFAULT 0,
   js_lib TEXT,
   enabled_cookie_jar INTEGER NOT NULL DEFAULT 1,
   concurrent_rate TEXT,
@@ -324,6 +354,9 @@ CREATE TABLE IF NOT EXISTS check_task_items (
   failure_class TEXT,
   message TEXT,
   respond_time INTEGER,
+  keyword_used TEXT,
+  timeout_ms INTEGER,
+  stages_json TEXT,
   trace_id TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

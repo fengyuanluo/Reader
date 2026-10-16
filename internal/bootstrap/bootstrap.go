@@ -114,8 +114,8 @@ func Open(cfg config.Config) (*Runtime, func(), error) {
 		FileRoot:  filepath.Join(cfg.DataDir, "script-files"),
 	})
 	importer := sourceapp.NewImporterWithFetcher(repo, httpFetcher)
-	// 并发限流器按 READER_GLOBAL_CONCURRENCY / READER_SOURCE_CONCURRENCY 装配，
-	// 搜索与发现在抓取入口共用同一实例，并按书源 concurrentRate 限速。
+	// 并发限流器按 READER_GLOBAL_CONCURRENCY / READER_SOURCE_CONCURRENCY 装配，搜索与发现共用同一实例；
+	// 按书源 concurrentRate 的速率限速由 fetcher 承担（唯一限速点），这里只限制全局/单源并发。
 	limiter := ratelimit.New(ratelimit.Options{Global: cfg.GlobalConcurrency, Source: cfg.SourceConcurrency})
 	singleSearcher := searchapp.NewSingleSourceSearcher(httpFetcher, scriptRuntime).WithLimiter(limiter)
 	multiSearcher := searchapp.NewMultiSourceSearcher(repo, singleSearcher).WithLimiter(limiter)

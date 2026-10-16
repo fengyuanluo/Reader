@@ -13,7 +13,7 @@ import (
 	"reader/internal/domain/task"
 )
 
-var ErrDebugNoSearchResult = errors.New("debug search returned no books")
+var ErrDebugNoSearchResult = errors.New("empty search result")
 
 type SearchService interface {
 	Search(ctx context.Context, input searchapp.MultiSearchInput) (searchapp.MultiSearchResult, error)
@@ -144,7 +144,7 @@ func (f *KeywordFlow) RunURL(ctx context.Context, session *task.DebugSession) er
 			return err
 		}
 		if len(result.Items) == 0 {
-			err := errors.New("debug discovery returned no books")
+			err := errors.New("empty discovery result")
 			_ = f.publishFailure(ctx, session, "discovery", err, diagnosticapp.FailureDiscoveryFailed, start)
 			return err
 		}

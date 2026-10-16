@@ -134,16 +134,26 @@ func (h *SourceHandler) writeCheckEvent(w http.ResponseWriter, flusher http.Flus
 }
 
 func terminalCheckEvent(checkTask *task.CheckTask) *task.CheckEvent {
-	eventType := task.CheckEventCompleted
-	if checkTask.Status == task.CheckTaskCancelled {
-		eventType = task.CheckEventCancelled
-	}
 	return &task.CheckEvent{
 		TaskID:    checkTask.TaskID,
-		Type:      eventType,
+		Type:      task.CheckEventType(checkEventType(checkTask.Status)),
 		Message:   string(checkTask.Status),
 		TraceID:   checkTask.TraceID,
 		CreatedAt: time.Now().UTC(),
+	}
+}
+
+// checkEventType 把校验任务状态映射为事件类型，与 OpenAPI CheckEventType 取值保持一致。
+func checkEventType(status task.CheckTaskStatus) generated.CheckEventType {
+	switch status {
+	case task.CheckTaskPending:
+		return generated.CheckStarted
+	case task.CheckTaskSucceeded, task.CheckTaskFailed:
+		return generated.CheckCompleted
+	case task.CheckTaskCancelled:
+		return generated.CheckCancelled
+	default:
+		return generated.CheckProgress
 	}
 }
 

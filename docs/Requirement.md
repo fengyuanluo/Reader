@@ -105,7 +105,7 @@
 - 不实现主题、阅读排版 UI。
 - 不实现 WebDAV、云同步、备份恢复。
 - 不实现多用户账号、租户隔离、公开 SaaS 权限模型。
-- 不实现完整浏览器 WebView 渲染抓取能力；如遇依赖 WebView 的书源，一期返回明确不支持错误。
+- 不实现完整浏览器 WebView 渲染抓取能力；单纯 `webView:true` 请求降级为普通 HTTP 并记录日志，如遇依赖 WebView 渲染的书源，一期返回明确不支持错误；依赖 DOM 执行的 `webJs`、`serverID`、`webViewDelayTime` 接受但不生效。
 
 ## 4. 需求格式说明
 
@@ -127,8 +127,8 @@
 - 需求描述：服务必须能解析并持久化 Legado 书源 JSON 的核心字段，保持字段语义不变。
 - 输入：单个 `BookSource` JSON 对象或数组元素。
 - 输出：持久化后的书源记录和标准化的 API 响应。
-- 边界：必须支持 `bookSourceUrl`、`bookSourceName`、`bookSourceGroup`、`bookSourceType`、`bookUrlPattern`、`customOrder`、`enabled`、`enabledExplore`、`jsLib`、`enabledCookieJar`、`concurrentRate`、`header`、`loginUrl`、`loginUi`、`loginCheckJs`、`coverDecodeJs`、`bookSourceComment`、`variableComment`、`lastUpdateTime`、`respondTime`、`weight`、`exploreUrl`、`exploreScreen`、`ruleExplore`、`searchUrl`、`ruleSearch`、`ruleBookInfo`、`ruleToc`、`ruleContent`。`ruleReview` 一期只保留字段，不实现段评功能。
-- 验收标准：导入包含上述字段的 JSON 后，查询接口返回字段不丢失；规则对象可以是 JSON 对象或 JSON 字符串；缺失可选字段不会导致导入失败；缺失 `bookSourceUrl` 或 `bookSourceName` 返回结构化 400 错误。
+- 边界：必须支持 `bookSourceUrl`、`bookSourceName`、`bookSourceGroup`、`bookSourceType`、`bookUrlPattern`、`customOrder`、`enabled`、`enabledExplore`、`eventListener`、`customButton`、`jsLib`、`enabledCookieJar`、`concurrentRate`、`header`、`loginUrl`、`loginUi`、`loginCheckJs`、`coverDecodeJs`、`bookSourceComment`、`variableComment`、`lastUpdateTime`、`respondTime`、`weight`、`exploreUrl`、`exploreScreen`、`ruleExplore`、`searchUrl`、`ruleSearch`、`ruleBookInfo`、`ruleToc`、`ruleContent`。`eventListener`、`customButton` 和 `ruleReview` 一期只保留字段，不执行 Android 客户端行为。
+- 验收标准：导入包含上述字段的 JSON 后，经 OpenAPI、SQLite 和查询接口往返不丢失；规则对象可以是 JSON 对象或 JSON 字符串；缺失 `enabled`、`enabledExplore`、`enabledCookieJar`、`respondTime` 时分别使用 `true`、`true`、`true`、`180000`，显式 `false/0` 保持不变；缺失 `bookSourceUrl` 或 `bookSourceName` 返回结构化 400 错误。
 - 优先级：P0
 
 ### R-002：兼容 Legado 规则对象结构
@@ -137,7 +137,7 @@
 - 需求描述：服务必须按 Legado 规则对象字段建立领域模型，支持搜索、发现、详情、目录、正文解析。
 - 输入：书源中的规则字段。
 - 输出：可被规则引擎消费的领域对象。
-- 边界：一期不实现 `ReviewRule` 行为；`ContentRule.webJs` 与 `imageDecode` 只在设计明确允许的受限 JS / 图片代理范围内执行；`imageStyle`、`payAction` 作为兼容字段保留，但属于客户端阅读/付费 UI 行为，一期服务端不执行。
+- 边界：一期不实现 `ReviewRule` 行为；`ContentRule.webJs` 与 `imageDecode` 只在设计明确允许的受限 JS / 图片代理范围内执行；`subContent`、`callBackJs`、`imageStyle`、`payAction` 作为兼容字段保留，其中前两者在正文请求时记录未执行诊断，均不阻断主正文规则。
 - 验收标准：每个规则对象都有单元测试覆盖 JSON 对象和 JSON 字符串两种导入形式；未知字段不会破坏导入；导出查询保留未知兼容字段。
 - 优先级：P0
 
@@ -291,12 +291,12 @@
 ### R-030：URL 请求分析
 
 - 来源依据：`AnalyzeUrl.kt`、`CustomUrl.kt`
-- 需求描述：服务必须将书源中的 URL 规则解析为实际 HTTP 请求，包括关键词、页码、自定义属性、Header、Body 等。
+- 需求描述：服务必须将书源中的 URL 规则解析为实际 HTTP 请求，包括关键词、页码、自定义属性、Header、Body 和响应后处理。
 - 输入：书源 URL 规则、关键词、页码、书籍/章节上下文。
 - 输出：可执行的 fetch request。
-- 边界：一期必须覆盖常用 HTTP 抓取；`serverID`、`webJs`、`webViewDelayTime` 接受但不生效；`webView: true` 与依赖浏览器的 `js` 明确不支持并返回明确错误。
-- 支持的 URL option：`proxy`（书源 `header` 的 `proxy` 键或 URL option，支持 `http`/`https`/`socks5`/`socks5h`，不支持 `socks4`）、`dnsIp`（直连指定 IP，保留 Host 头与 TLS SNI，不可与 `proxy` 同用）、`charset`（query/body 编码）。
-- 验收标准：关键词替换、页码替换、自定义 URL 属性和相对 URL 有单元测试。
+- 边界：统一解析 `method/body/headers/type/charset/origin/retry/js/bodyJs`；`proxy`（书源 `header` 的 `proxy` 键或 URL 选项，支持 `http`/`https`/`socks5`/`socks5h`，不支持 `socks4`）与 `dnsIp`（直连指定 IP，保留 Host 头与 TLS SNI，不可与 `proxy` 同用）在抓取链真实生效；`serverID`、`webJs`、`webViewDelayTime` 接受但不生效；`webView: true` 只作带日志的普通 HTTP 降级，不承诺渲染，其余浏览器专属 option 返回明确错误。
+- 支持的 URL option：`proxy`、`dnsIp`、`charset`（query/body 编码）。
+- 验收标准：关键词、页码、自定义属性、相对 URL、`js` 请求变换和 `bodyJs` 响应变换有单元测试；搜索、发现、详情、目录、正文及 JS 网络 helper 共用同一 option 语义。
 - 优先级：P0
 
 ### R-031：HTTP 抓取安全控制
@@ -305,8 +305,8 @@
 - 需求描述：所有外部请求必须有超时、并发、响应大小、重定向和 SSRF 防护。
 - 输入：抓取请求。
 - 输出：响应体或结构化抓取错误。
-- 边界：默认禁止私网、回环、链路本地、metadata 地址，以及 CGN、NAT64、6to4、文档段等特殊用途地址段；SSRF 校验在拨号阶段对每个解析结果执行，可防 DNS rebinding 与重定向绕过；忽略 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量，代理只来自书源配置，经代理抓取时目标校验为尽力而为。
-- 验收标准：mock 测试覆盖超时、过大响应、过多重定向、私网地址、Cookie 合并。
+- 边界：默认禁止私网、回环、链路本地、metadata 地址，以及 CGN、NAT64、6to4、文档段等特殊用途地址段；SSRF 校验在拨号阶段对每个解析结果执行，可防 DNS rebinding 与重定向绕过；忽略 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量，代理只来自书源配置，经代理抓取时目标校验为尽力而为；重定向后目标也必须检查；`concurrentRate` 按书源键应用固定窗口限速，等待可被 context 取消。
+- 验收标准：mock 测试覆盖超时、过大响应、过多重定向、私网地址、Cookie 合并和每源限速。
 - 优先级：P0
 
 ### R-032：Header、Cookie 与登录检测
@@ -387,8 +387,8 @@
 - 需求描述：服务能根据搜索结果或书籍 URL 获取书名、作者、分类、字数、最新章节、简介、封面、目录 URL。
 - 输入：书源、书籍 URL、可选 `infoHtml`。
 - 输出：标准化 Book。
-- 边界：`downloadUrls` 仅为文件类书源兼容字段，一期不实现文件下载站闭环。
-- 验收标准：规则 `init` 生效；`canReName` 行为按设计实现；相对封面 URL 转绝对 URL。
+- 边界：`downloadUrls` 用于文件类书源，可指向 TXT 等文件；一期提取并返回地址，不实现文件下载器。
+- 验收标准：规则 `init` 生效；`canReName` 行为按设计实现；相对封面 URL 转绝对 URL；文件地址只绝对化 URL 部分，逗号后的请求 option 原文保持不变。
 - 优先级：P0
 
 ### R-044：目录解析
@@ -407,9 +407,18 @@
 - 需求描述：服务能解析章节正文、正文标题、下一页正文、正文替换规则、图片标签保留或转换。
 - 输入：书源、Book、BookChapter。
 - 输出：章节正文字符串和缓存记录。
-- 边界：图片章节和音频章节一期不作为核心验收；正文图片代理作为 P1；依赖 WebView 浏览器流的 `sourceRegex` 一期返回明确不支持错误。
+- 边界：图片章节和音频章节一期不作为核心验收；正文图片代理作为 P1；依赖 WebView 浏览器流的 `sourceRegex` 一期返回明确不支持错误；`subContent/callBackJs` 保留并记录未执行诊断，不影响主正文。
 - 验收标准：空的非卷章节正文返回 `ContentEmpty` 类型错误；多页正文按顺序合并；缓存命中时不重复抓取。
 - 优先级：P0
+
+### R-045A：全书 TXT 导出
+
+- 需求描述：用户可以将已建立目录的文本书籍按目录顺序导出为完整 UTF-8 TXT。
+- 输入：书籍 ID、已保存目录；正文按需抓取并复用章节缓存。
+- 输出：带书名、作者、简介、卷名/章节标题和正文的 TXT 附件。
+- 边界：同步生成临时文件，全部正文章成功后才发送；文件型书源仍只提供 `downloadUrls`，不在此接口下载；卷标不请求正文。
+- 验收标准：搜索 -> 保存书籍 -> 详情 -> 目录 -> 全部章节 -> TXT 下载链路成功；任一正文章失败不返回残缺文件，成功章节可在重试时命中缓存。
+- 优先级：P1
 
 ### R-046：书架与阅读进度
 
@@ -471,20 +480,20 @@
 
 - 来源依据：`CheckSourceService.kt`、`CheckSource.kt`
 - 需求描述：用户可以启动批量校验任务，对多个书源并发执行搜索、发现、详情、目录、正文检查。
-- 输入：书源 ID 列表、校验选项、超时。
-- 输出：任务 ID、进度、每源结果。
-- 边界：校验任务可取消；某个书源失败不影响其他书源。
-- 验收标准：并发执行有测试；任务状态从 pending/running/cancelled/succeeded/failed 可查询；结果持久化。
+- 输入：书源 ID 列表、校验选项、超时；关键词为空或仅作为 fallback 时优先使用合法的 `ruleSearch.checkKeyWord`。
+- 输出：任务 ID、单调进度、每源结果、实际 `keywordUsed/timeoutMs` 及按搜索/发现区分的阶段结果。
+- 边界：校验任务可取消；某个书源失败不影响其他书源；搜索与发现分别执行后续详情/目录/正文；`bookSourceType=3` 只校验详情和 `downloadUrls`，目录/正文为不适用，无搜索规则可跳过。
+- 验收标准：并发执行和 `-race` 有测试；任务状态从 pending/running/cancelled/succeeded/failed 可查询；每完成一项即持久化单调进度；默认超时为 180 秒；创建和取消异步任务均返回 202；运行中 SSE 使用 `check.progress`。
 - 优先级：P0
 
 ### R-071：校验失败分类
 
 - 来源依据：`CheckSourceService.kt`
-- 需求描述：校验失败必须分类为超时、JS 失效、网站失效、搜索失效、发现失效、目录失效、正文失效。
+- 需求描述：校验必须保留书源 warning 原文，并在标准阶段 code 之外区分空结果、上游 HTTP/响应、网络、脚本/规则、运行时 API、浏览器边界和内部错误。
 - 输入：校验过程中的异常和空结果。
-- 输出：标准失败 code 和用户可读 message。
-- 边界：无法精确识别时归类为 `website_failed`，并保留原始错误摘要。
-- 验收标准：每种失败都有单元测试或集成测试模拟；书源响应时间和错误摘要被更新。
+- 输出：标准 `failureCode`、细分 `failureClass` 和未改写的用户可读 `message`。
+- 边界：只有明确的 `empty search/discovery result`、`empty toc|toc_empty`、`empty content|content_empty` 才归为空结果；网络、HTTP、浏览器能力和其他通用错误不得因所在阶段被改写为空。网络等非确定性失败不写入永久“失效”分组或注释。
+- 验收标准：每种失败都有最小测试；warning 原文、阶段、书源响应时间和错误摘要被持久化；`EOF` 与 TLS handshake timeout 等传输错误分类稳定。
 - 优先级：P0
 
 ## 13. 数据与持久化需求
@@ -541,6 +550,16 @@
 - 验收标准：每个 API 响应有 traceId；抓取和 JS 错误能关联 sourceId；健康检查不需要认证。
 - 优先级：P0
 
+### R-092：容器化发布
+
+- 来源依据：用户确认的 GitHub 与 GHCR 发布模型。
+- 需求描述：项目提供非 root、双架构的 OCI 镜像，通过 GHCR 发布并支持 Docker Compose 部署。
+- 输入：`READER_TOKEN` 及其他可选环境变量。
+- 输出：`linux/amd64`、`linux/arm64` 镜像和可持久化 SQLite 的单服务部署。
+- 边界：数据固定持久化到 `/data`，临时 TXT 使用 `/tmp`；不提交凭据，不增加自动清理、签名或额外发布系统。
+- 验收标准：容器健康检查通过；Bearer 鉴权有效；SQLite 写入在容器重启后保留；公开 GHCR 标签可匿名拉取。
+- 优先级：P0
+
 ## 15. 总体验收标准
 
 一期完成时，必须通过以下端到端验收：
@@ -549,8 +568,10 @@
 - 能从 `https://shuyuan-api.yiove.com/import/book-source-collection/a8adf570-e115-4b99-87e3-ccaf298ae361` 下载并解析真实远程书源集合，生成真实集合 E2E 报告。
 - 能对启用书源执行关键词搜索并返回标准 SearchBook。
 - 能从搜索结果解析详情、目录和第一章正文。
+- mock 文本书源能在请求 `js/bodyJs` 生效后完成搜索到正文；文件型书源能提取 TXT `downloadUrls` 并保持其请求 option 原文。
 - 能把书籍加入书架并保存阅读进度。
 - 能应用标题替换和正文替换规则。
 - 能启动调试 session 并看到搜索、详情、目录、正文阶段事件。
 - 能启动批量校验任务并得到每个书源的分类结果。
+- 能通过 Docker 或 Compose 以非 root 用户运行，并在 `/data` 持久化 SQLite。
 - 能通过 `go generate ./...`、`go test -race -count=1 ./...`、`go vet ./...`、OpenAPI 校验和 SQLite migration 测试。

@@ -109,6 +109,8 @@ func (r *memoryCheckRepository) UpdateTaskStatus(context.Context, string, task.C
 	return nil
 }
 
+func (r *memoryCheckRepository) UpdateTaskProgress(context.Context, string, int) error { return nil }
+
 func (r *memoryCheckRepository) SaveItem(context.Context, *task.CheckTaskItem) error { return nil }
 
 func (r *memoryCheckRepository) ListItems(context.Context, string) ([]*task.CheckTaskItem, error) {
