@@ -170,6 +170,9 @@ func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseUR
 
 func PreviewSearchBookFromInfo(ctx context.Context, src *source.BookSource, redirectURL string, body string, seed book.SearchBook, scriptRuntime *script.Runtime) (book.SearchBook, error) {
 	ctx = script.WithStage(ctx, "info")
+	if src == nil || src.RuleBookInfo.Value == nil {
+		return seed, ErrBookInfoRuleMissing
+	}
 	b := seed.ToBook()
 	if b.BookURL == "" {
 		b.BookURL = redirectURL
