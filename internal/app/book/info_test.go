@@ -2,6 +2,7 @@ package bookapp
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -543,4 +544,23 @@ func (r *fakeBookRepo) List(ctx context.Context, filter domainbook.BookFilter) (
 func (r *fakeBookRepo) Delete(ctx context.Context, id string) error { return nil }
 func (r *fakeBookRepo) SaveProgress(ctx context.Context, id string, progress domainbook.BookProgress) error {
 	return nil
+}
+
+// 书源未声明 ruleBookInfo 时，搜索/发现链路的详情页预览会走 PreviewSearchBookFromInfo，
+// 必须返回明确错误而不是解引用空规则 panic（HTTP 层曾表现为 500）。
+func TestPreviewSearchBookFromInfoWithoutBookInfoRuleReturnsError(t *testing.T) {
+	src := testInfoSource()
+	src.RuleBookInfo = rule.Flexible[rule.BookInfoRule]{}
+
+	_, err := PreviewSearchBookFromInfo(context.Background(), src, "https://site.example.test/book/1", detailHTML(), domainbook.SearchBook{BookURL: "https://site.example.test/book/1"}, nil)
+	if !errors.Is(err, ErrBookInfoRuleMissing) {
+		t.Fatalf("PreviewSearchBookFromInfo() error = %v, want ErrBookInfoRuleMissing", err)
+	}
+}
+
+func TestPreviewSearchBookFromInfoWithNilSourceReturnsError(t *testing.T) {
+	_, err := PreviewSearchBookFromInfo(context.Background(), nil, "https://site.example.test/book/1", detailHTML(), domainbook.SearchBook{}, nil)
+	if !errors.Is(err, ErrBookInfoRuleMissing) {
+		t.Fatalf("PreviewSearchBookFromInfo() error = %v, want ErrBookInfoRuleMissing", err)
+	}
 }

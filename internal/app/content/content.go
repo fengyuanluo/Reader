@@ -352,14 +352,11 @@ func buildContentFetchRequest(ctx context.Context, rawURL string, src *source.Bo
 		case "body":
 			switch body := value.(type) {
 			case string:
-				rawFormBody = body
+				// 表单编码推迟到 charset 与全部 URL 选项（含 headers）解析完成后统一做一次（见下方）。
 				if sourceapp.LooksLikeFormBody(body) {
-					req.Body = []byte(urlrule.EncodeFormString(body, ""))
+					rawFormBody = body
 				} else {
 					req.Body = []byte(body)
-				}
-				if req.Headers["Content-Type"] == "" && sourceapp.LooksLikeFormBody(body) {
-					req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
 				}
 			case map[string]any, []any:
 				if encoded, err := json.Marshal(body); err == nil {
@@ -391,8 +388,15 @@ func buildContentFetchRequest(ctx context.Context, rawURL string, src *source.Bo
 		}
 	}
 	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
-	if rawFormBody != "" && sourceapp.LooksLikeFormBody(rawFormBody) {
-		req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
+	// 对齐 Legado AnalyzeUrl.kt:262-283：body 不是 JSON/XML 且未显式设置 Content-Type 时才按表单编码，
+	// 且只编码一次（旧实现先按空 charset 编码、末尾再按 charset 编码，正文被 percent 编码两次导致服务端解析失败）。
+	if rawFormBody != "" {
+		if req.Headers["Content-Type"] == "" {
+			req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
+			req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
+		} else {
+			req.Body = []byte(rawFormBody)
+		}
 	}
 	sourceapp.ApplyNetworkOptions(&req, custom.Attribute)
 	return req, nil

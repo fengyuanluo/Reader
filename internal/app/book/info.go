@@ -88,6 +88,11 @@ func (s *InfoService) RefreshInfo(ctx context.Context, input InfoInput) (book.Bo
 }
 
 func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseURL string, redirectURL string, body string, canRename bool, scriptRuntime *script.Runtime) error {
+	// 书源未声明 ruleBookInfo 时走兜底预览路径（PreviewSearchBookFromInfo），
+	// 这里必须返回明确错误，不能解引用空规则导致 HTTP 500。
+	if src == nil || src.RuleBookInfo.Value == nil {
+		return ErrBookInfoRuleMissing
+	}
 	infoRule := src.RuleBookInfo.Value
 	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
 		RedirectURL: redirectURL,

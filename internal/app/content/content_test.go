@@ -1053,3 +1053,31 @@ func TestContentServiceWidensNonStringHeaderValues(t *testing.T) {
 		t.Fatalf("headers = %#v", fetcher.lastReq.Headers)
 	}
 }
+
+// 正文抓取与目录抓取共用同一套 URL 选项语义：表单正文只编码一次（R-053）。
+func TestBuildContentFetchRequestEncodesFormBodyOnce(t *testing.T) {
+	req, err := buildContentFetchRequest(context.Background(), `https://site.example.test/api,{"method":"POST","body":"a=1&b=中文"}`, testContentSource(), nil)
+	if err != nil {
+		t.Fatalf("buildContentFetchRequest() error = %v", err)
+	}
+	if got := string(req.Body); got != "a=1&b=%E4%B8%AD%E6%96%87" {
+		t.Fatalf("body = %q, want %q", got, "a=1&b=%E4%B8%AD%E6%96%87")
+	}
+	if req.Headers["Content-Type"] != "application/x-www-form-urlencoded" {
+		t.Fatalf("content-type = %q", req.Headers["Content-Type"])
+	}
+}
+
+// 显式设置了 Content-Type 时正文原样发送（R-053）。
+func TestBuildContentFetchRequestKeepsBodyWhenContentTypeSet(t *testing.T) {
+	req, err := buildContentFetchRequest(context.Background(), `https://site.example.test/api,{"method":"POST","headers":{"Content-Type":"text/plain"},"body":"a=1&b=中文"}`, testContentSource(), nil)
+	if err != nil {
+		t.Fatalf("buildContentFetchRequest() error = %v", err)
+	}
+	if got := string(req.Body); got != "a=1&b=中文" {
+		t.Fatalf("body = %q, want 原样正文", got)
+	}
+	if req.Headers["Content-Type"] != "text/plain" {
+		t.Fatalf("content-type = %q", req.Headers["Content-Type"])
+	}
+}
