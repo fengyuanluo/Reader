@@ -70,3 +70,68 @@ func TestSourceIDFromURLIsStable(t *testing.T) {
 		t.Fatal("different URLs produced same source id")
 	}
 }
+
+func TestParseBookSourceAppliesLegadoDefaults(t *testing.T) {
+	src, err := ParseBookSource([]byte(`{"bookSourceUrl":"https://example.test","bookSourceName":"Example"}`))
+	if err != nil {
+		t.Fatalf("ParseBookSource() error = %v", err)
+	}
+	if !src.Enabled || !src.EnabledExplore || !src.EnabledCookieJar {
+		t.Fatalf("defaults = enabled:%v explore:%v cookieJar:%v, want all true", src.Enabled, src.EnabledExplore, src.EnabledCookieJar)
+	}
+	if src.RespondTime != DefaultRespondTime {
+		t.Fatalf("RespondTime = %d, want %d", src.RespondTime, DefaultRespondTime)
+	}
+}
+
+func TestParseBookSourceKeepsExplicitValues(t *testing.T) {
+	src, err := ParseBookSource([]byte(`{
+		"bookSourceUrl":"https://example.test",
+		"bookSourceName":"Example",
+		"enabled":false,
+		"enabledExplore":false,
+		"enabledCookieJar":false,
+		"respondTime":123
+	}`))
+	if err != nil {
+		t.Fatalf("ParseBookSource() error = %v", err)
+	}
+	if src.Enabled || src.EnabledExplore || src.EnabledCookieJar {
+		t.Fatalf("explicit false was overwritten: %#v", src)
+	}
+	if src.RespondTime != 123 {
+		t.Fatalf("RespondTime = %d, want 123", src.RespondTime)
+	}
+}
+
+func TestParseBookSourceTreatsNullAsMissing(t *testing.T) {
+	src, err := ParseBookSource([]byte(`{
+		"bookSourceUrl":"https://example.test",
+		"bookSourceName":"Example",
+		"enabled":null,
+		"enabledCookieJar":null,
+		"respondTime":null
+	}`))
+	if err != nil {
+		t.Fatalf("ParseBookSource() error = %v", err)
+	}
+	if !src.Enabled || !src.EnabledCookieJar {
+		t.Fatalf("null should fall back to defaults: %#v", src)
+	}
+	if src.RespondTime != DefaultRespondTime {
+		t.Fatalf("RespondTime = %d, want %d", src.RespondTime, DefaultRespondTime)
+	}
+}
+
+func TestNormalizeDefaultsRespondTime(t *testing.T) {
+	src := &BookSource{BookSourceURL: "https://example.test", BookSourceName: "Example"}
+	if err := src.Normalize(); err != nil {
+		t.Fatalf("Normalize() error = %v", err)
+	}
+	if src.RespondTime != DefaultRespondTime {
+		t.Fatalf("RespondTime = %d, want %d", src.RespondTime, DefaultRespondTime)
+	}
+	if src.SourceID == "" {
+		t.Fatal("SourceID is empty after Normalize")
+	}
+}

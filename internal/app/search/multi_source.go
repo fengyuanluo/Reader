@@ -2,11 +2,13 @@ package searchapp
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
 	"reader/internal/domain/book"
 	"reader/internal/domain/source"
+	"reader/internal/infra/ratelimit"
 )
 
 type SourceWarning struct {
@@ -33,10 +35,12 @@ type MultiSearchResult struct {
 }
 
 type MultiSourceSearcher struct {
-	repo   source.BookSourceRepository
-	single SourceSearcher
+	repo    source.BookSourceRepository
+	single  SourceSearcher
+	limiter *ratelimit.Limiter
 }
 
+// SourceSearcher 单源搜索接口，便于多源搜索与测试替换。
 type SourceSearcher interface {
 	Search(ctx context.Context, input SearchInput) ([]book.SearchBook, error)
 }
@@ -45,18 +49,30 @@ func NewMultiSourceSearcher(repo source.BookSourceRepository, single SourceSearc
 	return &MultiSourceSearcher{repo: repo, single: single}
 }
 
+// WithLimiter 注入限流器：多源并发度缺省取其全局并发上限，单源请求在抓取入口按源限流。
+func (s *MultiSourceSearcher) WithLimiter(limiter *ratelimit.Limiter) *MultiSourceSearcher {
+	s.limiter = limiter
+	return s
+}
+
+// defaultConcurrency 为未配置任何并发参数时的兜底多源并发度。
+const defaultConcurrency = 4
+
 func (s *MultiSourceSearcher) Search(ctx context.Context, input MultiSearchInput) (MultiSearchResult, error) {
-	sources, err := s.resolveSources(ctx, input)
+	sources, resolveWarnings, err := s.resolveSources(ctx, input)
 	if err != nil {
 		return MultiSearchResult{}, err
 	}
 	concurrency := input.Concurrency
 	if concurrency < 1 {
-		concurrency = 4
+		concurrency = s.limiter.GlobalLimit()
+	}
+	if concurrency < 1 {
+		concurrency = defaultConcurrency
 	}
 	sem := make(chan struct{}, concurrency)
 	var mu sync.Mutex
-	result := MultiSearchResult{}
+	result := MultiSearchResult{Warnings: resolveWarnings}
 	var wg sync.WaitGroup
 	for _, src := range sources {
 		src := src
@@ -66,6 +82,20 @@ func (s *MultiSourceSearcher) Search(ctx context.Context, input MultiSearchInput
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// 单源 panic 只影响该源，转成 Warning，其余源结果照常返回。
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					mu.Lock()
+					result.Warnings = append(result.Warnings, SourceWarning{
+						SourceID:       src.SourceID,
+						BookSourceURL:  src.BookSourceURL,
+						BookSourceName: src.BookSourceName,
+						Code:           "search_panic",
+						Message:        fmt.Sprintf("panic: %v", recovered),
+					})
+					mu.Unlock()
+				}
+			}()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			items, err := s.single.Search(ctx, SearchInput{Source: src, Keyword: input.Keyword, Page: input.Page})
@@ -88,22 +118,25 @@ func (s *MultiSourceSearcher) Search(ctx context.Context, input MultiSearchInput
 	return result, nil
 }
 
-func (s *MultiSourceSearcher) resolveSources(ctx context.Context, input MultiSearchInput) ([]*source.BookSource, error) {
+// resolveSources 解析待搜索书源；单个无效 sourceId 只跳过该源并记录 Warning，不中止整个请求。
+func (s *MultiSourceSearcher) resolveSources(ctx context.Context, input MultiSearchInput) ([]*source.BookSource, []SourceWarning, error) {
 	if len(input.SourceIDs) > 0 {
 		out := []*source.BookSource{}
+		warnings := []SourceWarning{}
 		for _, id := range input.SourceIDs {
 			src, err := s.repo.FindByID(ctx, id)
 			if err != nil {
-				return nil, err
+				warnings = append(warnings, SourceWarning{SourceID: id, Code: "source_unavailable", Message: err.Error()})
+				continue
 			}
 			if input.EnabledOnly && !src.Enabled {
 				continue
 			}
 			out = append(out, src)
 		}
-		return out, nil
+		return out, warnings, nil
 	}
-	filter := source.BookSourceFilter{Page: 1, PageSize: 10000}
+	filter := source.BookSourceFilter{}
 	if input.Group != "" {
 		filter.Group = input.Group
 	}
@@ -111,11 +144,11 @@ func (s *MultiSourceSearcher) resolveSources(ctx context.Context, input MultiSea
 		enabled := true
 		filter.Enabled = &enabled
 	}
-	page, err := s.repo.List(ctx, filter)
+	items, err := source.ListAll(ctx, s.repo, filter)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return page.Items, nil
+	return items, nil, nil
 }
 
 func mergeSearchBooks(existing []book.SearchBook, incoming []book.SearchBook, keyword string, precision bool) []book.SearchBook {

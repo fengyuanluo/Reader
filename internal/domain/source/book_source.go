@@ -1,6 +1,7 @@
 package source
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -53,6 +54,9 @@ type BookSource struct {
 	RawJSON           json.RawMessage                  `json:"-"`
 }
 
+// DefaultRespondTime 对齐 Legado BookSource.kt:77 的默认响应时间（毫秒）。
+const DefaultRespondTime int64 = 180000
+
 func (s *BookSource) Validate() error {
 	if strings.TrimSpace(s.BookSourceURL) == "" {
 		return ErrMissingBookSourceURL
@@ -70,7 +74,50 @@ func (s *BookSource) Normalize() error {
 	if s.SourceID == "" {
 		s.SourceID = SourceIDFromURL(s.BookSourceURL)
 	}
+	// 0 为无效值，按 Legado 默认响应时间补齐。
+	if s.RespondTime <= 0 {
+		s.RespondTime = DefaultRespondTime
+	}
 	return nil
+}
+
+// UnmarshalJSON 解析书源 JSON，并为缺省字段套用 Legado 默认值：
+// enabled / enabledExplore / enabledCookieJar 默认 true（BookSource.kt:52-57），
+// respondTime 默认 180000（BookSource.kt:77）。显式写出的值（含 false）保持不变，
+// 显式的 null 按缺省处理。
+func (s *BookSource) UnmarshalJSON(data []byte) error {
+	type plain BookSource
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*s = BookSource(decoded)
+	present := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &present); err != nil {
+		return err
+	}
+	if !jsonFieldPresent(present, "enabled") {
+		s.Enabled = true
+	}
+	if !jsonFieldPresent(present, "enabledExplore") {
+		s.EnabledExplore = true
+	}
+	if !jsonFieldPresent(present, "enabledCookieJar") {
+		s.EnabledCookieJar = true
+	}
+	if !jsonFieldPresent(present, "respondTime") {
+		s.RespondTime = DefaultRespondTime
+	}
+	return nil
+}
+
+// jsonFieldPresent 判断 JSON 对象中字段是否存在且值不为 null。
+func jsonFieldPresent(fields map[string]json.RawMessage, name string) bool {
+	raw, ok := fields[name]
+	if !ok {
+		return false
+	}
+	return string(bytes.TrimSpace(raw)) != "null"
 }
 
 func SourceIDFromURL(bookSourceURL string) string {

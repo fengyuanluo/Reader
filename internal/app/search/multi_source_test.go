@@ -3,6 +3,7 @@ package searchapp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"reader/internal/domain/book"
@@ -30,9 +31,12 @@ func TestMultiSourceSearchSkipsDisabledByDefaultFilter(t *testing.T) {
 	single := &SingleSourceSearcher{}
 	searcher := NewMultiSourceSearcher(repo, single)
 
-	sources, err := searcher.resolveSources(context.Background(), MultiSearchInput{EnabledOnly: true})
+	sources, warnings, err := searcher.resolveSources(context.Background(), MultiSearchInput{EnabledOnly: true})
 	if err != nil {
 		t.Fatalf("resolveSources() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v", warnings)
 	}
 	if len(sources) != 1 || sources[0].SourceID != "enabled" {
 		t.Fatalf("sources = %#v", sources)
@@ -55,6 +59,122 @@ func TestMultiSourceSearchConvertsSourceFailureToWarning(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 }
+
+func TestMultiSourceSearchSkipsInvalidSourceIDWithWarning(t *testing.T) {
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "ok", BookSourceURL: "source-a", BookSourceName: "A", SearchURL: "https://a.test", Enabled: true},
+	}}
+	searcher := NewMultiSourceSearcher(repo, fakeSingleSearcher{})
+
+	result, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", SourceIDs: []string{"missing", "ok"}, Concurrency: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %#v, want one result from the valid source", result.Items)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].SourceID != "missing" || result.Warnings[0].Code != "source_unavailable" {
+		t.Fatalf("warnings = %#v", result.Warnings)
+	}
+}
+
+func TestMultiSourceSearchRecoversFromSourcePanic(t *testing.T) {
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "bad", BookSourceURL: "source-bad", BookSourceName: "Bad", SearchURL: "https://bad.test", Enabled: true},
+		{SourceID: "ok", BookSourceURL: "source-ok", BookSourceName: "Ok", SearchURL: "https://ok.test", Enabled: true},
+	}}
+	searcher := NewMultiSourceSearcher(repo, panicSingleSearcher{})
+
+	result, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", EnabledOnly: true, Concurrency: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Items) != 1 || result.Items[0].Origin != "source-ok" {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].SourceID != "bad" || result.Warnings[0].Code != "search_panic" {
+		t.Fatalf("warnings = %#v", result.Warnings)
+	}
+}
+
+type panicSingleSearcher struct{}
+
+func (panicSingleSearcher) Search(ctx context.Context, input SearchInput) ([]book.SearchBook, error) {
+	if input.Source.SourceID == "bad" {
+		panic("boom")
+	}
+	return []book.SearchBook{{Name: "斗破苍穹", Author: "天蚕土豆", Origin: input.Source.BookSourceURL}}, nil
+}
+
+func TestMultiSourceSearchPaginatesSourceList(t *testing.T) {
+	items := make([]*source.BookSource, 1201)
+	for i := range items {
+		items[i] = &source.BookSource{
+			SourceID:       fmt.Sprintf("s%d", i),
+			BookSourceURL:  fmt.Sprintf("https://s%d.test", i),
+			BookSourceName: fmt.Sprintf("S%d", i),
+			SearchURL:      fmt.Sprintf("https://s%d.test/search", i),
+			Enabled:        true,
+		}
+	}
+	repo := &pagedSourceRepo{items: items}
+	searcher := NewMultiSourceSearcher(repo, fakeSingleSearcher{})
+
+	sources, warnings, err := searcher.resolveSources(context.Background(), MultiSearchInput{EnabledOnly: true})
+	if err != nil {
+		t.Fatalf("resolveSources() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+	if len(sources) != len(items) {
+		t.Fatalf("sources = %d, want %d", len(sources), len(items))
+	}
+	if repo.pages != 3 {
+		t.Fatalf("List calls = %d, want 3", repo.pages)
+	}
+}
+
+// pagedSourceRepo 按 Page/PageSize 真实分页，用于验证全量拉取不会静默截断。
+type pagedSourceRepo struct {
+	items []*source.BookSource
+	pages int
+}
+
+func (r *pagedSourceRepo) Save(ctx context.Context, source *source.BookSource) error { return nil }
+func (r *pagedSourceRepo) SaveMany(ctx context.Context, sources []*source.BookSource) error {
+	return nil
+}
+func (r *pagedSourceRepo) FindByID(ctx context.Context, id string) (*source.BookSource, error) {
+	return nil, source.ErrNotFound
+}
+func (r *pagedSourceRepo) FindByURL(ctx context.Context, url string) (*source.BookSource, error) {
+	return nil, source.ErrNotFound
+}
+func (r *pagedSourceRepo) List(ctx context.Context, filter source.BookSourceFilter) (source.Page[*source.BookSource], error) {
+	r.pages++
+	pageSize := filter.PageSize
+	if pageSize <= 0 {
+		pageSize = len(r.items)
+	}
+	start := (filter.Page - 1) * pageSize
+	if start >= len(r.items) {
+		return source.Page[*source.BookSource]{Total: len(r.items)}, nil
+	}
+	end := start + pageSize
+	if end > len(r.items) {
+		end = len(r.items)
+	}
+	return source.Page[*source.BookSource]{Items: r.items[start:end], Total: len(r.items)}, nil
+}
+func (r *pagedSourceRepo) Delete(ctx context.Context, id string) error { return nil }
+func (r *pagedSourceRepo) UpdateEnabled(ctx context.Context, id string, enabled bool) error {
+	return nil
+}
+func (r *pagedSourceRepo) UpdateExploreEnabled(ctx context.Context, id string, enabled bool) error {
+	return nil
+}
+func (r *pagedSourceRepo) Reorder(ctx context.Context, orders []source.SourceOrder) error { return nil }
 
 type fakeSingleSearcher struct {
 	failSourceID string

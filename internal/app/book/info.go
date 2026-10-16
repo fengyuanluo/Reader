@@ -103,26 +103,28 @@ func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseUR
 	}
 	allowRename := canRename && strings.TrimSpace(infoRule.CanReName) != ""
 	name, _ := analyzer.GetString(ctx, infoRule.Name, content)
-	name = strings.TrimSpace(name)
+	name = FormatBookName(name)
 	if name != "" && (allowRename || b.Name == "") {
 		b.Name = name
 	}
 	author, _ := analyzer.GetString(ctx, infoRule.Author, content)
-	author = strings.TrimSpace(author)
+	author = FormatBookAuthor(author)
 	if author != "" && (allowRename || b.Author == "") {
 		b.Author = author
 	}
 	if values, err := analyzer.GetStringList(ctx, infoRule.Kind, content); err == nil && len(values) > 0 {
 		b.Kind = strings.TrimSpace(strings.Join(values, ","))
 	}
-	if value, err := analyzer.GetString(ctx, infoRule.WordCount, content); err == nil && strings.TrimSpace(value) != "" {
-		b.WordCount = strings.TrimSpace(value)
+	if value, err := analyzer.GetString(ctx, infoRule.WordCount, content); err == nil {
+		if formatted := FormatWordCount(value); formatted != "" {
+			b.WordCount = formatted
+		}
 	}
 	if value, err := analyzer.GetString(ctx, infoRule.LastChapter, content); err == nil && strings.TrimSpace(value) != "" {
 		b.LatestChapterTitle = strings.TrimSpace(value)
 	}
 	if value, err := analyzer.GetString(ctx, infoRule.Intro, content); err == nil && strings.TrimSpace(value) != "" {
-		b.Intro = strings.TrimSpace(value)
+		b.Intro = FormatIntro(value)
 	}
 	if value, err := analyzer.GetURL(ctx, infoRule.CoverURL, content); err == nil && value != "" {
 		b.CoverURL = value

@@ -5,12 +5,14 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/rule"
 	"reader/internal/domain/source"
+	"reader/internal/infra/ratelimit"
 	"reader/internal/infra/script"
 )
 
@@ -222,7 +224,7 @@ func TestSingleSourceSearchNormalizesTemplatedRelativeBookURL(t *testing.T) {
 
 func TestSingleSourceSearchBookURLPatternDirectInfo(t *testing.T) {
 	src := searchTestSource()
-	src.BookURLPattern = `book/\d+`
+	src.BookURLPattern = `https://example\.test/book/\d+`
 	fetcher := fakeFetcher{resp: &fetch.Response{StatusCode: 200, URL: "https://example.test/book/1", Body: []byte(searchDetailHTML())}}
 	searcher := NewSingleSourceSearcher(fetcher, nil)
 
@@ -235,6 +237,48 @@ func TestSingleSourceSearchBookURLPatternDirectInfo(t *testing.T) {
 	}
 	if books[0].Name != "斗破苍穹" || books[0].Author != "天蚕土豆" {
 		t.Fatalf("books = %#v", books)
+	}
+}
+
+func TestSingleSourceSearchBookURLPatternRequiresWholeMatch(t *testing.T) {
+	src := searchTestSource()
+	// Legado 用 baseUrl.matches(pattern) 做整串匹配：`book/\d+` 不应命中以 book/1 开头的列表页。
+	src.BookURLPattern = `book/\d+`
+	fetcher := fakeFetcher{resp: &fetch.Response{StatusCode: 200, URL: "https://example.test/book/1/other", Body: []byte(`<div class="book"><a class="name" href="/book/2">列表书</a><span class="author">作者</span></div>`)}}
+	searcher := NewSingleSourceSearcher(fetcher, nil)
+
+	books, err := searcher.Search(context.Background(), SearchInput{Source: src, Keyword: "书", Page: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(books) != 1 || books[0].Name != "列表书" || books[0].BookURL != "https://example.test/book/2" {
+		t.Fatalf("books = %#v", books)
+	}
+}
+
+func TestSingleSourceSearchRejectsInvalidBookURLPattern(t *testing.T) {
+	src := searchTestSource()
+	src.BookURLPattern = `(`
+	searcher := NewSingleSourceSearcher(fakeFetcher{resp: &fetch.Response{StatusCode: 200, URL: "https://example.test/list"}}, nil)
+
+	_, err := searcher.Search(context.Background(), SearchInput{Source: src, Keyword: "书", Page: 1})
+	if err == nil || !strings.Contains(err.Error(), "bookUrlPattern") {
+		t.Fatalf("error = %v, want bookUrlPattern error", err)
+	}
+}
+
+func TestSingleSourceSearchSkipsInfoFallbackWhenBookURLPatternConfigured(t *testing.T) {
+	src := searchTestSource()
+	src.BookURLPattern = `https://example\.test/detail/\d+`
+	fetcher := fakeFetcher{resp: &fetch.Response{StatusCode: 200, URL: "https://example.test/list?q=书", Body: []byte(searchDetailHTML())}}
+	searcher := NewSingleSourceSearcher(fetcher, nil)
+
+	books, err := searcher.Search(context.Background(), SearchInput{Source: src, Keyword: "书", Page: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("books = %#v, want empty without info fallback", books)
 	}
 }
 
@@ -770,4 +814,205 @@ func searchTestSource() *source.BookSource {
 
 func searchDetailHTML() string {
 	return `<html><body><main class="detail"><h1>斗破苍穹</h1><span class="author">天蚕土豆</span><p class="intro">少年故事</p><img class="cover" src="/images/cover.jpg"/><a class="toc" href="/toc/1">目录</a></main></body></html>`
+}
+
+func TestSingleSourceSearchFormatsFieldsLikeLegado(t *testing.T) {
+	src := searchTestSource()
+	src.RuleSearch.Value.WordCount = ".wc@text"
+	fetcher := fakeFetcher{resp: &fetch.Response{
+		StatusCode: 200,
+		URL:        "https://example.test/search?q=斗破&page=1",
+		Body: []byte(`<div class="book">
+			<a class="name" href="/b/1">斗破苍穹 作者:天蚕土豆</a>
+			<span class="author">作者:天蚕土豆</span>
+			<span class="kind">玄幻</span>
+			<span class="kind">奇幻</span>
+			<span class="wc">12345</span>
+			<div class="intro">少年<br/>故事</div>
+		</div>`),
+	}}
+	searcher := NewSingleSourceSearcher(fetcher, nil)
+
+	books, err := searcher.Search(context.Background(), SearchInput{Source: src, Keyword: "斗破", Page: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("books = %#v", books)
+	}
+	got := books[0]
+	if got.Name != "斗破苍穹" {
+		t.Fatalf("name = %q", got.Name)
+	}
+	if got.Author != "天蚕土豆" {
+		t.Fatalf("author = %q", got.Author)
+	}
+	if got.Kind != "玄幻,奇幻" {
+		t.Fatalf("kind = %q", got.Kind)
+	}
+	if got.WordCount != "1.2万字" {
+		t.Fatalf("wordCount = %q", got.WordCount)
+	}
+	if !strings.Contains(got.Intro, "少年") || strings.Contains(got.Intro, "<br") {
+		t.Fatalf("intro = %q", got.Intro)
+	}
+}
+
+func TestSingleSourceSearchRespectsLimiterGlobalLimit(t *testing.T) {
+	src := searchTestSource()
+	fetcher := &blockingFetcher{resp: &fetch.Response{
+		StatusCode: 200,
+		URL:        "https://example.test/search?q=斗破&page=1",
+		Body:       []byte(`<div class="book"><a class="name" href="/b/1">斗破苍穹</a><span class="author">天蚕土豆</span></div>`),
+	}}
+	searcher := NewSingleSourceSearcher(fetcher, nil).WithLimiter(ratelimit.New(ratelimit.Options{Global: 1}))
+
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := searcher.Search(context.Background(), SearchInput{Source: src, Keyword: "斗破", Page: 1}); err != nil {
+				t.Errorf("Search() error = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if max := fetcher.maxConcurrent(); max > 1 {
+		t.Fatalf("max concurrent fetches = %d, want <= 1", max)
+	}
+}
+
+// blockingFetcher 记录同时进行的抓取数，用于验证限流器确实生效。
+type blockingFetcher struct {
+	resp *fetch.Response
+
+	mu      sync.Mutex
+	running int
+	max     int
+}
+
+func (f *blockingFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
+	f.mu.Lock()
+	f.running++
+	if f.running > f.max {
+		f.max = f.running
+	}
+	f.mu.Unlock()
+	time.Sleep(10 * time.Millisecond)
+	f.mu.Lock()
+	f.running--
+	f.mu.Unlock()
+	return f.resp, nil
+}
+
+func (f *blockingFetcher) maxConcurrent() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.max
+}
+
+func TestBuildSearchRequestReplacesPageListPlaceholder(t *testing.T) {
+	tests := []struct {
+		page int
+		want string
+	}{
+		{1, "https://example.test/list/1/index.html?p=4"},
+		{2, "https://example.test/list/2/index.html?p=5"},
+		{9, "https://example.test/list/3/index.html?p=5"},
+	}
+	for _, tt := range tests {
+		src := searchTestSource()
+		src.SearchURL = "https://example.test/list/<1,2,3>/index.html?p=<4,5>"
+
+		req, err := buildSearchRequest(context.Background(), nil, src, "斗破", tt.page)
+		if err != nil {
+			t.Fatalf("buildSearchRequest(page=%d) error = %v", tt.page, err)
+		}
+		if req.URL != tt.want {
+			t.Fatalf("page=%d url = %q, want %q", tt.page, req.URL, tt.want)
+		}
+	}
+}
+
+func TestBuildSearchRequestAppliesOriginOption(t *testing.T) {
+	src := searchTestSource()
+	src.BookSourceURL = "https://www.example.test"
+	src.SearchURL = `/search,{"method":"POST","origin":"https://origin.example.test"}`
+
+	req, err := buildSearchRequest(context.Background(), nil, src, "斗破", 1)
+	if err != nil {
+		t.Fatalf("buildSearchRequest() error = %v", err)
+	}
+	if req.Headers["Origin"] != "https://origin.example.test" || req.Headers["Referer"] != "https://origin.example.test" {
+		t.Fatalf("headers = %#v", req.Headers)
+	}
+
+	src.SearchURL = `/search,{"method":"POST","origin":"https://origin.example.test","headers":{"Referer":"https://ref.example.test"}}`
+	req, err = buildSearchRequest(context.Background(), nil, src, "斗破", 1)
+	if err != nil {
+		t.Fatalf("buildSearchRequest(referer) error = %v", err)
+	}
+	if req.Headers["Referer"] != "https://ref.example.test" {
+		t.Fatalf("headers = %#v", req.Headers)
+	}
+}
+
+func TestBuildSearchRequestKeepsBodyWithExplicitContentType(t *testing.T) {
+	src := searchTestSource()
+	src.BookSourceURL = "https://api.example.test"
+	src.SearchURL = `/search,{"method":"POST","body":"a=1&b=斗破","headers":{"Content-Type":"text/plain"}}`
+
+	req, err := buildSearchRequest(context.Background(), nil, src, "斗破", 1)
+	if err != nil {
+		t.Fatalf("buildSearchRequest() error = %v", err)
+	}
+	if string(req.Body) != "a=1&b=斗破" {
+		t.Fatalf("body = %q, want raw body", string(req.Body))
+	}
+	if req.Headers["Content-Type"] != "text/plain" {
+		t.Fatalf("headers = %#v", req.Headers)
+	}
+}
+
+func TestBuildSearchRequestEncodesBodyOnceWithoutContentType(t *testing.T) {
+	src := searchTestSource()
+	src.BookSourceURL = "https://api.example.test"
+	src.SearchURL = `/search,{"method":"POST","body":"a=1&b=斗破"}`
+
+	req, err := buildSearchRequest(context.Background(), nil, src, "斗破", 1)
+	if err != nil {
+		t.Fatalf("buildSearchRequest() error = %v", err)
+	}
+	if string(req.Body) != "a=1&b=%E6%96%97%E7%A0%B4" {
+		t.Fatalf("body = %q", string(req.Body))
+	}
+	if req.Headers["Content-Type"] != "application/x-www-form-urlencoded" {
+		t.Fatalf("headers = %#v", req.Headers)
+	}
+}
+
+func TestBuildSearchRequestHexEncodingForTypeKeyPresence(t *testing.T) {
+	tests := []struct {
+		option string
+		want   bool
+	}{
+		{`{"type":""}`, true},
+		{`{"type":null}`, false},
+		{`{"type":123}`, true},
+		{`{"type":"x"}`, true},
+	}
+	for _, tt := range tests {
+		src := searchTestSource()
+		src.BookSourceURL = "http://download.example.test"
+		src.SearchURL = "data:;base64,L3NlYXJjaA==," + tt.option
+
+		req, err := buildSearchRequest(context.Background(), nil, src, "斗破", 1)
+		if err != nil {
+			t.Fatalf("buildSearchRequest(%s) error = %v", tt.option, err)
+		}
+		if req.EncodeBodyAsHex != tt.want {
+			t.Fatalf("option %s: EncodeBodyAsHex = %v, want %v", tt.option, req.EncodeBodyAsHex, tt.want)
+		}
+	}
 }

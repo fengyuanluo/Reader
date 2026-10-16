@@ -15,6 +15,7 @@ import (
 	"reader/internal/domain/fetch"
 	domainrule "reader/internal/domain/rule"
 	"reader/internal/domain/source"
+	"reader/internal/infra/ratelimit"
 	ruleinfra "reader/internal/infra/rule"
 	ruleregex "reader/internal/infra/rule/regex"
 	urlrule "reader/internal/infra/rule/url"
@@ -30,6 +31,7 @@ var (
 type SingleSourceSearcher struct {
 	fetcher fetch.Fetcher
 	script  *script.Runtime
+	limiter *ratelimit.Limiter
 }
 
 type SearchInput struct {
@@ -42,6 +44,12 @@ func NewSingleSourceSearcher(fetcher fetch.Fetcher, scriptRuntime *script.Runtim
 	return &SingleSourceSearcher{fetcher: fetcher, script: scriptRuntime}
 }
 
+// WithLimiter 注入全局/单源并发与 concurrentRate 限流器；未注入时不限流。
+func (s *SingleSourceSearcher) WithLimiter(limiter *ratelimit.Limiter) *SingleSourceSearcher {
+	s.limiter = limiter
+	return s
+}
+
 func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([]book.SearchBook, error) {
 	ctx = script.WithStage(ctx, "search")
 	src := input.Source
@@ -52,7 +60,9 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 	if err != nil {
 		return nil, err
 	}
-	resp, err := s.fetcher.Fetch(ctx, req)
+	resp, err := ratelimit.Do(ctx, s.limiter, src.BookSourceURL, src.ConcurrentRate, func(ctx context.Context) (*fetch.Response, error) {
+		return s.fetcher.Fetch(ctx, req)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +72,12 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 			return nil, err
 		}
 	}
-	if src.BookURLPattern != "" {
-		if ok, _ := ruleregex.MatchString(src.BookURLPattern, resp.URL); ok {
+	if strings.TrimSpace(src.BookURLPattern) != "" {
+		matched, err := matchesBookURLPattern(src.BookURLPattern, resp.URL)
+		if err != nil {
+			return nil, err
+		}
+		if matched {
 			preview, err := bookapp.PreviewSearchBookFromInfo(ctx, src, resp.URL, string(resp.Body), book.SearchBook{
 				BookURL:     resp.URL,
 				Origin:      src.BookSourceURL,
@@ -118,7 +132,7 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 		})
 		itemAnalyzer.SetVariables(baseVars)
 		name, _ := itemAnalyzer.GetString(ctx, rule.Name, item)
-		name = strings.TrimSpace(name)
+		name = bookapp.FormatBookName(name)
 		if name == "" {
 			continue
 		}
@@ -131,18 +145,18 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 			continue
 		}
 		seen[bookURL] = struct{}{}
-		kind, _ := itemAnalyzer.GetString(ctx, rule.Kind, item)
+		kinds, _ := itemAnalyzer.GetStringList(ctx, rule.Kind, item)
 		intro, _ := itemAnalyzer.GetString(ctx, rule.Intro, item)
 		cover, _ := itemAnalyzer.GetURL(ctx, rule.CoverURL, item)
 		wordCount, _ := itemAnalyzer.GetString(ctx, rule.WordCount, item)
 		lastChapter, _ := itemAnalyzer.GetString(ctx, rule.LastChapter, item)
 		searchBook.BookURL = bookURL
 		searchBook.Name = name
-		searchBook.Author = strings.TrimSpace(author)
-		searchBook.Kind = strings.TrimSpace(kind)
+		searchBook.Author = bookapp.FormatBookAuthor(author)
+		searchBook.Kind = strings.TrimSpace(strings.Join(kinds, ","))
 		searchBook.CoverURL = cover
-		searchBook.Intro = strings.TrimSpace(intro)
-		searchBook.WordCount = strings.TrimSpace(wordCount)
+		searchBook.Intro = bookapp.FormatIntro(intro)
+		searchBook.WordCount = bookapp.FormatWordCount(wordCount)
 		searchBook.LatestChapterTitle = strings.TrimSpace(lastChapter)
 		if variable := itemAnalyzer.VariablesJSON(); variable != "" {
 			searchBook.Variable = variable
@@ -152,7 +166,8 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 	if reverse {
 		reverseSearchBooks(results)
 	}
-	if len(results) == 0 {
+	if len(results) == 0 && strings.TrimSpace(src.BookURLPattern) == "" {
+		// 对齐 Legado BookList.kt:100-106：仅在未配置 bookUrlPattern 时才按详情页回退解析。
 		preview, err := bookapp.PreviewSearchBookFromInfo(ctx, src, resp.URL, string(resp.Body), book.SearchBook{
 			BookURL:     resp.URL,
 			Origin:      src.BookSourceURL,
@@ -417,7 +432,8 @@ func buildSearchURLPlaceholders(template string, keyword string, page int, inclu
 	}
 	out = replaceSingleBraceToken(out, "key", keyword)
 	out = replaceSingleBraceToken(out, "page", strconv.Itoa(page))
-	return out
+	// 对齐 Legado AnalyzeUrl.replaceKeyPageJs：内嵌表达式与页数规则替换后处理 <a,b,c> 分页列表。
+	return urlrule.ReplacePagePlaceholders(out, page)
 }
 
 func replaceSingleBraceToken(input string, token string, value string) string {
@@ -530,14 +546,7 @@ func applySearchURLOptions(req *fetch.Request, opts map[string]any) {
 			switch body := value.(type) {
 			case string:
 				rawFormBody = body
-				if looksLikeFormBody(body) {
-					req.Body = []byte(urlrule.EncodeFormString(body, ""))
-				} else {
-					req.Body = []byte(body)
-				}
-				if req.Headers["Content-Type"] == "" && looksLikeFormBody(body) {
-					req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
-				}
+				req.Body = []byte(body)
 			case map[string]any, []any:
 				if raw, err := json.Marshal(body); err == nil {
 					req.Body = raw
@@ -548,8 +557,17 @@ func applySearchURLOptions(req *fetch.Request, opts map[string]any) {
 			}
 		case "headers":
 			mergeSearchHeaders(req.Headers, value)
+		case "origin":
+			// 对齐 Legado 书源/正文路径：origin 同时作为 Origin 与缺省 Referer。
+			if origin, ok := value.(string); ok && strings.TrimSpace(origin) != "" {
+				req.Headers["Origin"] = strings.TrimSpace(origin)
+				if req.Headers["Referer"] == "" {
+					req.Headers["Referer"] = strings.TrimSpace(origin)
+				}
+			}
 		case "type":
-			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+			// 对齐 Legado AnalyzeUrl：type 键存在且值非 null 时按 hex 二进制处理响应。
+			if value != nil {
 				req.EncodeBodyAsHex = true
 			}
 		case "charset":
@@ -579,7 +597,14 @@ func applySearchURLOptions(req *fetch.Request, opts map[string]any) {
 	}
 	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
 	if rawFormBody != "" && looksLikeFormBody(rawFormBody) {
-		req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
+		// 对齐 Legado AnalyzeUrl:279-283：只有显式设置了非表单 Content-Type 时才保留原文，
+		// 否则按表单编码一次（不再重复编码），并补上表单 Content-Type。
+		if strings.TrimSpace(req.Headers["Content-Type"]) == "" {
+			req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
+			req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
+		} else {
+			req.Body = []byte(rawFormBody)
+		}
 	}
 }
 
@@ -592,6 +617,20 @@ func looksLikeFormBody(body string) bool {
 		return false
 	}
 	return strings.Contains(body, "=") || strings.Contains(body, "&")
+}
+
+// matchesBookURLPattern 对齐 Legado BookList.kt 的 baseUrl.matches(pattern)：整串匹配。
+// Legado 在 pattern 非法时会抛异常，这里同样返回错误，避免静默按“不匹配”处理。
+func matchesBookURLPattern(pattern string, value string) (bool, error) {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return false, nil
+	}
+	matched, err := ruleregex.MatchString("^(?:"+pattern+")$", value)
+	if err != nil {
+		return false, fmt.Errorf("bookUrlPattern %q is invalid: %w", pattern, err)
+	}
+	return matched, nil
 }
 
 func normalizeListRule(rule string) (string, bool) {
@@ -616,9 +655,8 @@ func mergeSearchHeaders(headers map[string]string, value any) {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, raw := range typed {
-			if text, ok := raw.(string); ok {
-				headers[key] = text
-			}
+			// 对齐 Legado AnalyzeUrl entry.value.toString()：非字符串值也统一转成字符串。
+			headers[key] = fmt.Sprint(raw)
 		}
 	case string:
 		nested := map[string]string{}
