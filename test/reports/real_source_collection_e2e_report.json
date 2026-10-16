@@ -1,5 +1,5 @@
 {
-  "testTime": "2026-10-14T10:05:57Z",
+  "testTime": "2026-10-16T07:57:53Z",
   "collectionUrl": "https://shuyuan-api.yiove.com/import/book-source-collection/a8adf570-e115-4b99-87e3-ccaf298ae361",
   "httpStatus": 200,
   "contentType": "application/json",
@@ -2059,22 +2059,22 @@
     }
   ],
   "attemptedCandidates": 100,
-  "fullSuccessCount": 39,
+  "fullSuccessCount": 41,
   "stageSummary": {
     "content": {
-      "passed": 39,
+      "passed": 41,
       "failed": 2
     },
     "info": {
-      "passed": 43,
-      "failed": 3
+      "passed": 45,
+      "failed": 2
     },
     "search": {
-      "passed": 46,
-      "failed": 54
+      "passed": 47,
+      "failed": 53
     },
     "toc": {
-      "passed": 41,
+      "passed": 43,
       "failed": 2
     }
   },
@@ -2088,7 +2088,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: Get \"https://api-x.shrtxs.cn/qd/search.php?keyword=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\": net/http: TLS handshake timeout",
-      "failureClass": "network_tls_invalid"
+      "failureClass": "network_tls_invalid",
+      "traceId": "e79de6f31380eba75395b6f76843b89a"
     },
     {
       "sourceId": "src_e13960f70d9807554ed4ae9f",
@@ -2096,7 +2097,8 @@
       "bookSourceName": "番茄小说（优+++）",
       "keywordUsed": "https://www.baidu.com/删书示例?book_id=7285555567827880975",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "8d5ac1d4e1b37aef5af442733f81ac70"
     },
     {
       "sourceId": "src_e13960f70d9807554ed4ae9f",
@@ -2105,8 +2107,9 @@
       "keywordUsed": "https://www.baidu.com/删书示例?book_id=7285555567827880975",
       "stage": "info",
       "status": "failed",
-      "message": "script_failed: e2e: SyntaxError: Unexpected end of JSON input (EOF) at parse (native)",
-      "failureClass": "source_upstream_empty_json_response"
+      "message": "script_failed: stage=info source=src_e13960f70d9807554ed4ae9f: SyntaxError: Unexpected end of JSON input (EOF) at parse (native)",
+      "failureClass": "source_upstream_empty_json_response",
+      "traceId": "d5027b4d96a2cb2e4db393d0764579a4"
     },
     {
       "sourceId": "src_51c98043d70b25c4cb428178",
@@ -2114,7 +2117,8 @@
       "bookSourceName": "阅读助手（优+++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "ac5a1a2a0cc12d9579ce1ed03f11ba81"
     },
     {
       "sourceId": "src_51c98043d70b25c4cb428178",
@@ -2122,7 +2126,8 @@
       "bookSourceName": "阅读助手（优+++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "1dec43ecad28a2845fc73086255b6f19"
     },
     {
       "sourceId": "src_51c98043d70b25c4cb428178",
@@ -2130,7 +2135,8 @@
       "bookSourceName": "阅读助手（优+++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "ab73304704fdae5213b07743e4ac8089"
     },
     {
       "sourceId": "src_51c98043d70b25c4cb428178",
@@ -2139,7 +2145,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=8452"
+      "message": "length=8452",
+      "traceId": "2c0bdb73e7a9a580ee8bc25ae7e0f2b1"
     },
     {
       "sourceId": "src_2e69e222325a50ab5fcacc3a",
@@ -2149,7 +2156,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 403",
-      "failureClass": "source_upstream_http_403"
+      "failureClass": "source_upstream_http_403",
+      "traceId": "68251a1f1d5973057a58fb8353c39fa1"
     },
     {
       "sourceId": "src_4377e504b78dc41848314bf3",
@@ -2157,7 +2165,8 @@
       "bookSourceName": "得奇小说（优+++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "6658c080d601cdb17a5c0985e10032c7"
     },
     {
       "sourceId": "src_4377e504b78dc41848314bf3",
@@ -2165,7 +2174,8 @@
       "bookSourceName": "得奇小说（优+++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "b251fc9ff4a6002aabe37a3daf4d5c0e"
     },
     {
       "sourceId": "src_4377e504b78dc41848314bf3",
@@ -2173,7 +2183,8 @@
       "bookSourceName": "得奇小说（优+++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "2e7bd85af17d7c1dd455c5fe6492a65b"
     },
     {
       "sourceId": "src_4377e504b78dc41848314bf3",
@@ -2182,7 +2193,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=33"
+      "message": "length=33",
+      "traceId": "5c079c1630f27fb8456bdc5a882c3a9e"
     },
     {
       "sourceId": "src_e65b7afd81062e9b55ab40f1",
@@ -2192,7 +2204,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: Get \"https://www.deqibook.com/tag/?key=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\": tls: failed to verify certificate: x509: certificate signed by unknown authority",
-      "failureClass": "network_tls_invalid"
+      "failureClass": "network_tls_invalid",
+      "traceId": "3992139201fe16ca8950ded49541befd"
     },
     {
       "sourceId": "src_f4cb64d3ffc3a27ef0d0d39c",
@@ -2202,7 +2215,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 403",
-      "failureClass": "source_upstream_http_403"
+      "failureClass": "source_upstream_http_403",
+      "traceId": "43588ab55637af34c0dbf7ea32979706"
     },
     {
       "sourceId": "src_525b28d5f4d56bd8e94e9911",
@@ -2211,8 +2225,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: Post \"https://wodushu.com/search/\": dial tcp: lookup wodushu.com on 223.5.5.5:53: server misbehaving",
-      "failureClass": "network_dns_failure"
+      "message": "empty search result; warnings: search_failed: Post \"https://wodushu.com/search/\": lookup wodushu.com on 223.5.5.5:53: server misbehaving",
+      "failureClass": "network_dns_failure",
+      "traceId": "a52b39a1c1e58a7ac82d03ff0f0fbc01"
     },
     {
       "sourceId": "src_9e9340fd762b536ea8e2bf42",
@@ -2220,183 +2235,187 @@
       "bookSourceName": "八零小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "failed",
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result",
+      "traceId": "3c99d9d51f16d937c6b5f6af83e9248b"
     },
     {
-      "sourceId": "src_9e9340fd762b536ea8e2bf42",
-      "bookSourceUrl": "http://wap.80zw.la/",
-      "bookSourceName": "八零小说（优++）",
+      "sourceId": "src_3c11912efc699c481e08bc12",
+      "bookSourceUrl": "https://ttks.tw/",
+      "bookSourceName": "天天小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed",
+      "traceId": "19bcb36ca4bda2bee9bff2e0eed415d3"
+    },
+    {
+      "sourceId": "src_3c11912efc699c481e08bc12",
+      "bookSourceUrl": "https://ttks.tw/",
+      "bookSourceName": "天天小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "9ae72118c178c952a0fd205bd6c4f728"
     },
     {
-      "sourceId": "src_9e9340fd762b536ea8e2bf42",
-      "bookSourceUrl": "http://wap.80zw.la/",
-      "bookSourceName": "八零小说（优++）",
+      "sourceId": "src_3c11912efc699c481e08bc12",
+      "bookSourceUrl": "https://ttks.tw/",
+      "bookSourceName": "天天小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed",
+      "traceId": "56372a5096758546fad5c79a563222b4"
+    },
+    {
+      "sourceId": "src_3c11912efc699c481e08bc12",
+      "bookSourceUrl": "https://ttks.tw/",
+      "bookSourceName": "天天小说（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=6788",
+      "traceId": "5e5cf95b09707e313f47c816b1549f53"
+    },
+    {
+      "sourceId": "src_a8ff7a48d495485f23808fc2",
+      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed",
+      "traceId": "da25b34db2a4f22cc99a26ab588ec5a3"
+    },
+    {
+      "sourceId": "src_a8ff7a48d495485f23808fc2",
+      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed",
+      "traceId": "11cad0ad73de7dff8e6c95c0d72e6b7d"
+    },
+    {
+      "sourceId": "src_a8ff7a48d495485f23808fc2",
+      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed",
+      "traceId": "f2cd3d66fd3caf1dbe486824a74f42b5"
+    },
+    {
+      "sourceId": "src_a8ff7a48d495485f23808fc2",
+      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8452",
+      "traceId": "7953674dd2fc399c0e9c60c9aa60c394"
+    },
+    {
+      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
+      "bookSourceUrl": "http://download.yichnmedia.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "深空彼岸",
+      "stage": "search",
+      "status": "passed",
+      "traceId": "243a835e4670ce78135a479225c80ebf"
+    },
+    {
+      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
+      "bookSourceUrl": "http://download.yichnmedia.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "深空彼岸",
+      "stage": "info",
+      "status": "passed",
+      "traceId": "41527d0b4e9d2defe8ba859b95ffebaf"
+    },
+    {
+      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
+      "bookSourceUrl": "http://download.yichnmedia.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "深空彼岸",
+      "stage": "toc",
+      "status": "passed",
+      "traceId": "ca72f306755fbfe0b6f459cb9ba86f7c"
+    },
+    {
+      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
+      "bookSourceUrl": "http://download.yichnmedia.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "深空彼岸",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=6875",
+      "traceId": "21dbd691e47a396758823ef25f23bad3"
+    },
+    {
+      "sourceId": "src_7674446a9c59247cae736ae7",
+      "bookSourceUrl": "http://api.lfdapengu.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "开局圣人修为，女帝成了前妻",
+      "stage": "search",
+      "status": "passed",
+      "traceId": "d58201af94e7105d4da3456f9731b6b7"
+    },
+    {
+      "sourceId": "src_7674446a9c59247cae736ae7",
+      "bookSourceUrl": "http://api.lfdapengu.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "开局圣人修为，女帝成了前妻",
+      "stage": "info",
+      "status": "passed",
+      "traceId": "926e96c3a76ee146b556f3e23dcbcf4f"
+    },
+    {
+      "sourceId": "src_7674446a9c59247cae736ae7",
+      "bookSourceUrl": "http://api.lfdapengu.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "开局圣人修为，女帝成了前妻",
+      "stage": "toc",
+      "status": "passed",
+      "traceId": "43206bc2fba8caeca2b2b1c9a9ed25cd"
+    },
+    {
+      "sourceId": "src_7674446a9c59247cae736ae7",
+      "bookSourceUrl": "http://api.lfdapengu.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "开局圣人修为，女帝成了前妻",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=7640",
+      "traceId": "bdbc1e1a25d6423c265b878c2a00a50f"
+    },
+    {
+      "sourceId": "src_e86c92fc3572d5388ba96a75",
+      "bookSourceUrl": "http://api.lemiyigou.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "search",
+      "status": "passed",
+      "traceId": "01e1f48c1b60e96782af077eb6dff36d"
+    },
+    {
+      "sourceId": "src_e86c92fc3572d5388ba96a75",
+      "bookSourceUrl": "http://api.lemiyigou.com",
+      "bookSourceName": "猫眼看书（优++）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed",
+      "traceId": "1e37edc1734d3be6e70092393eb35e0c"
+    },
+    {
+      "sourceId": "src_e86c92fc3572d5388ba96a75",
+      "bookSourceUrl": "http://api.lemiyigou.com",
+      "bookSourceName": "猫眼看书（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
       "status": "failed",
       "message": "toc_empty",
-      "failureClass": "source_toc_empty"
-    },
-    {
-      "sourceId": "src_3c11912efc699c481e08bc12",
-      "bookSourceUrl": "https://ttks.tw/",
-      "bookSourceName": "天天小说（优++）",
-      "keywordUsed": "斗破苍穹",
-      "stage": "search",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_3c11912efc699c481e08bc12",
-      "bookSourceUrl": "https://ttks.tw/",
-      "bookSourceName": "天天小说（优++）",
-      "keywordUsed": "斗破苍穹",
-      "stage": "info",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_3c11912efc699c481e08bc12",
-      "bookSourceUrl": "https://ttks.tw/",
-      "bookSourceName": "天天小说（优++）",
-      "keywordUsed": "斗破苍穹",
-      "stage": "toc",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_3c11912efc699c481e08bc12",
-      "bookSourceUrl": "https://ttks.tw/",
-      "bookSourceName": "天天小说（优++）",
-      "keywordUsed": "斗破苍穹",
-      "stage": "content",
-      "status": "passed",
-      "message": "length=7386"
-    },
-    {
-      "sourceId": "src_a8ff7a48d495485f23808fc2",
-      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "我不是戏神",
-      "stage": "search",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_a8ff7a48d495485f23808fc2",
-      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "我不是戏神",
-      "stage": "info",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_a8ff7a48d495485f23808fc2",
-      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "我不是戏神",
-      "stage": "toc",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_a8ff7a48d495485f23808fc2",
-      "bookSourceUrl": "http://api.jmlldsc.com##@曦灵",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "我不是戏神",
-      "stage": "content",
-      "status": "passed",
-      "message": "length=6642"
-    },
-    {
-      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
-      "bookSourceUrl": "http://download.yichnmedia.com",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "深空彼岸",
-      "stage": "search",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
-      "bookSourceUrl": "http://download.yichnmedia.com",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "深空彼岸",
-      "stage": "info",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
-      "bookSourceUrl": "http://download.yichnmedia.com",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "深空彼岸",
-      "stage": "toc",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_b91689c2a3f54f74ac1b03f4",
-      "bookSourceUrl": "http://download.yichnmedia.com",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "深空彼岸",
-      "stage": "content",
-      "status": "passed",
-      "message": "length=6875"
-    },
-    {
-      "sourceId": "src_7674446a9c59247cae736ae7",
-      "bookSourceUrl": "http://api.lfdapengu.com",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "开局圣人修为，女帝成了前妻",
-      "stage": "search",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_7674446a9c59247cae736ae7",
-      "bookSourceUrl": "http://api.lfdapengu.com",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "开局圣人修为，女帝成了前妻",
-      "stage": "info",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_7674446a9c59247cae736ae7",
-      "bookSourceUrl": "http://api.lfdapengu.com",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "开局圣人修为，女帝成了前妻",
-      "stage": "toc",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_7674446a9c59247cae736ae7",
-      "bookSourceUrl": "http://api.lfdapengu.com",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "开局圣人修为，女帝成了前妻",
-      "stage": "content",
-      "status": "passed",
-      "message": "length=7640"
-    },
-    {
-      "sourceId": "src_e86c92fc3572d5388ba96a75",
-      "bookSourceUrl": "http://api.lemiyigou.com",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "斗破苍穹",
-      "stage": "search",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_e86c92fc3572d5388ba96a75",
-      "bookSourceUrl": "http://api.lemiyigou.com",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "斗破苍穹",
-      "stage": "info",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_e86c92fc3572d5388ba96a75",
-      "bookSourceUrl": "http://api.lemiyigou.com",
-      "bookSourceName": "猫眼看书（优++）",
-      "keywordUsed": "斗破苍穹",
-      "stage": "toc",
-      "status": "failed",
-      "message": "toc_empty",
-      "failureClass": "source_toc_empty"
+      "failureClass": "source_toc_empty",
+      "traceId": "9656c005190a445777908d574ac68fa5"
     },
     {
       "sourceId": "src_556c281e6af98e47021261b4",
@@ -2405,8 +2424,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: Get \"https://jyapi.jyacg.com/web/search?name=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\u0026type=1\": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-10-14T18:06:39+08:00 is after 2026-02-10T15:32:03Z",
-      "failureClass": "network_tls_invalid"
+      "message": "empty search result; warnings: search_failed: Get \"https://jyapi.jyacg.com/web/search?name=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\u0026type=1\": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-10-16T15:59:09+08:00 is after 2026-02-10T15:32:03Z",
+      "failureClass": "network_tls_invalid",
+      "traceId": "6f8ffc50f602d60ae6f57167a8d9aac9"
     },
     {
       "sourceId": "src_acd7f6523e1a63a37769680b",
@@ -2415,36 +2435,83 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: Get \"http://www.shencou.com/modules/article/search.php?searchtype=articlename+selected\u0026searchkey=%B6%B7%C6%C6%B2%D4%F1%B7\u0026page=1\": dial tcp 0.0.0.0:80: connect: connection refused",
-      "failureClass": "network_connection_reset"
+      "message": "empty search result; warnings: search_failed: unexpected status: 403",
+      "failureClass": "source_upstream_http_403",
+      "traceId": "f6b4fd7203e78fe1d2a5ab2b422cfd39"
     },
     {
       "sourceId": "src_a554dc47ce3ac7aad51243ca",
       "bookSourceUrl": "https://www.linovel.net#yc1101",
       "bookSourceName": "轻之文库（优++）",
-      "keywordUsed": "春物",
+      "keywordUsed": "刀剑神域",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "610ec026922f69c332a3994bd8d1867d"
     },
     {
       "sourceId": "src_a554dc47ce3ac7aad51243ca",
       "bookSourceUrl": "https://www.linovel.net#yc1101",
       "bookSourceName": "轻之文库（优++）",
-      "keywordUsed": "春物",
+      "keywordUsed": "刀剑神域",
       "stage": "info",
-      "status": "failed",
-      "message": "Get \"https://www.linovel.net/book/103303.html\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
-      "failureClass": "network_timeout"
+      "status": "passed",
+      "traceId": "dca6482596733decdebfc3a847671705"
+    },
+    {
+      "sourceId": "src_a554dc47ce3ac7aad51243ca",
+      "bookSourceUrl": "https://www.linovel.net#yc1101",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "toc",
+      "status": "passed",
+      "traceId": "83c33f09e4da1fd64c60e8b010fa7dce"
+    },
+    {
+      "sourceId": "src_a554dc47ce3ac7aad51243ca",
+      "bookSourceUrl": "https://www.linovel.net#yc1101",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=16787",
+      "traceId": "b769f610f7e6b4cfc323388ead4b2477"
     },
     {
       "sourceId": "src_6a60f43b6a01c5cd426ee7dc",
       "bookSourceUrl": "https://www.linovel.net",
       "bookSourceName": "轻之文库（优++）",
-      "keywordUsed": "斗破苍穹",
+      "keywordUsed": "刀剑神域",
       "stage": "search",
-      "status": "failed",
-      "message": "empty search result; warnings: search_failed: Get \"https://www.linovel.net/search/?kw=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
-      "failureClass": "network_timeout"
+      "status": "passed",
+      "traceId": "b22263eafce66f4244a3a2b5843bcb30"
+    },
+    {
+      "sourceId": "src_6a60f43b6a01c5cd426ee7dc",
+      "bookSourceUrl": "https://www.linovel.net",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "info",
+      "status": "passed",
+      "traceId": "1c9ac46ac5dbf2139108eecfd428dd5f"
+    },
+    {
+      "sourceId": "src_6a60f43b6a01c5cd426ee7dc",
+      "bookSourceUrl": "https://www.linovel.net",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "toc",
+      "status": "passed",
+      "traceId": "28f08b249173464e6e5e1794775ca464"
+    },
+    {
+      "sourceId": "src_6a60f43b6a01c5cd426ee7dc",
+      "bookSourceUrl": "https://www.linovel.net",
+      "bookSourceName": "轻之文库（优++）",
+      "keywordUsed": "刀剑神域",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=16787",
+      "traceId": "13cb0f70048111d0b55ff064e1823ac5"
     },
     {
       "sourceId": "src_229c3dd3e195cc03d2216d1d",
@@ -2452,7 +2519,8 @@
       "bookSourceName": "轻说百科（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "1477b361add48bf9b47b0b110e7ffae4"
     },
     {
       "sourceId": "src_229c3dd3e195cc03d2216d1d",
@@ -2460,7 +2528,8 @@
       "bookSourceName": "轻说百科（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "1fc8981e1c853b5d0b3498ff7aaf803c"
     },
     {
       "sourceId": "src_229c3dd3e195cc03d2216d1d",
@@ -2468,7 +2537,8 @@
       "bookSourceName": "轻说百科（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "3c7f6e340080161eddd45a6f06a2a641"
     },
     {
       "sourceId": "src_229c3dd3e195cc03d2216d1d",
@@ -2477,7 +2547,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=46"
+      "message": "length=15031",
+      "traceId": "c597f37dbb5ac4cd1599fca3dc10ab31"
     },
     {
       "sourceId": "src_2c85a0296d73fc923ae66d44",
@@ -2485,7 +2556,8 @@
       "bookSourceName": "异轻纵然（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "e052a98a92a35d8f860ab801231c27ad"
     },
     {
       "sourceId": "src_2c85a0296d73fc923ae66d44",
@@ -2493,7 +2565,8 @@
       "bookSourceName": "异轻纵然（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "08d6b7fbd4e0d7682b4e2e6c959a2c06"
     },
     {
       "sourceId": "src_2c85a0296d73fc923ae66d44",
@@ -2501,7 +2574,8 @@
       "bookSourceName": "异轻纵然（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "816c8f75835f97188964afbac2661840"
     },
     {
       "sourceId": "src_2c85a0296d73fc923ae66d44",
@@ -2510,7 +2584,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=7294"
+      "message": "length=7294",
+      "traceId": "025d6480ef81fdcf1b08a2601555832e"
     },
     {
       "sourceId": "src_227a51fd04b2d0e4534db5e5",
@@ -2518,7 +2593,8 @@
       "bookSourceName": "茶马小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "5d5dfb3656ba90d7da1c6ce23736f8a1"
     },
     {
       "sourceId": "src_227a51fd04b2d0e4534db5e5",
@@ -2526,7 +2602,8 @@
       "bookSourceName": "茶马小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "32f97214e7c45447f5eaa50679ec6904"
     },
     {
       "sourceId": "src_227a51fd04b2d0e4534db5e5",
@@ -2534,7 +2611,8 @@
       "bookSourceName": "茶马小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "892469347c035ed35d47290b8f6222be"
     },
     {
       "sourceId": "src_227a51fd04b2d0e4534db5e5",
@@ -2543,7 +2621,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=25"
+      "message": "length=9236",
+      "traceId": "c27f590ad96d95aba856ccb7523d1bea"
     },
     {
       "sourceId": "src_e80901f6c7a641a9c6e88eae",
@@ -2553,7 +2632,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "14dee7de76befee7f99fd81b5085f41e"
     },
     {
       "sourceId": "src_2d8432c8ed692b633b5190b7",
@@ -2561,7 +2641,8 @@
       "bookSourceName": "镇魂小说（优++）",
       "keywordUsed": "淮上",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "fd3a0e78c10a61df590ae1a701c9f25f"
     },
     {
       "sourceId": "src_2d8432c8ed692b633b5190b7",
@@ -2569,7 +2650,8 @@
       "bookSourceName": "镇魂小说（优++）",
       "keywordUsed": "淮上",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "f9d27c2a2aa9165983994ed912844f2a"
     },
     {
       "sourceId": "src_2d8432c8ed692b633b5190b7",
@@ -2577,7 +2659,8 @@
       "bookSourceName": "镇魂小说（优++）",
       "keywordUsed": "淮上",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "546348efe7821804f0e279acf93bdc4f"
     },
     {
       "sourceId": "src_2d8432c8ed692b633b5190b7",
@@ -2586,7 +2669,8 @@
       "keywordUsed": "淮上",
       "stage": "content",
       "status": "passed",
-      "message": "length=2029"
+      "message": "length=2029",
+      "traceId": "9858e741180283d3ce43f4dbd9299f3c"
     },
     {
       "sourceId": "src_1d2910b6b9aa99e5188a9965",
@@ -2594,7 +2678,8 @@
       "bookSourceName": "全本小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "351046e48dfde0e0a5d57e292ff7705f"
     },
     {
       "sourceId": "src_1d2910b6b9aa99e5188a9965",
@@ -2602,7 +2687,8 @@
       "bookSourceName": "全本小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "30e9ad1fb0f720838d19ab8a3032c46a"
     },
     {
       "sourceId": "src_1d2910b6b9aa99e5188a9965",
@@ -2610,7 +2696,8 @@
       "bookSourceName": "全本小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "34c7e64e6f08f14ed8c7bf8c991f4391"
     },
     {
       "sourceId": "src_1d2910b6b9aa99e5188a9965",
@@ -2620,7 +2707,8 @@
       "stage": "content",
       "status": "failed",
       "message": "Post \"http://119.45.176.116:5006/chapterContent\": EOF",
-      "failureClass": "network_connection_reset"
+      "failureClass": "network_connection_reset",
+      "traceId": "85f40b7da36c37ae48ebc76535ddfe3b"
     },
     {
       "sourceId": "src_7e57f5f88ef2b700654a3a49",
@@ -2628,7 +2716,8 @@
       "bookSourceName": "趣悦小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "bbb160e41b4833155b61886420fc630c"
     },
     {
       "sourceId": "src_7e57f5f88ef2b700654a3a49",
@@ -2636,7 +2725,8 @@
       "bookSourceName": "趣悦小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "955762588c25e4a7e82a981e37a5efc4"
     },
     {
       "sourceId": "src_7e57f5f88ef2b700654a3a49",
@@ -2644,7 +2734,8 @@
       "bookSourceName": "趣悦小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "e1bfada09ddbb50dcd2c4e7651f9cfee"
     },
     {
       "sourceId": "src_7e57f5f88ef2b700654a3a49",
@@ -2653,7 +2744,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=103"
+      "message": "length=103",
+      "traceId": "ebf7a146e7cc463fea3672fd92ebe347"
     },
     {
       "sourceId": "src_8c4cda972439a6c3e8125fbd",
@@ -2662,8 +2754,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: Post \"https://ggs.manmeng168.com/v1/search/do_search\": dial tcp: lookup ggs.manmeng168.com on 202.118.1.29:53: no such host",
-      "failureClass": "network_dns_failure"
+      "message": "empty search result; warnings: search_failed: Post \"https://ggs.manmeng168.com/v1/search/do_search\": lookup ggs.manmeng168.com on 202.118.1.29:53: no such host",
+      "failureClass": "network_dns_failure",
+      "traceId": "e7f45e65ceccba90c7f0043230350369"
     },
     {
       "sourceId": "src_97ea92219cefb2b56d60e384",
@@ -2671,7 +2764,8 @@
       "bookSourceName": "疯读小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "1a94b5a97bd9db59db14871dc251f710"
     },
     {
       "sourceId": "src_97ea92219cefb2b56d60e384",
@@ -2679,7 +2773,8 @@
       "bookSourceName": "疯读小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "81c436a361b0b25fdacdd009b8a627c8"
     },
     {
       "sourceId": "src_97ea92219cefb2b56d60e384",
@@ -2687,7 +2782,8 @@
       "bookSourceName": "疯读小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "7ebd4f65c161c1da353608770950b06f"
     },
     {
       "sourceId": "src_97ea92219cefb2b56d60e384",
@@ -2696,7 +2792,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=6771"
+      "message": "length=6771",
+      "traceId": "db49b515fe70def3012585b8e0da6d89"
     },
     {
       "sourceId": "src_802a30ceb32c39a84c74e34b",
@@ -2705,8 +2802,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: Get \"https://fanqie.hnxianxin.cn/search?query=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=0\u0026tab_type=3\": dial tcp: lookup fanqie.hnxianxin.cn on 202.118.1.29:53: no such host",
-      "failureClass": "network_dns_failure"
+      "message": "empty search result; warnings: search_failed: Get \"https://fanqie.hnxianxin.cn/search?query=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=0\u0026tab_type=3\": lookup fanqie.hnxianxin.cn on 202.118.1.29:53: no such host",
+      "failureClass": "network_dns_failure",
+      "traceId": "4d0ce10b4fa90b1d9744e3cd82701080"
     },
     {
       "sourceId": "src_d38a730ccbdfbba899b5221e",
@@ -2716,7 +2814,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 403",
-      "failureClass": "source_upstream_http_403"
+      "failureClass": "source_upstream_http_403",
+      "traceId": "cad0a22ae7518c129a7917523f724c7f"
     },
     {
       "sourceId": "src_226e9a79d6623f6145729ae8",
@@ -2724,7 +2823,8 @@
       "bookSourceName": "七猫小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "e5334a4819eca1cb155d2a7170e1ad92"
     },
     {
       "sourceId": "src_226e9a79d6623f6145729ae8",
@@ -2732,7 +2832,8 @@
       "bookSourceName": "七猫小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "1a101f5e4f93886f21674564a5a25ccb"
     },
     {
       "sourceId": "src_226e9a79d6623f6145729ae8",
@@ -2740,7 +2841,8 @@
       "bookSourceName": "七猫小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "1f5e020e765dae6126527b4df5b4cd03"
     },
     {
       "sourceId": "src_226e9a79d6623f6145729ae8",
@@ -2749,8 +2851,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "failed",
-      "message": "script_failed: e2e: SyntaxError: invalid character 'G' looking for beginning of value at parse (native)",
-      "failureClass": "source_upstream_non_json_response"
+      "message": "script_failed: stage=content source=src_226e9a79d6623f6145729ae8: SyntaxError: invalid character 'G' looking for beginning of value at parse (native)",
+      "failureClass": "source_upstream_non_json_response",
+      "traceId": "c4823ade6b76afaab7b456f8efa7d869"
     },
     {
       "sourceId": "src_a973ad4b9b42e5e7f3da9735",
@@ -2758,7 +2861,8 @@
       "bookSourceName": "七猫小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "0c9c5881860b3f58ab74c1fc11b04249"
     },
     {
       "sourceId": "src_a973ad4b9b42e5e7f3da9735",
@@ -2766,7 +2870,8 @@
       "bookSourceName": "七猫小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "f0fe3d11989a48caa1d75b7b272a7c23"
     },
     {
       "sourceId": "src_a973ad4b9b42e5e7f3da9735",
@@ -2774,7 +2879,8 @@
       "bookSourceName": "七猫小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "c045bed6ec2193836d1c2224b866d81f"
     },
     {
       "sourceId": "src_a973ad4b9b42e5e7f3da9735",
@@ -2783,7 +2889,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=8452"
+      "message": "length=8452",
+      "traceId": "9e10876e715b3c77a3e453b74b0242a7"
     },
     {
       "sourceId": "src_dfbd818e6f7415e487deca06",
@@ -2791,7 +2898,8 @@
       "bookSourceName": "七猫小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "04cb3dc25542bab380676151b729be60"
     },
     {
       "sourceId": "src_dfbd818e6f7415e487deca06",
@@ -2799,7 +2907,8 @@
       "bookSourceName": "七猫小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "ebd531fead18ad403434a7d8cde18161"
     },
     {
       "sourceId": "src_dfbd818e6f7415e487deca06",
@@ -2807,7 +2916,8 @@
       "bookSourceName": "七猫小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "e35695ad01abcd117eed7a7827834365"
     },
     {
       "sourceId": "src_dfbd818e6f7415e487deca06",
@@ -2816,7 +2926,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=8452"
+      "message": "length=8452",
+      "traceId": "35ec8fc3e58ed5733767905582273106"
     },
     {
       "sourceId": "src_69b9c71eff0060708b6ded3b",
@@ -2824,7 +2935,8 @@
       "bookSourceName": "全免小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "5d80efbccc97d458ecb06f35ab506210"
     },
     {
       "sourceId": "src_69b9c71eff0060708b6ded3b",
@@ -2832,7 +2944,8 @@
       "bookSourceName": "全免小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "e8f60ca12de7cbadca092f1cb661ca1f"
     },
     {
       "sourceId": "src_69b9c71eff0060708b6ded3b",
@@ -2840,7 +2953,8 @@
       "bookSourceName": "全免小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "d432cbc856e26a95a24d1beb65e5a64e"
     },
     {
       "sourceId": "src_69b9c71eff0060708b6ded3b",
@@ -2849,7 +2963,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=7086"
+      "message": "length=7086",
+      "traceId": "2efa528ac94d3451512bc92e04210dd6"
     },
     {
       "sourceId": "src_497b90c6d494403d284f9e92",
@@ -2857,7 +2972,8 @@
       "bookSourceName": "爱淘小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "e5377e5762829704381850d71ff927e0"
     },
     {
       "sourceId": "src_497b90c6d494403d284f9e92",
@@ -2865,7 +2981,8 @@
       "bookSourceName": "爱淘小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "74ce9721df52c46507d85edaeade8b02"
     },
     {
       "sourceId": "src_497b90c6d494403d284f9e92",
@@ -2873,7 +2990,8 @@
       "bookSourceName": "爱淘小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "c22107c82b7381225a81ed65e0238163"
     },
     {
       "sourceId": "src_497b90c6d494403d284f9e92",
@@ -2882,7 +3000,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=7086"
+      "message": "length=7086",
+      "traceId": "2e95aee4be73f0b7fca819f1bdeada2f"
     },
     {
       "sourceId": "src_80760b824d3f4b7f19b9bebd",
@@ -2890,7 +3009,8 @@
       "bookSourceName": "阅友小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "e706a58d578f77c38399aa46c7bdc983"
     },
     {
       "sourceId": "src_80760b824d3f4b7f19b9bebd",
@@ -2898,7 +3018,8 @@
       "bookSourceName": "阅友小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "bb07be4d50844d1b88b4e9cc7adc8cbd"
     },
     {
       "sourceId": "src_80760b824d3f4b7f19b9bebd",
@@ -2906,7 +3027,8 @@
       "bookSourceName": "阅友小说（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "3fb3315cabc99a49a81b2fd5332d1fe7"
     },
     {
       "sourceId": "src_80760b824d3f4b7f19b9bebd",
@@ -2915,7 +3037,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=13475"
+      "message": "length=13475",
+      "traceId": "a319e5db71c679a6350e81fc7650c62e"
     },
     {
       "sourceId": "src_eb8d09652f35347c3db4b600",
@@ -2923,7 +3046,8 @@
       "bookSourceName": "陶越文华（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "389c4b6d9e227307302946578338cc9e"
     },
     {
       "sourceId": "src_eb8d09652f35347c3db4b600",
@@ -2931,7 +3055,8 @@
       "bookSourceName": "陶越文华（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "cb4dd934ff1094d2ef7989669392f22e"
     },
     {
       "sourceId": "src_eb8d09652f35347c3db4b600",
@@ -2939,7 +3064,8 @@
       "bookSourceName": "陶越文华（优++）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "f58d72208b533f8b564d0e17e14c9359"
     },
     {
       "sourceId": "src_eb8d09652f35347c3db4b600",
@@ -2948,17 +3074,45 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=6552"
+      "message": "length=6552",
+      "traceId": "d51c0af90c2b0ea9333a70916e603dd1"
     },
     {
       "sourceId": "src_f58fc1c12a7ca4f750da5232",
       "bookSourceUrl": "https://kakuyomu.jp/",
       "bookSourceName": "风扇枕说（日+）",
-      "keywordUsed": "斗破苍穹",
+      "keywordUsed": "僕",
       "stage": "search",
-      "status": "failed",
-      "message": "empty search result; warnings: search_failed: unexpected status: 403",
-      "failureClass": "source_upstream_http_403"
+      "status": "passed",
+      "traceId": "c74c042ab42a148e6d0a965aa505226c"
+    },
+    {
+      "sourceId": "src_f58fc1c12a7ca4f750da5232",
+      "bookSourceUrl": "https://kakuyomu.jp/",
+      "bookSourceName": "风扇枕说（日+）",
+      "keywordUsed": "僕",
+      "stage": "info",
+      "status": "passed",
+      "traceId": "043c57aad47e5fdbba548c2ebf275735"
+    },
+    {
+      "sourceId": "src_f58fc1c12a7ca4f750da5232",
+      "bookSourceUrl": "https://kakuyomu.jp/",
+      "bookSourceName": "风扇枕说（日+）",
+      "keywordUsed": "僕",
+      "stage": "toc",
+      "status": "passed",
+      "traceId": "17996cb85524ac8d1b2058f78193c7bc"
+    },
+    {
+      "sourceId": "src_f58fc1c12a7ca4f750da5232",
+      "bookSourceUrl": "https://kakuyomu.jp/",
+      "bookSourceName": "风扇枕说（日+）",
+      "keywordUsed": "僕",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=10670",
+      "traceId": "3f48fbcd3e08847e5976002217a144de"
     },
     {
       "sourceId": "src_548b68eea2029ceef58f7a05",
@@ -2968,7 +3122,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "58f7c42324f82a2bddb3615524199138"
     },
     {
       "sourceId": "src_ae48dc2981afcd5dbeea4255",
@@ -2977,8 +3132,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: script_failed: e2e: TypeError: Cannot read property 'join' of undefined or null at \u003ceval\u003e:4:12(22)",
-      "failureClass": "source_rule_script_failed"
+      "message": "empty search result; warnings: search_failed: script_failed: stage=search source=src_ae48dc2981afcd5dbeea4255: TypeError: Cannot read property 'join' of undefined or null at \u003ceval\u003e:4:12(22)",
+      "failureClass": "source_rule_script_failed",
+      "traceId": "25ba11de112c0c07c6aa91aab4f9b680"
     },
     {
       "sourceId": "src_f8a3a2e7e8df8d9df945f590",
@@ -2986,7 +3142,8 @@
       "bookSourceName": "番茄小说（优+）",
       "keywordUsed": "https://www.baidu.com/删书示例?book_id=7285555567827880975",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "9b9aee40cfb6cb2c94aaebbc9bf1ab8e"
     },
     {
       "sourceId": "src_f8a3a2e7e8df8d9df945f590",
@@ -2995,8 +3152,9 @@
       "keywordUsed": "https://www.baidu.com/删书示例?book_id=7285555567827880975",
       "stage": "info",
       "status": "failed",
-      "message": "script_failed: e2e: SyntaxError: Unexpected end of JSON input (EOF) at parse (native)",
-      "failureClass": "source_upstream_empty_json_response"
+      "message": "script_failed: stage=info source=src_f8a3a2e7e8df8d9df945f590: SyntaxError: Unexpected end of JSON input (EOF) at parse (native)",
+      "failureClass": "source_upstream_empty_json_response",
+      "traceId": "219ce1b5a676fa90c5ef5743100beb6f"
     },
     {
       "sourceId": "src_29718f3c3b17e293f15f0349",
@@ -3004,7 +3162,8 @@
       "bookSourceName": "阿巴小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "06fc344510a8a3b55f24b721dc9df633"
     },
     {
       "sourceId": "src_29718f3c3b17e293f15f0349",
@@ -3012,7 +3171,8 @@
       "bookSourceName": "阿巴小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "d400a42e93a7f88af15c66d01e85fd53"
     },
     {
       "sourceId": "src_29718f3c3b17e293f15f0349",
@@ -3020,7 +3180,8 @@
       "bookSourceName": "阿巴小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "0ffba203e263cdfb16e54edd1dc51cf6"
     },
     {
       "sourceId": "src_29718f3c3b17e293f15f0349",
@@ -3029,7 +3190,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=9929"
+      "message": "length=4880",
+      "traceId": "4a18bb31d152621c30b56bb77682e487"
     },
     {
       "sourceId": "src_818a053544bc9270a08fd51f",
@@ -3039,7 +3201,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: Get \"https://www.yodu.org/sa/all-%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9-1.html\": net/http: TLS handshake timeout",
-      "failureClass": "network_tls_invalid"
+      "failureClass": "network_tls_invalid",
+      "traceId": "bfb86394272d15ecc905981c35e565a6"
     },
     {
       "sourceId": "src_835ebbfd39f44f6aa68a2a63",
@@ -3049,7 +3212,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 401",
-      "failureClass": "source_authorization_failed"
+      "failureClass": "source_authorization_failed",
+      "traceId": "ffcbeb3d0496733aa13fd0902b745dfe"
     },
     {
       "sourceId": "src_dfc5e2c079ea84a464b13e25",
@@ -3059,7 +3223,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 500",
-      "failureClass": "source_upstream_http_500"
+      "failureClass": "source_upstream_http_500",
+      "traceId": "6bc9602a9e7b671dfb9410042447b980"
     },
     {
       "sourceId": "src_1bb8d072276f4ad3708a5d1e",
@@ -3069,7 +3234,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: fetch blocked: unsupported scheme",
-      "failureClass": "security_policy_blocked"
+      "failureClass": "security_policy_blocked",
+      "traceId": "6d7d2317ccb4c3d04a473919010957bf"
     },
     {
       "sourceId": "src_4019d1439b0b870ffaf8c606",
@@ -3077,7 +3243,8 @@
       "bookSourceName": "阅友小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "f3bfbc9b2ada3583b0dfcf094252cd5c"
     },
     {
       "sourceId": "src_4019d1439b0b870ffaf8c606",
@@ -3085,7 +3252,8 @@
       "bookSourceName": "阅友小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "5a85ddfc28ad9f3c579a1dd408e8dd96"
     },
     {
       "sourceId": "src_4019d1439b0b870ffaf8c606",
@@ -3093,7 +3261,8 @@
       "bookSourceName": "阅友小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "f3a5018d1b402f0ba850abc38ffdd8c0"
     },
     {
       "sourceId": "src_4019d1439b0b870ffaf8c606",
@@ -3102,7 +3271,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=9417"
+      "message": "length=9417",
+      "traceId": "a273d88d464b048beea4cdb5925e3919"
     },
     {
       "sourceId": "src_be2d391cdcf230b310be3ecb",
@@ -3110,40 +3280,19 @@
       "bookSourceName": "阅友小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Get \"http://sma.yueyouxs.com/api/book/search?keyword=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "failureClass": "network_timeout",
+      "traceId": "463a0aacd4720dd3dd10a2d4cc4d5cf6"
     },
     {
-      "sourceId": "src_be2d391cdcf230b310be3ecb",
-      "bookSourceUrl": "https://sma.yueyouxs.com/#♤pb",
+      "sourceId": "src_ac801be47fa01cdc3b57e02c",
+      "bookSourceUrl": "https://sma.yueyouxs.com/",
       "bookSourceName": "阅友小说（优+）",
       "keywordUsed": "斗破苍穹",
-      "stage": "info",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_be2d391cdcf230b310be3ecb",
-      "bookSourceUrl": "https://sma.yueyouxs.com/#♤pb",
-      "bookSourceName": "阅友小说（优+）",
-      "keywordUsed": "斗破苍穹",
-      "stage": "toc",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_be2d391cdcf230b310be3ecb",
-      "bookSourceUrl": "https://sma.yueyouxs.com/#♤pb",
-      "bookSourceName": "阅友小说（优+）",
-      "keywordUsed": "斗破苍穹",
-      "stage": "content",
+      "stage": "search",
       "status": "passed",
-      "message": "length=9417"
-    },
-    {
-      "sourceId": "src_ac801be47fa01cdc3b57e02c",
-      "bookSourceUrl": "https://sma.yueyouxs.com/",
-      "bookSourceName": "阅友小说（优+）",
-      "keywordUsed": "斗破苍穹",
-      "stage": "search",
-      "status": "passed"
+      "traceId": "2c281eef6984036193e96b14bf68f069"
     },
     {
       "sourceId": "src_ac801be47fa01cdc3b57e02c",
@@ -3151,7 +3300,8 @@
       "bookSourceName": "阅友小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "e1b135037436ff3c361b64458167ecff"
     },
     {
       "sourceId": "src_ac801be47fa01cdc3b57e02c",
@@ -3159,7 +3309,8 @@
       "bookSourceName": "阅友小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "89d46de5af745a92c2ca5a5cb1503d8b"
     },
     {
       "sourceId": "src_ac801be47fa01cdc3b57e02c",
@@ -3168,7 +3319,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=9417"
+      "message": "length=9417",
+      "traceId": "6206bab85550f3daa99a7161227915b7"
     },
     {
       "sourceId": "src_3dc4f05a9d45df260c7ba98e",
@@ -3176,7 +3328,8 @@
       "bookSourceName": "中文书城（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "6757ee069451be0c466bd159dcab65be"
     },
     {
       "sourceId": "src_3dc4f05a9d45df260c7ba98e",
@@ -3184,7 +3337,8 @@
       "bookSourceName": "中文书城（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "58a01a4ad5f6ed7b14f6e16894978e80"
     },
     {
       "sourceId": "src_3dc4f05a9d45df260c7ba98e",
@@ -3192,7 +3346,8 @@
       "bookSourceName": "中文书城（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "749c3954dace9f1de0536527c2f1f659"
     },
     {
       "sourceId": "src_3dc4f05a9d45df260c7ba98e",
@@ -3201,7 +3356,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=7701"
+      "message": "length=7701",
+      "traceId": "d06424d0a00d672f47990d53886650c2"
     },
     {
       "sourceId": "src_f3d1750edb38632a08acb5ff",
@@ -3211,7 +3367,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: invalid json: unexpected end of JSON input",
-      "failureClass": "source_upstream_empty_json_response"
+      "failureClass": "source_upstream_empty_json_response",
+      "traceId": "f4e0e9735a5fa8159d33609b01a9de46"
     },
     {
       "sourceId": "src_fd0d561a90307d803dc40dca",
@@ -3221,7 +3378,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: Get \"https://book.mywebos.cn/bk/search?name=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\": EOF",
-      "failureClass": "network_connection_reset"
+      "failureClass": "network_connection_reset",
+      "traceId": "c9ab3b318c9f8bfbf48c7f7f12b184f3"
     },
     {
       "sourceId": "src_f1ed7753d419f7b1c84c4aae",
@@ -3231,7 +3389,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 403",
-      "failureClass": "source_upstream_http_403"
+      "failureClass": "source_upstream_http_403",
+      "traceId": "eb7239dfbc39a591aabb0f70f6cfb60f"
     },
     {
       "sourceId": "src_35b7e7ed637987d3126f0936",
@@ -3240,8 +3399,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "message": "empty search result; warnings: search_failed: Post \"https://www.diancang.xyz/e/search/index.php\": net/http: TLS handshake timeout",
+      "failureClass": "network_tls_invalid",
+      "traceId": "6a2bfb075a5d8a4ee43917b76dff3e0f"
     },
     {
       "sourceId": "src_0b3ad25c91471566070ebddc",
@@ -3250,49 +3410,29 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "message": "empty search result; warnings: search_failed: Post \"https://www.diancang.xyz/e/search/index.php\": net/http: TLS handshake timeout",
+      "failureClass": "network_tls_invalid",
+      "traceId": "6e5fc61508f5fdda180c771d44d8fa05"
     },
     {
       "sourceId": "src_fb904277e1befe2368640f00",
       "bookSourceUrl": "https://www.diancang.xyz",
       "bookSourceName": "中华典藏（优+）",
-      "keywordUsed": "修真",
+      "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "failed",
+      "message": "empty search result; warnings: search_failed: Post \"https://www.diancang.xyz/e/search/index.php\": net/http: TLS handshake timeout",
+      "failureClass": "network_tls_invalid",
+      "traceId": "d4a1479cddcd240d93563f9e4fa540b0"
     },
     {
-      "sourceId": "src_fb904277e1befe2368640f00",
-      "bookSourceUrl": "https://www.diancang.xyz",
-      "bookSourceName": "中华典藏（优+）",
-      "keywordUsed": "修真",
-      "stage": "info",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_fb904277e1befe2368640f00",
-      "bookSourceUrl": "https://www.diancang.xyz",
-      "bookSourceName": "中华典藏（优+）",
-      "keywordUsed": "修真",
-      "stage": "toc",
-      "status": "passed"
-    },
-    {
-      "sourceId": "src_fb904277e1befe2368640f00",
-      "bookSourceUrl": "https://www.diancang.xyz",
-      "bookSourceName": "中华典藏（优+）",
-      "keywordUsed": "修真",
-      "stage": "content",
+      "sourceId": "src_3a44ff1af921ceb89852f144",
+      "bookSourceUrl": "http://m.gulongbbs.com/wuxia",
+      "bookSourceName": "古龙武侠（优+）",
+      "keywordUsed": "天龙八部",
+      "stage": "search",
       "status": "passed",
-      "message": "length=937"
-    },
-    {
-      "sourceId": "src_3a44ff1af921ceb89852f144",
-      "bookSourceUrl": "http://m.gulongbbs.com/wuxia",
-      "bookSourceName": "古龙武侠（优+）",
-      "keywordUsed": "天龙八部",
-      "stage": "search",
-      "status": "passed"
+      "traceId": "c83625cc9f16c214dcd5b55a37a97b62"
     },
     {
       "sourceId": "src_3a44ff1af921ceb89852f144",
@@ -3300,7 +3440,8 @@
       "bookSourceName": "古龙武侠（优+）",
       "keywordUsed": "天龙八部",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "11e6c2e6adcfd7a074594c85a78f2777"
     },
     {
       "sourceId": "src_3a44ff1af921ceb89852f144",
@@ -3308,7 +3449,8 @@
       "bookSourceName": "古龙武侠（优+）",
       "keywordUsed": "天龙八部",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "291c03ea407bf51e02dcfcd8b085fb70"
     },
     {
       "sourceId": "src_3a44ff1af921ceb89852f144",
@@ -3317,7 +3459,8 @@
       "keywordUsed": "天龙八部",
       "stage": "content",
       "status": "passed",
-      "message": "length=4676"
+      "message": "length=4672",
+      "traceId": "adbdebf6e528a11030d94a21d13bc819"
     },
     {
       "sourceId": "src_a868a503411048c51d887329",
@@ -3327,7 +3470,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 400",
-      "failureClass": "source_upstream_http_400"
+      "failureClass": "source_upstream_http_400",
+      "traceId": "7f8b4772d85a3dcebf75c286f2f74802"
     },
     {
       "sourceId": "src_a311aba6335e1e00f27d7d6a",
@@ -3337,7 +3481,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 400",
-      "failureClass": "source_upstream_http_400"
+      "failureClass": "source_upstream_http_400",
+      "traceId": "20feb951edf4b0652b9f0609e6b788d9"
     },
     {
       "sourceId": "src_348a4f1ee3be6f78cfd14bd6",
@@ -3347,7 +3492,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 404",
-      "failureClass": "source_upstream_http_404"
+      "failureClass": "source_upstream_http_404",
+      "traceId": "28b2ac72f8bc02a12aed348e903c81cf"
     },
     {
       "sourceId": "src_4c0843cc0b0f267bdd9802e6",
@@ -3355,7 +3501,8 @@
       "bookSourceName": "民间故事（优+）",
       "keywordUsed": "民间故事",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "8071be5ae5b3c07d97a19a855f4ccc07"
     },
     {
       "sourceId": "src_4c0843cc0b0f267bdd9802e6",
@@ -3363,7 +3510,8 @@
       "bookSourceName": "民间故事（优+）",
       "keywordUsed": "民间故事",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "2a9e0123f7b7b6e11591236e26c10742"
     },
     {
       "sourceId": "src_4c0843cc0b0f267bdd9802e6",
@@ -3371,7 +3519,8 @@
       "bookSourceName": "民间故事（优+）",
       "keywordUsed": "民间故事",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "bd17ae29d1a36a9edb8ec3c25f987b05"
     },
     {
       "sourceId": "src_4c0843cc0b0f267bdd9802e6",
@@ -3380,7 +3529,8 @@
       "keywordUsed": "民间故事",
       "stage": "content",
       "status": "passed",
-      "message": "length=11902"
+      "message": "length=11902",
+      "traceId": "2e5a94594ccb6e55b443b77682d9a9df"
     },
     {
       "sourceId": "src_324fefedd44d5637bb733eff",
@@ -3390,7 +3540,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "2eac99ea4e167f2f5774ac3b8acc1d3b"
     },
     {
       "sourceId": "src_fe929c1e56fad544e2dee30d",
@@ -3399,8 +3550,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: unexpected status: 404",
-      "failureClass": "source_upstream_http_404"
+      "message": "empty search result",
+      "failureClass": "source_search_empty_result",
+      "traceId": "b3170ecf40bf0415a5716814efea5b99"
     },
     {
       "sourceId": "src_a8a6f18201431abb598827b5",
@@ -3408,7 +3560,8 @@
       "bookSourceName": "我是盐神（优+）",
       "keywordUsed": "回答",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "420795f795dc2a0bb9d2a8f2ec2f38f7"
     },
     {
       "sourceId": "src_a8a6f18201431abb598827b5",
@@ -3416,7 +3569,8 @@
       "bookSourceName": "我是盐神（优+）",
       "keywordUsed": "回答",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "c9a65d975f136dfa0ec0cf3ec025979a"
     },
     {
       "sourceId": "src_a8a6f18201431abb598827b5",
@@ -3424,7 +3578,8 @@
       "bookSourceName": "我是盐神（优+）",
       "keywordUsed": "回答",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "e01e7bb1ff15e06c7b0bbf52329f4c4a"
     },
     {
       "sourceId": "src_a8a6f18201431abb598827b5",
@@ -3433,7 +3588,8 @@
       "keywordUsed": "回答",
       "stage": "content",
       "status": "passed",
-      "message": "length=118863"
+      "message": "length=118835",
+      "traceId": "1d3d1fdfd98aad9b1d372beb2eb48a05"
     },
     {
       "sourceId": "src_6ee726b69dd2f237f65a17e9",
@@ -3441,7 +3597,8 @@
       "bookSourceName": "中华诗词（优+）",
       "keywordUsed": "蝶恋花",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "c40e95287a5a45dda9434e3f5a564367"
     },
     {
       "sourceId": "src_6ee726b69dd2f237f65a17e9",
@@ -3449,7 +3606,8 @@
       "bookSourceName": "中华诗词（优+）",
       "keywordUsed": "蝶恋花",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "ed1aea9a1325502f28f0242d6d737daa"
     },
     {
       "sourceId": "src_6ee726b69dd2f237f65a17e9",
@@ -3457,7 +3615,8 @@
       "bookSourceName": "中华诗词（优+）",
       "keywordUsed": "蝶恋花",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "a69da624762de32be0317efcd24e709d"
     },
     {
       "sourceId": "src_6ee726b69dd2f237f65a17e9",
@@ -3466,7 +3625,8 @@
       "keywordUsed": "蝶恋花",
       "stage": "content",
       "status": "passed",
-      "message": "length=1221"
+      "message": "length=1221",
+      "traceId": "a750d0e363b1a843dc350d0cc97a6eba"
     },
     {
       "sourceId": "src_c9197e750ca5e16567fef941",
@@ -3474,7 +3634,8 @@
       "bookSourceName": "中华诗词（优+）",
       "keywordUsed": "蝶恋花",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "f922c768313f8880aae7bfb785aee898"
     },
     {
       "sourceId": "src_c9197e750ca5e16567fef941",
@@ -3482,7 +3643,8 @@
       "bookSourceName": "中华诗词（优+）",
       "keywordUsed": "蝶恋花",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "40ccf834ea44fb2198ad04f75783111b"
     },
     {
       "sourceId": "src_c9197e750ca5e16567fef941",
@@ -3490,7 +3652,8 @@
       "bookSourceName": "中华诗词（优+）",
       "keywordUsed": "蝶恋花",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "609e65cd402e4b8c8508f1254dd0b550"
     },
     {
       "sourceId": "src_c9197e750ca5e16567fef941",
@@ -3499,7 +3662,8 @@
       "keywordUsed": "蝶恋花",
       "stage": "content",
       "status": "passed",
-      "message": "length=1221"
+      "message": "length=1221",
+      "traceId": "c53cdf274aa3dd42d20175eb5cf36cc4"
     },
     {
       "sourceId": "src_a0345050588428ebb29f8b65",
@@ -3509,7 +3673,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "a32b02f5535fa54174372da6b57f78aa"
     },
     {
       "sourceId": "src_8c754868647d40e20e00fcd6",
@@ -3519,7 +3684,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "a3f8714b697dd2dce3f35758d8c67d9e"
     },
     {
       "sourceId": "src_5072a6eed2bf13219c7df90e",
@@ -3529,7 +3695,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "a8845e5a2b522ee6c13882e95ba78b0a"
     },
     {
       "sourceId": "src_f00c3386f10eacbe690bbbc2",
@@ -3537,7 +3704,8 @@
       "bookSourceName": "古典文学（优+）",
       "keywordUsed": "论语",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "b9ef04ba854d03eedda13401bda7788b"
     },
     {
       "sourceId": "src_f00c3386f10eacbe690bbbc2",
@@ -3545,7 +3713,8 @@
       "bookSourceName": "古典文学（优+）",
       "keywordUsed": "论语",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "7d56fe83fa9d7cf73753d237c9c22fdc"
     },
     {
       "sourceId": "src_f00c3386f10eacbe690bbbc2",
@@ -3553,7 +3722,8 @@
       "bookSourceName": "古典文学（优+）",
       "keywordUsed": "论语",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "9406507dfc8d7619168b6bd4eb045644"
     },
     {
       "sourceId": "src_f00c3386f10eacbe690bbbc2",
@@ -3562,17 +3732,37 @@
       "keywordUsed": "论语",
       "stage": "content",
       "status": "passed",
-      "message": "length=3576"
+      "message": "length=3576",
+      "traceId": "1b6e5a96410dd7be6ffdb0f44ee3d34b"
     },
     {
       "sourceId": "src_844c516e0716b6d1b0ae021d",
       "bookSourceUrl": "http://3g.sbkk8.com#",
       "bookSourceName": "天涯知识（优+）",
-      "keywordUsed": "斗破苍穹",
+      "keywordUsed": "的画像",
       "stage": "search",
+      "status": "passed",
+      "traceId": "c931b98eee12cf80094d42858210cafc"
+    },
+    {
+      "sourceId": "src_844c516e0716b6d1b0ae021d",
+      "bookSourceUrl": "http://3g.sbkk8.com#",
+      "bookSourceName": "天涯知识（优+）",
+      "keywordUsed": "的画像",
+      "stage": "info",
+      "status": "passed",
+      "traceId": "7c13734183995fdf1c36ff5412da55df"
+    },
+    {
+      "sourceId": "src_844c516e0716b6d1b0ae021d",
+      "bookSourceUrl": "http://3g.sbkk8.com#",
+      "bookSourceName": "天涯知识（优+）",
+      "keywordUsed": "的画像",
+      "stage": "toc",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: Get \"http://zhannei.baidu.com/cse/search?s=5140549751047532462\u0026nsid=\u0026q=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026searchtype=title\u0026isNeedCheckDomain=1\u0026jump=1\": EOF",
-      "failureClass": "network_connection_reset"
+      "message": "toc_empty",
+      "failureClass": "source_toc_empty",
+      "traceId": "ffe22815653931ee58bd65c2aa7c1732"
     },
     {
       "sourceId": "src_85204b4c8ade867fdf3470e6",
@@ -3582,7 +3772,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: Get \"https://www.dxmwx.org/list/%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9.html\": too many redirects",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "c704ddb1858863d295407536fdf9ab31"
     },
     {
       "sourceId": "src_4c0af541a551d1445adec5e6",
@@ -3592,7 +3783,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "a527d1fbb4660fe19084a4963c99758e"
     },
     {
       "sourceId": "src_371d847bd9e984de7bdbd525",
@@ -3602,7 +3794,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: Post \"https://m.qbxsba.com/modules/article/search.php\": http: server gave HTTP response to HTTPS client",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "2e122d3b351476670132e21550d38067"
     },
     {
       "sourceId": "src_be6bc224a0d554d82c4ddb39",
@@ -3612,7 +3805,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 401",
-      "failureClass": "source_authorization_failed"
+      "failureClass": "source_authorization_failed",
+      "traceId": "eb2ba6f9163005d1fb32733b93e425fd"
     },
     {
       "sourceId": "src_8d028086f6809098b50c922c",
@@ -3620,7 +3814,8 @@
       "bookSourceName": "七猫小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "1d5569529eb9e7da43f40596ab380137"
     },
     {
       "sourceId": "src_8d028086f6809098b50c922c",
@@ -3628,7 +3823,8 @@
       "bookSourceName": "七猫小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "d5f2817679f851971073a9f0cd7e1aa0"
     },
     {
       "sourceId": "src_8d028086f6809098b50c922c",
@@ -3636,7 +3832,8 @@
       "bookSourceName": "七猫小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "c647db70976ae2b48a53c750f2a919b9"
     },
     {
       "sourceId": "src_8d028086f6809098b50c922c",
@@ -3645,7 +3842,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=8452"
+      "message": "length=8452",
+      "traceId": "1ace7e5288780d8387daca61db56eac3"
     },
     {
       "sourceId": "src_ee5993366c325da95d6c3528",
@@ -3653,7 +3851,8 @@
       "bookSourceName": "七猫小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "f5094f3241c4fe7b473e2457d8831540"
     },
     {
       "sourceId": "src_ee5993366c325da95d6c3528",
@@ -3661,7 +3860,8 @@
       "bookSourceName": "七猫小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "169a52034692b989121ae442c2ca6e84"
     },
     {
       "sourceId": "src_ee5993366c325da95d6c3528",
@@ -3669,7 +3869,8 @@
       "bookSourceName": "七猫小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "924983fdc7f3fd5e6389c1f7dcb67eaa"
     },
     {
       "sourceId": "src_ee5993366c325da95d6c3528",
@@ -3678,7 +3879,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=8452"
+      "message": "length=8452",
+      "traceId": "13220da3b7429876730e90a359c8e5cf"
     },
     {
       "sourceId": "src_56d458b28458d5c51447cfbc",
@@ -3686,7 +3888,8 @@
       "bookSourceName": "疯读小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "aa6cc56da18d9ce929265574ebd2db90"
     },
     {
       "sourceId": "src_56d458b28458d5c51447cfbc",
@@ -3694,7 +3897,8 @@
       "bookSourceName": "疯读小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "40c7b877b12fd0491ac596a8a4682537"
     },
     {
       "sourceId": "src_56d458b28458d5c51447cfbc",
@@ -3702,7 +3906,8 @@
       "bookSourceName": "疯读小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "120f8fddc1fe7a694ec13681b26fd53b"
     },
     {
       "sourceId": "src_56d458b28458d5c51447cfbc",
@@ -3711,7 +3916,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=6771"
+      "message": "length=6771",
+      "traceId": "b0e9b201b605bbf958ddf4865771d05a"
     },
     {
       "sourceId": "src_763a2df9f7cf60e89cea3b04",
@@ -3719,7 +3925,8 @@
       "bookSourceName": "大唐小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "f7b9737855fbc053c70b6689de67ac2c"
     },
     {
       "sourceId": "src_763a2df9f7cf60e89cea3b04",
@@ -3727,7 +3934,8 @@
       "bookSourceName": "大唐小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "176003e8c0f20bc61e722f285dc364d4"
     },
     {
       "sourceId": "src_763a2df9f7cf60e89cea3b04",
@@ -3735,7 +3943,8 @@
       "bookSourceName": "大唐小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "fba50b15d32c2c71a17e7be4e147c2dd"
     },
     {
       "sourceId": "src_763a2df9f7cf60e89cea3b04",
@@ -3744,7 +3953,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=8577"
+      "message": "length=9385",
+      "traceId": "ce0f3ef2bdf5a382d3568921cc65147e"
     },
     {
       "sourceId": "src_b28018fc62ce8d744ffcb9d8",
@@ -3754,7 +3964,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 503",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "101382536dda233c2f0b373b215c38b4"
     },
     {
       "sourceId": "src_e35e1e2cd1f510c8bf994084",
@@ -3764,7 +3975,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: Get \"https://www.sxgread.com/s/?sword=%B6%B7%C6%C6%B2%D4%F1%B7\": net/http: TLS handshake timeout",
-      "failureClass": "network_tls_invalid"
+      "failureClass": "network_tls_invalid",
+      "traceId": "4705109437c614cdca7339ac4ab86ec7"
     },
     {
       "sourceId": "src_efffd3d64d374730dc38dffb",
@@ -3774,7 +3986,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 403",
-      "failureClass": "source_upstream_http_403"
+      "failureClass": "source_upstream_http_403",
+      "traceId": "14e87d7cfa39619ffb6c620f1b5c7058"
     },
     {
       "sourceId": "src_94ec0165cde467ca225d0db6",
@@ -3784,7 +3997,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 404",
-      "failureClass": "source_upstream_http_404"
+      "failureClass": "source_upstream_http_404",
+      "traceId": "508791c674a9d3af8b1846032f4f4f68"
     },
     {
       "sourceId": "src_8312a4da2e972018e6c1be17",
@@ -3793,8 +4007,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: Get \"http://www.yuedsk.com/modules/article/search.php?q=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
-      "failureClass": "network_timeout"
+      "message": "empty search result; warnings: search_failed: Get \"http://www.yuedsk.com/modules/article/search.php?q=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\": EOF",
+      "failureClass": "network_connection_reset",
+      "traceId": "3770233705d29eaf3882442e0bb7732f"
     },
     {
       "sourceId": "src_b80cb5f33f6635be64c13a52",
@@ -3803,8 +4018,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: Get \"https://www.88haoshu.com/sss/?searchkey=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\": dial tcp: lookup www.88haoshu.com on 223.5.5.5:53: server misbehaving",
-      "failureClass": "network_dns_failure"
+      "message": "empty search result; warnings: search_failed: Get \"https://www.88haoshu.com/sss/?searchkey=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\": lookup www.88haoshu.com on 223.5.5.5:53: server misbehaving",
+      "failureClass": "network_dns_failure",
+      "traceId": "3211af85f61d56be389a8e87ef3b27c6"
     },
     {
       "sourceId": "src_c8bbeb93a87ca3e5cbac1c14",
@@ -3812,7 +4028,8 @@
       "bookSourceName": "快眼看书（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "3eae34602adfbf166ef126eb19a2b28e"
     },
     {
       "sourceId": "src_c8bbeb93a87ca3e5cbac1c14",
@@ -3820,7 +4037,8 @@
       "bookSourceName": "快眼看书（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "be19a36e4d98e570f9754a8d8f7cf6a4"
     },
     {
       "sourceId": "src_c8bbeb93a87ca3e5cbac1c14",
@@ -3828,7 +4046,8 @@
       "bookSourceName": "快眼看书（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "1f745a9790850b6955e565ae3e111f2a"
     },
     {
       "sourceId": "src_c8bbeb93a87ca3e5cbac1c14",
@@ -3837,7 +4056,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=8452"
+      "message": "length=8452",
+      "traceId": "261ce92a87cafa7e10240124fc370f33"
     },
     {
       "sourceId": "src_9f08fac3a86bfc9bd08cbe91",
@@ -3845,7 +4065,8 @@
       "bookSourceName": "快眼看书（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "0988e47c5f30095ba191b988e542eff3"
     },
     {
       "sourceId": "src_9f08fac3a86bfc9bd08cbe91",
@@ -3853,7 +4074,8 @@
       "bookSourceName": "快眼看书（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "38e76464f9222da54f1fb2272655c18f"
     },
     {
       "sourceId": "src_9f08fac3a86bfc9bd08cbe91",
@@ -3861,7 +4083,8 @@
       "bookSourceName": "快眼看书（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "d9a3cb154bf4894ffaebd3db1520befa"
     },
     {
       "sourceId": "src_9f08fac3a86bfc9bd08cbe91",
@@ -3870,7 +4093,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=8452"
+      "message": "length=8452",
+      "traceId": "f02898a7533048bdd2f8d7e2291efabf"
     },
     {
       "sourceId": "src_5a3717c98dc35415a2e67187",
@@ -3880,7 +4104,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 404",
-      "failureClass": "source_upstream_http_404"
+      "failureClass": "source_upstream_http_404",
+      "traceId": "e765537bf8c136d6644d3cb24a658284"
     },
     {
       "sourceId": "src_4afeb4b41076609e3a1281d1",
@@ -3888,7 +4113,8 @@
       "bookSourceName": "米读小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "f776afde9658978cb890c618cf423e90"
     },
     {
       "sourceId": "src_4afeb4b41076609e3a1281d1",
@@ -3896,7 +4122,8 @@
       "bookSourceName": "米读小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "108ce597ce6190ca7ff21ee61581dcd8"
     },
     {
       "sourceId": "src_4afeb4b41076609e3a1281d1",
@@ -3904,7 +4131,8 @@
       "bookSourceName": "米读小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "9c57c29af908a3701cdf3253a5c7929c"
     },
     {
       "sourceId": "src_4afeb4b41076609e3a1281d1",
@@ -3913,7 +4141,8 @@
       "keywordUsed": "斗破苍穹",
       "stage": "content",
       "status": "passed",
-      "message": "length=8452"
+      "message": "length=8452",
+      "traceId": "ebc288e0dee762b8b5306a8f8641b278"
     },
     {
       "sourceId": "src_7956897ace18c66b4b8e5c47",
@@ -3923,7 +4152,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: unexpected status: 404",
-      "failureClass": "source_upstream_http_404"
+      "failureClass": "source_upstream_http_404",
+      "traceId": "53baf8d59ee614d231f5315a91f4e7a8"
     },
     {
       "sourceId": "src_ed5d11ff9ad445ffef371bc9",
@@ -3932,8 +4162,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: Post \"https://m.shencou.com/pserchs.php\": dial tcp 0.0.0.0:443: connect: connection refused",
-      "failureClass": "network_connection_reset"
+      "message": "empty search result; warnings: search_failed: unexpected status: 403",
+      "failureClass": "source_upstream_http_403",
+      "traceId": "8c0da7ed3182ddf5825c8cbb94a4ef70"
     },
     {
       "sourceId": "src_b6596506a24ff438c6dcd4ee",
@@ -3941,7 +4172,8 @@
       "bookSourceName": "轻之文库（优+）",
       "keywordUsed": "刀剑神域",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "3d08f49959ce37101aaf959abfde5118"
     },
     {
       "sourceId": "src_b6596506a24ff438c6dcd4ee",
@@ -3949,7 +4181,8 @@
       "bookSourceName": "轻之文库（优+）",
       "keywordUsed": "刀剑神域",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "0fab7467c4f8e1a4e916569f64b512b5"
     },
     {
       "sourceId": "src_b6596506a24ff438c6dcd4ee",
@@ -3957,7 +4190,8 @@
       "bookSourceName": "轻之文库（优+）",
       "keywordUsed": "刀剑神域",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "646fc2240dd60e8542dfa6f62c9b2cce"
     },
     {
       "sourceId": "src_b6596506a24ff438c6dcd4ee",
@@ -3966,7 +4200,8 @@
       "keywordUsed": "刀剑神域",
       "stage": "content",
       "status": "passed",
-      "message": "length=21653"
+      "message": "length=16787",
+      "traceId": "c3df7f2ea8583801c6a69ea5e6ba1cab"
     },
     {
       "sourceId": "src_06780558c4d68fc08b92aa03",
@@ -3974,7 +4209,8 @@
       "bookSourceName": "轻之文库（优+）",
       "keywordUsed": "刀剑神域",
       "stage": "search",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "60d2dd055dbbf063b9dd6b10eb673b9c"
     },
     {
       "sourceId": "src_06780558c4d68fc08b92aa03",
@@ -3982,7 +4218,8 @@
       "bookSourceName": "轻之文库（优+）",
       "keywordUsed": "刀剑神域",
       "stage": "info",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "9697323d88741978ce7b4243682ba677"
     },
     {
       "sourceId": "src_06780558c4d68fc08b92aa03",
@@ -3990,7 +4227,8 @@
       "bookSourceName": "轻之文库（优+）",
       "keywordUsed": "刀剑神域",
       "stage": "toc",
-      "status": "passed"
+      "status": "passed",
+      "traceId": "ff43e5c69e76ec903145bcfe65bed091"
     },
     {
       "sourceId": "src_06780558c4d68fc08b92aa03",
@@ -3999,7 +4237,8 @@
       "keywordUsed": "刀剑神域",
       "stage": "content",
       "status": "passed",
-      "message": "length=16787"
+      "message": "length=16787",
+      "traceId": "5605182886c3c3c11520a8bd28124727"
     },
     {
       "sourceId": "src_a38faf7e5285445cef87a57c",
@@ -4008,8 +4247,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: Get \"https://jyapi.jyacg.com/web/search?name=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\u0026type=1\": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-10-14T18:15:39+08:00 is after 2026-02-10T15:32:03Z",
-      "failureClass": "network_tls_invalid"
+      "message": "empty search result; warnings: search_failed: Get \"https://jyapi.jyacg.com/web/search?name=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\u0026type=1\": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-10-16T16:07:50+08:00 is after 2026-02-10T15:32:03Z",
+      "failureClass": "network_tls_invalid",
+      "traceId": "cdc942c88d7498bb48c713f854e0e88c"
     },
     {
       "sourceId": "src_ded92cad885a53cc49f5aacc",
@@ -4018,8 +4258,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: Get \"https://jyapi.jyacg.com/web/search?name=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\u0026type=1\": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-10-14T18:15:40+08:00 is after 2026-02-10T15:32:03Z",
-      "failureClass": "network_tls_invalid"
+      "message": "empty search result; warnings: search_failed: Get \"https://jyapi.jyacg.com/web/search?name=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9\u0026page=1\u0026type=1\": tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-10-16T16:07:50+08:00 is after 2026-02-10T15:32:03Z",
+      "failureClass": "network_tls_invalid",
+      "traceId": "23ac6a604c6df094c703601c6dedbe29"
     },
     {
       "sourceId": "src_f6eb03cad223579556ead442",
@@ -4028,8 +4269,9 @@
       "keywordUsed": "斗破苍穹",
       "stage": "search",
       "status": "failed",
-      "message": "empty search result; warnings: search_failed: script_timeout: e2e: script_timeout at \u003ceval\u003e:4:12(22)",
-      "failureClass": "source_search_empty_result"
+      "message": "empty search result; warnings: search_failed: script_timeout: stage=search source=src_f6eb03cad223579556ead442: script_timeout at \u003ceval\u003e:4:12(22)",
+      "failureClass": "source_search_empty_result",
+      "traceId": "e99882f22cc6ad834fd74691ff2e8844"
     },
     {
       "sourceId": "src_b737ce7afb3dddca373e755b",
@@ -4037,9 +4279,36 @@
       "bookSourceName": "书法小说（优+）",
       "keywordUsed": "斗破苍穹",
       "stage": "search",
-      "status": "failed",
-      "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "status": "passed",
+      "traceId": "a9501a7ecd9ba4ab9b83c67c0d164ac1"
+    },
+    {
+      "sourceId": "src_b737ce7afb3dddca373e755b",
+      "bookSourceUrl": "http://www.sfwx.com/",
+      "bookSourceName": "书法小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "info",
+      "status": "passed",
+      "traceId": "635eaf8574c3258cb8f77ec28845a309"
+    },
+    {
+      "sourceId": "src_b737ce7afb3dddca373e755b",
+      "bookSourceUrl": "http://www.sfwx.com/",
+      "bookSourceName": "书法小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "toc",
+      "status": "passed",
+      "traceId": "3bd28648444b74e71f223a5888f5eeeb"
+    },
+    {
+      "sourceId": "src_b737ce7afb3dddca373e755b",
+      "bookSourceUrl": "http://www.sfwx.com/",
+      "bookSourceName": "书法小说（优+）",
+      "keywordUsed": "斗破苍穹",
+      "stage": "content",
+      "status": "passed",
+      "message": "length=8719",
+      "traceId": "30116204f59a4ee56e88babd8699e451"
     },
     {
       "sourceId": "src_cf66bfeee51cfb09c24b1c4c",
@@ -4049,7 +4318,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "89e147decd1ff2938fb2c91c09e847b2"
     },
     {
       "sourceId": "src_c91c18f448f64e89aa7cb82a",
@@ -4059,7 +4329,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "9e76a5643bf168904791b9484014eb63"
     },
     {
       "sourceId": "src_2ccb91753b7c52e0802265c3",
@@ -4069,7 +4340,8 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result; warnings: search_failed: Post \"https://www.yodu.org/sa\": net/http: TLS handshake timeout",
-      "failureClass": "network_tls_invalid"
+      "failureClass": "network_tls_invalid",
+      "traceId": "29419053b88c4adc37903b9b5c9bff3f"
     },
     {
       "sourceId": "src_07f2191f96e9e77274a19da2",
@@ -4079,25 +4351,117 @@
       "stage": "search",
       "status": "failed",
       "message": "empty search result",
-      "failureClass": "source_search_empty_result"
+      "failureClass": "source_search_empty_result",
+      "traceId": "d68f716c4c4ba9ad32e15761c18a8af5"
     }
   ],
   "failureSummary": {
-    "network_connection_reset": 5,
+    "network_connection_reset": 3,
     "network_dns_failure": 4,
-    "network_timeout": 3,
-    "network_tls_invalid": 8,
+    "network_timeout": 1,
+    "network_tls_invalid": 11,
     "security_policy_blocked": 1,
     "source_authorization_failed": 2,
     "source_rule_script_failed": 1,
-    "source_search_empty_result": 17,
+    "source_search_empty_result": 16,
     "source_toc_empty": 2,
     "source_upstream_empty_json_response": 3,
     "source_upstream_http_400": 2,
-    "source_upstream_http_403": 6,
-    "source_upstream_http_404": 5,
+    "source_upstream_http_403": 7,
+    "source_upstream_http_404": 4,
     "source_upstream_http_500": 1,
     "source_upstream_non_json_response": 1
+  },
+  "failureTraceIds": {
+    "network_connection_reset": [
+      "85f40b7da36c37ae48ebc76535ddfe3b",
+      "c9ab3b318c9f8bfbf48c7f7f12b184f3",
+      "3770233705d29eaf3882442e0bb7732f"
+    ],
+    "network_dns_failure": [
+      "a52b39a1c1e58a7ac82d03ff0f0fbc01",
+      "e7f45e65ceccba90c7f0043230350369",
+      "4d0ce10b4fa90b1d9744e3cd82701080",
+      "3211af85f61d56be389a8e87ef3b27c6"
+    ],
+    "network_timeout": [
+      "463a0aacd4720dd3dd10a2d4cc4d5cf6"
+    ],
+    "network_tls_invalid": [
+      "e79de6f31380eba75395b6f76843b89a",
+      "3992139201fe16ca8950ded49541befd",
+      "6f8ffc50f602d60ae6f57167a8d9aac9",
+      "bfb86394272d15ecc905981c35e565a6",
+      "6a2bfb075a5d8a4ee43917b76dff3e0f",
+      "6e5fc61508f5fdda180c771d44d8fa05",
+      "d4a1479cddcd240d93563f9e4fa540b0",
+      "4705109437c614cdca7339ac4ab86ec7",
+      "cdc942c88d7498bb48c713f854e0e88c",
+      "23ac6a604c6df094c703601c6dedbe29",
+      "29419053b88c4adc37903b9b5c9bff3f"
+    ],
+    "security_policy_blocked": [
+      "6d7d2317ccb4c3d04a473919010957bf"
+    ],
+    "source_authorization_failed": [
+      "ffcbeb3d0496733aa13fd0902b745dfe",
+      "eb2ba6f9163005d1fb32733b93e425fd"
+    ],
+    "source_rule_script_failed": [
+      "25ba11de112c0c07c6aa91aab4f9b680"
+    ],
+    "source_search_empty_result": [
+      "3c99d9d51f16d937c6b5f6af83e9248b",
+      "14dee7de76befee7f99fd81b5085f41e",
+      "58f7c42324f82a2bddb3615524199138",
+      "2eac99ea4e167f2f5774ac3b8acc1d3b",
+      "b3170ecf40bf0415a5716814efea5b99",
+      "a32b02f5535fa54174372da6b57f78aa",
+      "a3f8714b697dd2dce3f35758d8c67d9e",
+      "a8845e5a2b522ee6c13882e95ba78b0a",
+      "c704ddb1858863d295407536fdf9ab31",
+      "a527d1fbb4660fe19084a4963c99758e",
+      "2e122d3b351476670132e21550d38067",
+      "101382536dda233c2f0b373b215c38b4",
+      "e99882f22cc6ad834fd74691ff2e8844",
+      "89e147decd1ff2938fb2c91c09e847b2",
+      "9e76a5643bf168904791b9484014eb63",
+      "d68f716c4c4ba9ad32e15761c18a8af5"
+    ],
+    "source_toc_empty": [
+      "9656c005190a445777908d574ac68fa5",
+      "ffe22815653931ee58bd65c2aa7c1732"
+    ],
+    "source_upstream_empty_json_response": [
+      "d5027b4d96a2cb2e4db393d0764579a4",
+      "219ce1b5a676fa90c5ef5743100beb6f",
+      "f4e0e9735a5fa8159d33609b01a9de46"
+    ],
+    "source_upstream_http_400": [
+      "7f8b4772d85a3dcebf75c286f2f74802",
+      "20feb951edf4b0652b9f0609e6b788d9"
+    ],
+    "source_upstream_http_403": [
+      "68251a1f1d5973057a58fb8353c39fa1",
+      "43588ab55637af34c0dbf7ea32979706",
+      "f6b4fd7203e78fe1d2a5ab2b422cfd39",
+      "cad0a22ae7518c129a7917523f724c7f",
+      "eb7239dfbc39a591aabb0f70f6cfb60f",
+      "14e87d7cfa39619ffb6c620f1b5c7058",
+      "8c0da7ed3182ddf5825c8cbb94a4ef70"
+    ],
+    "source_upstream_http_404": [
+      "28b2ac72f8bc02a12aed348e903c81cf",
+      "508791c674a9d3af8b1846032f4f4f68",
+      "e765537bf8c136d6644d3cb24a658284",
+      "53baf8d59ee614d231f5315a91f4e7a8"
+    ],
+    "source_upstream_http_500": [
+      "6bc9602a9e7b671dfb9410042447b980"
+    ],
+    "source_upstream_non_json_response": [
+      "c4823ade6b76afaab7b456f8efa7d869"
+    ]
   },
   "releaseAllowed": true
 }
