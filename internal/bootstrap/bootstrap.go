@@ -3,9 +3,8 @@
 package bootstrap
 
 import (
+	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
 
 	bookapp "reader/internal/app/book"
 	checkapp "reader/internal/app/check"
@@ -23,9 +22,6 @@ import (
 	readersqlite "reader/internal/infra/sqlite"
 	"reader/internal/infra/sqlite/repositories"
 	checkworker "reader/internal/worker/check"
-
-	// 驱动注册跟随装配入口，保证 serve、CLI 与测试二进制都可直连 SQLite。
-	_ "modernc.org/sqlite"
 )
 
 // Runtime 持有 CLI 与 serve 共用的完整服务装配。
@@ -51,10 +47,7 @@ type Runtime struct {
 
 // Open 按 cmd/server 原装配顺序构建 Runtime；cleanup 关闭数据库。
 func Open(cfg config.Config) (*Runtime, func(), error) {
-	if err := os.MkdirAll(filepath.Dir(cfg.SQLiteDSN), 0o755); err != nil && filepath.Dir(cfg.SQLiteDSN) != "." {
-		return nil, nil, err
-	}
-	db, err := sql.Open("sqlite", cfg.SQLiteDSN)
+	db, err := readersqlite.Open(cfg.SQLiteDSN)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -74,6 +67,11 @@ func Open(cfg config.Config) (*Runtime, func(), error) {
 	debugRepo := repositories.NewDebugRepository(db)
 	checkRepo := repositories.NewCheckRepository(db)
 	imageCacheRepo := repositories.NewImageCacheRepository(db)
+	// 启动时清理过期图片缓存，防止 cache_entries 无限增长。
+	if _, err := imageCacheRepo.DeleteExpired(context.Background()); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 	cookieRepo := repositories.NewCookieRepository(db)
 	manager := sourceapp.NewManager(repo)
 	sessionCookies := fetcher.NewSessionCookieStore()

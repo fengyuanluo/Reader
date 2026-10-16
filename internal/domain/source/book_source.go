@@ -14,6 +14,8 @@ var (
 	ErrMissingBookSourceURL  = errors.New("bookSourceUrl is required")
 	ErrMissingBookSourceName = errors.New("bookSourceName is required")
 	ErrNotFound              = errors.New("book source not found")
+	// ErrConflict 表示书源与已有书源的唯一键（sourceId / bookSourceUrl）冲突。
+	ErrConflict = errors.New("book source conflicts with an existing source")
 )
 
 type BookSource struct {

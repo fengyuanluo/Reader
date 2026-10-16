@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +105,30 @@ func TestDebugRepositoryAppendsAndListsEvents(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].EventID != second.EventID {
 		t.Fatalf("after events = %#v", events)
+	}
+}
+
+func TestListEventsUsesSessionIndex(t *testing.T) {
+	db := openRepoTestDB(t)
+	rows, err := db.Query(`EXPLAIN QUERY PLAN `+listEventsSQL, "debug-1", 0)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan plan: %v", err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("plan rows: %v", err)
+	}
+	joined := strings.Join(plan, "\n")
+	if !strings.Contains(joined, "idx_debug_events_session") {
+		t.Fatalf("ListEvents plan does not use idx_debug_events_session:\n%s", joined)
 	}
 }

@@ -57,12 +57,15 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	return nil
 }
 
-func (r *DebugRepository) ListEvents(ctx context.Context, sessionID string, afterEventID int64) ([]*task.DebugEvent, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT e.event_id, e.session_id, s.source_id, e.event_type, coalesce(e.stage, ''), e.level, e.message, e.elapsed_ms, coalesce(e.trace_id, ''), coalesce(e.data_json, ''), e.created_at
+// listEventsSQL 按 session_id + event_id 增量拉取，命中 idx_debug_events_session。
+const listEventsSQL = `SELECT e.event_id, e.session_id, s.source_id, e.event_type, coalesce(e.stage, ''), e.level, e.message, e.elapsed_ms, coalesce(e.trace_id, ''), coalesce(e.data_json, ''), e.created_at
 FROM debug_events e
 JOIN debug_sessions s ON s.session_id = e.session_id
 WHERE e.session_id = ? AND e.event_id > ?
-ORDER BY e.event_id ASC`, sessionID, afterEventID)
+ORDER BY e.event_id ASC`
+
+func (r *DebugRepository) ListEvents(ctx context.Context, sessionID string, afterEventID int64) ([]*task.DebugEvent, error) {
+	rows, err := r.db.QueryContext(ctx, listEventsSQL, sessionID, afterEventID)
 	if err != nil {
 		return nil, err
 	}

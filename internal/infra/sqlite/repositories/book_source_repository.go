@@ -5,7 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"reader/internal/domain/source"
 )
@@ -20,25 +24,56 @@ func NewBookSourceRepository(db *sql.DB) *BookSourceRepository {
 	return &BookSourceRepository{db: db}
 }
 
+// Save 写入单个书源，语义同 SaveMany。
 func (r *BookSourceRepository) Save(ctx context.Context, src *source.BookSource) error {
-	if err := src.Normalize(); err != nil {
-		return err
-	}
-	return r.save(ctx, r.db, src)
+	return r.SaveMany(ctx, []*source.BookSource{src})
 }
 
+// SaveMany 在单个事务内写入全部书源，任一失败整批回滚。
+// 以 sourceId 与 bookSourceUrl 双键 upsert：同 sourceId 换地址即改名（对齐 Legado 编辑书源时删旧插新，
+// 并清理旧地址的书源变量与缓存）；同地址换 sourceId 则覆盖。若新地址已属于另一书源，返回 source.ErrConflict。
 func (r *BookSourceRepository) SaveMany(ctx context.Context, sources []*source.BookSource) error {
+	args := make([][]any, len(sources))
+	for i, src := range sources {
+		if err := src.Normalize(); err != nil {
+			return err
+		}
+		a, err := bookSourceArgs(src)
+		if err != nil {
+			return err
+		}
+		args[i] = a
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer rollbackUnlessCommitted(tx)
-	for _, src := range sources {
-		if err := src.Normalize(); err != nil {
+	lookup, err := tx.PrepareContext(ctx, `SELECT book_source_url FROM book_sources WHERE source_id = ?`)
+	if err != nil {
+		return err
+	}
+	defer lookup.Close()
+	upsert, err := tx.PrepareContext(ctx, upsertBookSourceSQL)
+	if err != nil {
+		return err
+	}
+	defer upsert.Close()
+	for i, src := range sources {
+		var oldURL string
+		if err := lookup.QueryRowContext(ctx, src.SourceID).Scan(&oldURL); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if err := r.save(ctx, tx, src); err != nil {
+		if _, err := upsert.ExecContext(ctx, args[i]...); err != nil {
+			if isUniqueViolation(err) {
+				return fmt.Errorf("%w: sourceId=%q bookSourceUrl=%q", source.ErrConflict, src.SourceID, src.BookSourceURL)
+			}
 			return err
+		}
+		if oldURL != "" && oldURL != src.BookSourceURL {
+			if err := deleteSourceOwnedData(ctx, tx, oldURL); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()
@@ -99,13 +134,19 @@ func (r *BookSourceRepository) Delete(ctx context.Context, id string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM book_sources WHERE source_id = ?`, id); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM source_variables WHERE book_source_url = ?`, src.BookSourceURL); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM cache_entries WHERE owner_type = 'source' AND owner_id = ?`, src.BookSourceURL); err != nil {
+	if err := deleteSourceOwnedData(ctx, tx, src.BookSourceURL); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// deleteSourceOwnedData 删除以书源地址为键的书源变量与书源缓存。
+func deleteSourceOwnedData(ctx context.Context, q queryer, bookSourceURL string) error {
+	if _, err := q.ExecContext(ctx, `DELETE FROM source_variables WHERE book_source_url = ?`, bookSourceURL); err != nil {
+		return err
+	}
+	_, err := q.ExecContext(ctx, `DELETE FROM cache_entries WHERE owner_type = 'source' AND owner_id = ?`, bookSourceURL)
+	return err
 }
 
 func (r *BookSourceRepository) UpdateEnabled(ctx context.Context, id string, enabled bool) error {
@@ -134,13 +175,8 @@ type queryer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-func (r *BookSourceRepository) save(ctx context.Context, q queryer, src *source.BookSource) error {
-	ruleExplore, _ := json.Marshal(src.RuleExplore)
-	ruleSearch, _ := json.Marshal(src.RuleSearch)
-	ruleBookInfo, _ := json.Marshal(src.RuleBookInfo)
-	ruleToc, _ := json.Marshal(src.RuleToc)
-	ruleContent, _ := json.Marshal(src.RuleContent)
-	_, err := q.ExecContext(ctx, `
+// upsertBookSourceSQL 先按 source_id 冲突更新（含改地址），再按 book_source_url 冲突更新（含改 sourceId）。
+const upsertBookSourceSQL = `
 INSERT INTO book_sources (
   source_id, book_source_url, book_source_name, book_source_group, book_source_type, book_url_pattern,
   custom_order, enabled, enabled_explore, js_lib, enabled_cookie_jar, concurrent_rate, header, login_url,
@@ -148,6 +184,39 @@ INSERT INTO book_sources (
   respond_time, weight, explore_url, explore_screen, rule_explore, search_url, rule_search, rule_book_info,
   rule_toc, rule_content, rule_review, raw_json, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(source_id) DO UPDATE SET
+  book_source_url = excluded.book_source_url,
+  book_source_name = excluded.book_source_name,
+  book_source_group = excluded.book_source_group,
+  book_source_type = excluded.book_source_type,
+  book_url_pattern = excluded.book_url_pattern,
+  custom_order = excluded.custom_order,
+  enabled = excluded.enabled,
+  enabled_explore = excluded.enabled_explore,
+  js_lib = excluded.js_lib,
+  enabled_cookie_jar = excluded.enabled_cookie_jar,
+  concurrent_rate = excluded.concurrent_rate,
+  header = excluded.header,
+  login_url = excluded.login_url,
+  login_ui = excluded.login_ui,
+  login_check_js = excluded.login_check_js,
+  cover_decode_js = excluded.cover_decode_js,
+  book_source_comment = excluded.book_source_comment,
+  variable_comment = excluded.variable_comment,
+  last_update_time = excluded.last_update_time,
+  respond_time = excluded.respond_time,
+  weight = excluded.weight,
+  explore_url = excluded.explore_url,
+  explore_screen = excluded.explore_screen,
+  rule_explore = excluded.rule_explore,
+  search_url = excluded.search_url,
+  rule_search = excluded.rule_search,
+  rule_book_info = excluded.rule_book_info,
+  rule_toc = excluded.rule_toc,
+  rule_content = excluded.rule_content,
+  rule_review = excluded.rule_review,
+  raw_json = excluded.raw_json,
+  updated_at = CURRENT_TIMESTAMP
 ON CONFLICT(book_source_url) DO UPDATE SET
   source_id = excluded.source_id,
   book_source_name = excluded.book_source_name,
@@ -180,23 +249,56 @@ ON CONFLICT(book_source_url) DO UPDATE SET
   rule_content = excluded.rule_content,
   rule_review = excluded.rule_review,
   raw_json = excluded.raw_json,
-  updated_at = CURRENT_TIMESTAMP`,
+  updated_at = CURRENT_TIMESTAMP`
+
+// bookSourceArgs 生成 upsertBookSourceSQL 的参数。
+func bookSourceArgs(src *source.BookSource) ([]any, error) {
+	ruleExplore, err := json.Marshal(src.RuleExplore)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ruleExplore: %w", err)
+	}
+	ruleSearch, err := json.Marshal(src.RuleSearch)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ruleSearch: %w", err)
+	}
+	ruleBookInfo, err := json.Marshal(src.RuleBookInfo)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ruleBookInfo: %w", err)
+	}
+	ruleToc, err := json.Marshal(src.RuleToc)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ruleToc: %w", err)
+	}
+	ruleContent, err := json.Marshal(src.RuleContent)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ruleContent: %w", err)
+	}
+	return []any{
 		src.SourceID, src.BookSourceURL, src.BookSourceName, nullable(src.BookSourceGroup), src.BookSourceType, nullable(src.BookURLPattern),
 		src.CustomOrder, boolInt(src.Enabled), boolInt(src.EnabledExplore), nullable(src.JSLib), boolInt(src.EnabledCookieJar), nullable(src.ConcurrentRate), nullable(src.Header), nullable(src.LoginURL),
 		nullable(src.LoginUI), nullable(src.LoginCheckJS), nullable(src.CoverDecodeJS), nullable(src.BookSourceComment), nullable(src.VariableComment), src.LastUpdateTime,
 		src.RespondTime, src.Weight, nullable(src.ExploreURL), nullable(src.ExploreScreen), string(ruleExplore), nullable(src.SearchURL), string(ruleSearch), string(ruleBookInfo),
 		string(ruleToc), string(ruleContent), string(src.RuleReview), string(src.RawJSON),
-	)
-	return err
+	}, nil
+}
+
+// isUniqueViolation 判断错误是否为 SQLite UNIQUE / PRIMARY KEY 约束冲突。
+func isUniqueViolation(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	code := sqliteErr.Code()
+	return code == sqlite3.SQLITE_CONSTRAINT_UNIQUE || code == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
 }
 
 const selectBookSourceSQL = `SELECT source_id, book_source_url, book_source_name, coalesce(book_source_group, ''),
 book_source_type, coalesce(book_url_pattern, ''), custom_order, enabled, enabled_explore, coalesce(js_lib, ''),
 enabled_cookie_jar, coalesce(concurrent_rate, ''), coalesce(header, ''), coalesce(login_url, ''), coalesce(login_ui, ''),
 coalesce(login_check_js, ''), coalesce(cover_decode_js, ''), coalesce(book_source_comment, ''), coalesce(variable_comment, ''),
-last_update_time, respond_time, weight, coalesce(explore_url, ''), coalesce(explore_screen, ''), coalesce(rule_explore, 'null'),
-coalesce(search_url, ''), coalesce(rule_search, 'null'), coalesce(rule_book_info, 'null'), coalesce(rule_toc, 'null'),
-coalesce(rule_content, 'null'), coalesce(rule_review, ''), coalesce(raw_json, '') FROM book_sources`
+last_update_time, respond_time, weight, coalesce(explore_url, ''), coalesce(explore_screen, ''), coalesce(nullif(rule_explore, ''), 'null'),
+coalesce(search_url, ''), coalesce(nullif(rule_search, ''), 'null'), coalesce(nullif(rule_book_info, ''), 'null'), coalesce(nullif(rule_toc, ''), 'null'),
+coalesce(nullif(rule_content, ''), 'null'), coalesce(rule_review, ''), coalesce(raw_json, '') FROM book_sources`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -223,11 +325,21 @@ func scanBookSource(s scanner) (*source.BookSource, error) {
 	src.Enabled = enabled == 1
 	src.EnabledExplore = enabledExplore == 1
 	src.EnabledCookieJar = enabledCookieJar == 1
-	_ = json.Unmarshal([]byte(ruleExplore), &src.RuleExplore)
-	_ = json.Unmarshal([]byte(ruleSearch), &src.RuleSearch)
-	_ = json.Unmarshal([]byte(ruleBookInfo), &src.RuleBookInfo)
-	_ = json.Unmarshal([]byte(ruleToc), &src.RuleToc)
-	_ = json.Unmarshal([]byte(ruleContent), &src.RuleContent)
+	for _, col := range []struct {
+		name string
+		raw  string
+		dst  any
+	}{
+		{"rule_explore", ruleExplore, &src.RuleExplore},
+		{"rule_search", ruleSearch, &src.RuleSearch},
+		{"rule_book_info", ruleBookInfo, &src.RuleBookInfo},
+		{"rule_toc", ruleToc, &src.RuleToc},
+		{"rule_content", ruleContent, &src.RuleContent},
+	} {
+		if err := json.Unmarshal([]byte(col.raw), col.dst); err != nil {
+			return nil, fmt.Errorf("书源 %s 的 %s 列 JSON 损坏: %w", src.SourceID, col.name, err)
+		}
+	}
 	src.RuleReview = []byte(ruleReview)
 	src.RawJSON = []byte(rawJSON)
 	return &src, nil
@@ -237,13 +349,14 @@ func buildBookSourceWhere(filter source.BookSourceFilter) (string, []any) {
 	clauses := []string{}
 	args := []any{}
 	if filter.Keyword != "" {
-		clauses = append(clauses, `(book_source_name LIKE ? OR book_source_group LIKE ? OR book_source_url LIKE ? OR book_source_comment LIKE ?)`)
-		like := "%" + filter.Keyword + "%"
+		clauses = append(clauses, `(book_source_name LIKE ? ESCAPE '\' OR book_source_group LIKE ? ESCAPE '\' OR book_source_url LIKE ? ESCAPE '\' OR book_source_comment LIKE ? ESCAPE '\')`)
+		like := "%" + escapeLike(filter.Keyword) + "%"
 		args = append(args, like, like, like, like)
 	}
 	if filter.Group != "" {
-		clauses = append(clauses, `(book_source_group = ? OR book_source_group LIKE ? OR book_source_group LIKE ? OR book_source_group LIKE ?)`)
-		args = append(args, filter.Group, filter.Group+",%", "%,"+filter.Group, "%,"+filter.Group+",%")
+		clauses = append(clauses, `(book_source_group = ? OR book_source_group LIKE ? ESCAPE '\' OR book_source_group LIKE ? ESCAPE '\' OR book_source_group LIKE ? ESCAPE '\')`)
+		group := escapeLike(filter.Group)
+		args = append(args, filter.Group, group+",%", "%,"+group, "%,"+group+",%")
 	}
 	if filter.Enabled != nil {
 		clauses = append(clauses, `enabled = ?`)
@@ -257,6 +370,13 @@ func buildBookSourceWhere(filter source.BookSourceFilter) (string, []any) {
 		return "", args
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// likeEscaper 转义 LIKE 通配符与转义符本身，配合 SQL 中的 ESCAPE '\' 使用。
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+func escapeLike(value string) string {
+	return likeEscaper.Replace(value)
 }
 
 func execUpdateOne(ctx context.Context, q queryer, query string, args ...any) error {

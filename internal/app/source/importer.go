@@ -162,17 +162,7 @@ func mergeImportResult(dst, src *ImportResult) {
 }
 
 func (i *Importer) importObject(ctx context.Context, raw json.RawMessage, options ImportOptions) (*ImportResult, error) {
-	src, err := source.ParseBookSource(raw)
-	result := &ImportResult{}
-	if err != nil {
-		result.Failed = 1
-		result.Items = append(result.Items, ImportItemResult{Status: ImportStatusFailed, Error: err.Error()})
-		return result, nil
-	}
-	if err := i.importOne(ctx, result, src, options); err != nil {
-		return nil, err
-	}
-	return result, nil
+	return i.importEntries(ctx, []json.RawMessage{raw}, options)
 }
 
 func (i *Importer) importArray(ctx context.Context, raw json.RawMessage, options ImportOptions) (*ImportResult, error) {
@@ -180,7 +170,15 @@ func (i *Importer) importArray(ctx context.Context, raw json.RawMessage, options
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil, err
 	}
+	return i.importEntries(ctx, entries, options)
+}
+
+// importEntries 先逐条解析并决定导入状态，再用 SaveMany 单事务批量写入（对齐 Legado
+// SourceHelp.insertBookSource 一次性 insert）；写库失败整批回滚，不会留下部分导入状态。
+func (i *Importer) importEntries(ctx context.Context, entries []json.RawMessage, options ImportOptions) (*ImportResult, error) {
 	result := &ImportResult{}
+	pending := map[string]*source.BookSource{}
+	toSave := make([]*source.BookSource, 0, len(entries))
 	for _, entry := range entries {
 		src, err := source.ParseBookSource(entry)
 		if err != nil {
@@ -188,17 +186,32 @@ func (i *Importer) importArray(ctx context.Context, raw json.RawMessage, options
 			result.Items = append(result.Items, ImportItemResult{Status: ImportStatusFailed, Error: err.Error()})
 			continue
 		}
-		if err := i.importOne(ctx, result, src, options); err != nil {
+		save, err := i.planImport(ctx, result, src, options, pending)
+		if err != nil {
+			return nil, err
+		}
+		if save {
+			toSave = append(toSave, src)
+		}
+	}
+	if len(toSave) > 0 {
+		if err := i.repo.SaveMany(ctx, toSave); err != nil {
 			return nil, err
 		}
 	}
 	return result, nil
 }
 
-func (i *Importer) importOne(ctx context.Context, result *ImportResult, src *source.BookSource, options ImportOptions) error {
-	existing, err := i.repo.FindByURL(ctx, src.BookSourceURL)
-	if err != nil && !errors.Is(err, source.ErrNotFound) {
-		return err
+// planImport 决定单条书源的导入状态并应用导入选项，记入 result；需要写库时返回 true。
+// pending 记录本批次已决定写入的书源，使同批次重复地址按“已存在”处理。
+func (i *Importer) planImport(ctx context.Context, result *ImportResult, src *source.BookSource, options ImportOptions, pending map[string]*source.BookSource) (bool, error) {
+	existing := pending[src.BookSourceURL]
+	if existing == nil {
+		found, err := i.repo.FindByURL(ctx, src.BookSourceURL)
+		if err != nil && !errors.Is(err, source.ErrNotFound) {
+			return false, err
+		}
+		existing = found
 	}
 	status := ImportStatusAdded
 	if existing != nil {
@@ -210,11 +223,6 @@ func (i *Importer) importOne(ctx context.Context, result *ImportResult, src *sou
 		}
 	}
 	applyGroupOption(src, options)
-	if status != ImportStatusSkipped {
-		if err := i.repo.Save(ctx, src); err != nil {
-			return err
-		}
-	}
 	switch status {
 	case ImportStatusAdded:
 		result.Added++
@@ -229,7 +237,11 @@ func (i *Importer) importOne(ctx context.Context, result *ImportResult, src *sou
 		BookSourceName: src.BookSourceName,
 		Status:         status,
 	})
-	return nil
+	if status == ImportStatusSkipped {
+		return false, nil
+	}
+	pending[src.BookSourceURL] = src
+	return true, nil
 }
 
 func shouldSkip(existing, incoming *source.BookSource, policy string) bool {

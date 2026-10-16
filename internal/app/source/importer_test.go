@@ -3,12 +3,11 @@ package sourceapp
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"testing"
 
 	readersqlite "reader/internal/infra/sqlite"
 	"reader/internal/infra/sqlite/repositories"
-
-	_ "modernc.org/sqlite"
 )
 
 func TestImporterImportsSingleBookSource(t *testing.T) {
@@ -84,7 +83,7 @@ func TestValidUpdatePolicy(t *testing.T) {
 
 func openImporterTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := readersqlite.Open(filepath.Join(t.TempDir(), "reader.db"))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

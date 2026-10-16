@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"reader/internal/domain/task"
@@ -39,14 +40,37 @@ func (r *CheckRepository) FindTask(ctx context.Context, taskID string) (*task.Ch
 }
 
 func (r *CheckRepository) UpdateTaskStatus(ctx context.Context, taskID string, status task.CheckTaskStatus, finished int, completedAt *time.Time) error {
-	current, err := r.FindTask(ctx, taskID)
-	if err != nil {
+	// 状态机校验折叠进 WHERE status IN (合法前驱)，读-验-写在一条语句内原子完成，
+	// 并发的完成与取消只会有一方生效。
+	from := task.CheckTaskPredecessors(status)
+	args := make([]any, 0, len(from)+4)
+	args = append(args, string(status), finished, formatOptionalTime(completedAt), taskID)
+	placeholders := make([]string, len(from))
+	for i, prev := range from {
+		placeholders[i] = "?"
+		args = append(args, string(prev))
+	}
+	if len(from) > 0 {
+		res, err := r.db.ExecContext(ctx, `UPDATE check_tasks SET status = ?, finished = ?, completed_at = ? WHERE task_id = ? AND status IN (`+strings.Join(placeholders, ", ")+`)`, args...)
+		if err != nil {
+			return err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 1 {
+			return nil
+		}
+	}
+	var exists int
+	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM check_tasks WHERE task_id = ?`, taskID).Scan(&exists); err != nil {
 		return err
 	}
-	if err := task.ValidateCheckTaskTransition(current.Status, status); err != nil {
-		return err
+	if exists == 0 {
+		return ErrNotFound
 	}
-	return execUpdateOne(ctx, r.db, `UPDATE check_tasks SET status = ?, finished = ?, completed_at = ? WHERE task_id = ?`, string(status), finished, formatOptionalTime(completedAt), taskID)
+	return task.ErrInvalidCheckTaskTransition
 }
 
 func (r *CheckRepository) SaveItem(ctx context.Context, item *task.CheckTaskItem) error {

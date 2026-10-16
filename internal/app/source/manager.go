@@ -3,6 +3,7 @@ package sourceapp
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"reader/internal/domain/source"
 )
@@ -37,13 +38,14 @@ func (m *Manager) Update(ctx context.Context, id string, src *source.BookSource)
 	if _, err := m.repo.FindByID(ctx, id); err != nil {
 		return nil, err
 	}
+	// 先用路径 id 补齐 sourceId 再 Normalize，否则改 bookSourceUrl 时会按新地址派生出不同 id。
+	if src.SourceID != "" && src.SourceID != id {
+		return nil, fmt.Errorf("%w: sourceId does not match path", source.ErrConflict)
+	}
+	src.SourceID = id
 	if err := src.Normalize(); err != nil {
 		return nil, err
 	}
-	if src.SourceID != "" && src.SourceID != id {
-		return nil, errors.New("sourceId does not match path")
-	}
-	src.SourceID = id
 	if err := m.repo.Save(ctx, src); err != nil {
 		return nil, err
 	}

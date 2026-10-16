@@ -807,7 +807,7 @@ func writeSourceError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, source.ErrNotFound):
 		middleware.WriteError(w, r, http.StatusNotFound, "source_not_found", "book source not found", nil)
-	case errors.Is(err, source.ErrMissingBookSourceURL), errors.Is(err, source.ErrMissingBookSourceName):
+	case errors.Is(err, source.ErrMissingBookSourceURL), errors.Is(err, source.ErrMissingBookSourceName), errors.Is(err, source.ErrConflict):
 		writeValidationError(w, r, err.Error())
 	default:
 		middleware.WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal error", nil)

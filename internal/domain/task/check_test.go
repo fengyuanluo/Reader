@@ -1,11 +1,11 @@
 package task
 
 import (
-	"errors"
+	"slices"
 	"testing"
 )
 
-func TestValidateCheckTaskTransitionAllowsExpectedStateMachine(t *testing.T) {
+func TestCanTransitionCheckTaskAllowsExpectedStateMachine(t *testing.T) {
 	allowed := [][2]CheckTaskStatus{
 		{"", CheckTaskPending},
 		{CheckTaskPending, CheckTaskRunning},
@@ -15,13 +15,13 @@ func TestValidateCheckTaskTransitionAllowsExpectedStateMachine(t *testing.T) {
 		{CheckTaskRunning, CheckTaskCancelled},
 	}
 	for _, pair := range allowed {
-		if err := ValidateCheckTaskTransition(pair[0], pair[1]); err != nil {
-			t.Fatalf("transition %q -> %q error = %v", pair[0], pair[1], err)
+		if !CanTransitionCheckTask(pair[0], pair[1]) {
+			t.Fatalf("transition %q -> %q rejected", pair[0], pair[1])
 		}
 	}
 }
 
-func TestValidateCheckTaskTransitionRejectsInvalidStateMachine(t *testing.T) {
+func TestCanTransitionCheckTaskRejectsInvalidStateMachine(t *testing.T) {
 	invalid := [][2]CheckTaskStatus{
 		{CheckTaskPending, CheckTaskSucceeded},
 		{CheckTaskSucceeded, CheckTaskRunning},
@@ -29,8 +29,26 @@ func TestValidateCheckTaskTransitionRejectsInvalidStateMachine(t *testing.T) {
 		{CheckTaskCancelled, CheckTaskRunning},
 	}
 	for _, pair := range invalid {
-		if err := ValidateCheckTaskTransition(pair[0], pair[1]); !errors.Is(err, ErrInvalidCheckTaskTransition) {
-			t.Fatalf("transition %q -> %q error = %v", pair[0], pair[1], err)
+		if CanTransitionCheckTask(pair[0], pair[1]) {
+			t.Fatalf("transition %q -> %q allowed", pair[0], pair[1])
+		}
+	}
+}
+
+func TestCheckTaskPredecessors(t *testing.T) {
+	cases := []struct {
+		to   CheckTaskStatus
+		want []CheckTaskStatus
+	}{
+		{CheckTaskPending, nil},
+		{CheckTaskRunning, []CheckTaskStatus{CheckTaskPending}},
+		{CheckTaskSucceeded, []CheckTaskStatus{CheckTaskRunning}},
+		{CheckTaskFailed, []CheckTaskStatus{CheckTaskRunning}},
+		{CheckTaskCancelled, []CheckTaskStatus{CheckTaskPending, CheckTaskRunning}},
+	}
+	for _, tc := range cases {
+		if got := CheckTaskPredecessors(tc.to); !slices.Equal(got, tc.want) {
+			t.Fatalf("CheckTaskPredecessors(%q) = %v, want %v", tc.to, got, tc.want)
 		}
 	}
 }
