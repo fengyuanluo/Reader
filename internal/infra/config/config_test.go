@@ -187,3 +187,29 @@ func TestRequireTokenForAddr(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadDerivesSQLiteDSNFromDataDir 覆盖 READER_DATA_DIR 与默认 SQLite 路径的联动：
+// 未显式设置 READER_SQLITE_DSN 时，数据库默认落在数据目录内（默认仍为 data/reader.db）；
+// 显式设置的 DSN 优先级最高。
+func TestLoadDerivesSQLiteDSNFromDataDir(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{name: "defaults", env: map[string]string{}, want: "data/reader.db"},
+		{name: "data dir only", env: map[string]string{"READER_DATA_DIR": "/var/lib/reader"}, want: "/var/lib/reader/reader.db"},
+		{name: "explicit dsn wins", env: map[string]string{"READER_DATA_DIR": "/var/lib/reader", "READER_SQLITE_DSN": "/mnt/db/reader.db"}, want: "/mnt/db/reader.db"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(FromMap(tc.env))
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.SQLiteDSN != tc.want {
+				t.Fatalf("SQLiteDSN = %q, want %q", cfg.SQLiteDSN, tc.want)
+			}
+		})
+	}
+}

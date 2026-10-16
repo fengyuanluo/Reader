@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -62,7 +63,6 @@ func Load(source Source) (Config, error) {
 	cfg := Config{
 		Addr:                        "127.0.0.1:8080",
 		DataDir:                     "data",
-		SQLiteDSN:                   "data/reader.db",
 		Env:                         EnvDevelopment,
 		DefaultUserAgent:            "Reader/0.0.1",
 		FetchTimeout:                30 * time.Second,
@@ -80,7 +80,7 @@ func Load(source Source) (Config, error) {
 	var err error
 	cfg.Addr = stringValue(source, "READER_ADDR", cfg.Addr)
 	cfg.DataDir = stringValue(source, "READER_DATA_DIR", cfg.DataDir)
-	cfg.SQLiteDSN = stringValue(source, "READER_SQLITE_DSN", cfg.SQLiteDSN)
+	cfg.SQLiteDSN = dataDirSQLiteDSN(source, cfg.DataDir)
 	cfg.Token = stringValue(source, "READER_TOKEN", cfg.Token)
 	cfg.Env = stringValue(source, "READER_ENV", cfg.Env)
 	cfg.DefaultUserAgent = stringValue(source, "READER_DEFAULT_USER_AGENT", cfg.DefaultUserAgent)
@@ -185,6 +185,15 @@ func stringValue(source Source, key string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// dataDirSQLiteDSN 解析 SQLite 路径：READER_SQLITE_DSN 显式设置时优先使用，
+// 否则默认落在 READER_DATA_DIR 下的 reader.db（默认即 data/reader.db）。
+func dataDirSQLiteDSN(source Source, dataDir string) string {
+	if value, ok := source.Lookup("READER_SQLITE_DSN"); ok {
+		return value
+	}
+	return filepath.Join(dataDir, "reader.db")
 }
 
 func boolValue(source Source, key string, fallback bool) (bool, error) {

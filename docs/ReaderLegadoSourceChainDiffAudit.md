@@ -30,7 +30,7 @@
   - `internal/app/replace/limited_regex.go`
   - `internal/app/debug/flow.go`
   - `internal/app/check/checker.go`
-  - `cmd/server/main.go`
+  - `internal/bootstrap/bootstrap.go`
 - Legado 对照实现：
   - `legado/app/src/main/java/io/legado/app/data/entities/BookSource.kt`
   - `legado/app/src/main/java/io/legado/app/data/entities/BaseSource.kt`
@@ -252,7 +252,7 @@ Reader 侧：
 
 事实链：
 
-1. `cmd/server/main.go` 在启动时创建了一个全局共享 `scriptRuntime`。
+1. `internal/bootstrap/bootstrap.go`（原 `cmd/server/main.go`）在启动时创建了一个全局共享 `scriptRuntime`。
 2. `internal/infra/script/runtime.go` 在 `EvalWithBindings()` 中，如果 `policy.SourceKey` 为空，就把它写成当前 source key。
 3. 这个字段写进了 `Runtime.policy` 本身，不是局部变量。
 4. 同一个 `Runtime` 后续再处理其他书源时，因为 `policy.SourceKey` 已不为空，就不会再更新。

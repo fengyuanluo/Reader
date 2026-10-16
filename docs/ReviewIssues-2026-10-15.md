@@ -4,6 +4,8 @@
 
 ## 1. 概要
 
+> 修复状态见 [§5 修复状态（2026-10-16）](#5-修复状态2026-10-16)：150 条中已修复 147 条、wontfix 3 条，另有端到端验证新发现并修复的 2 条。
+
 ### 1.1 基线门禁
 
 | 门禁 | 结果 |
@@ -2253,3 +2255,76 @@
 | LegadoAlignmentReport.md | §7 最后一轮 - gate 数字 | 修复前 fullSuccessCount=39，search 49/51、info 47/2、toc 44/3、content 39/5；修复后 content 39/2 | 部分对应：快照 fullSuccess=39、content 39/2 一致；但快照 search 46/54、info 43/3、toc 41/2、network_timeout=3 与文中“49/51、47/2、44/3、仅 2”不对应（疑同日不同 run） | test/reports/real_source_collection_e2e_report.json（testTime=2026-10-14T10:05:57Z, fullSuccessCount=39, stageSummary, failureSummary.network_timeout=3） |
 
 备注：docs/archive/ 下的归档文档（findings/progress/Tasks-2026-05-05）属历史记录不参与核对；Release-0.0.1.md 与 LegadoAlignmentReport §3 的“51/2026-05-05”数字与现有快照的冲突已在切片结果 R-001/R-002 单独报告，此处不重复。
+
+## 5. 修复状态（2026-10-16）
+
+本节由修复轮次的主代理追加。修复对象是本报告第 2 节全部 150 条问题；组织方式是「独立 git worktree + 分支」的 11 个工作包并行修复，每个包自行完成单元/回归测试与 `go build && go vet && go test -race -count=1 ./...` 门禁后提交，再由主代理逐个合并、解决跨包冲突（含迁移版本号重排）并做端到端验证。
+
+### 5.1 状态汇总
+
+| 状态 | 数量 | 说明 |
+|---|---|---|
+| 已修复 | 148 | 原清单 150 条中修掉 147 条，加修复过程中新发现并一并修掉的 1 条（R-extra-nil-rulebookinfo） |
+| 判定为 wontfix | 3 | R-055、R-067、R-070，理由与 Legado 上游依据见 5.3 |
+| 清单合计 | 150 | 本报告第 2 节的原始问题数 |
+| 额外修复（不计入清单） | 2 | 端到端验证新发现：API 创建/更新缺省值、`READER_DATA_DIR` 未派生 SQLite 路径，见 5.4 |
+
+### 5.2 工作包与提交映射
+
+下表是**覆盖关系**而非逐条提交归属：跨模块问题由多个工作包共同推进（如 R-026/R-048/R-053/R-121/R-125 在 `fix/search`、`fix/content`、`fix/cross` 中各有落点，最终由 `fix/cross` 收尾），取其最后一次落点为准。
+
+| 工作包（分支 → 合并提交） | 覆盖问题编号 |
+|---|---|
+| `fix/cli` → `4b26e43` | R-001, R-025, R-035, R-036, R-037, R-038, R-077, R-089, R-092, R-106, R-108, R-109, R-126, R-137, R-138, R-140, R-146, R-147 |
+| `fix/fetch` → `eb4d965` | R-002, R-027, R-057, R-060, R-080, R-114, R-127, R-130, R-131 |
+| `fix/persist` → `ae40a62` | R-024, R-030, R-034, R-070(wontfix), R-073, R-074, R-075, R-079, R-084, R-088, R-099, R-104, R-129, R-135, R-142 |
+| `fix/rule` → `eb47100` | R-008, R-009, R-010, R-011, R-012, R-028, R-061, R-062, R-063, R-064, R-085, R-115, R-116, R-117 |
+| `fix/script` → `861cf8b` | R-013, R-014, R-016, R-029, R-065, R-066, R-067(wontfix), R-068, R-069, R-086, R-087, R-118, R-128, R-132, R-133, R-134, R-136 |
+| `fix/search` → `8f25fbc` | R-007, R-023, R-026, R-049, R-051, R-052, R-053, R-054, R-055(wontfix), R-056, R-058, R-059, R-083, R-102, R-107, R-110, R-113, R-124 |
+| `fix/content` → `7b7940b` | R-005, R-015, R-040, R-041, R-042, R-045, R-046, R-047, R-048, R-050, R-082, R-101, R-112, R-121, R-122, R-123 |
+| `fix/api` → `863f94f` | R-017, R-019, R-020, R-032, R-039, R-078, R-081, R-096, R-097, R-100, R-103, R-105, R-120, R-145 |
+| `fix/debugcheck` → `280c0c7` | R-003, R-004, R-006, R-018, R-021, R-022, R-031, R-033, R-043, R-044, R-071, R-072, R-076, R-090, R-094, R-095, R-111, R-119, R-150 |
+| `fix/cross` → `4b22fbd` | R-026(check 并发接线), R-048(校验阶段提前报错), R-098, R-121, R-125 |
+| 主代理直改 → `fce4b48`、`4f74643`、`3326ed8` | R-091, R-148, R-149；另修掉端到端验证发现的 API 缺省值不一致（见 5.4） |
+| `fix/docs` → `2b75e2c` | R-093, R-137, R-139, R-141, R-143, R-144（文档侧落实） |
+
+### 5.3 wontfix 条目与依据
+
+| 编号 | 结论依据 |
+|---|---|
+| R-055 | Legado `ImportBookSourceViewModel.comparisonSource` 以 `lastUpdateTime` 更大才默认勾选更新，相等即跳过；Reader 现状与上游一致。强制覆盖走 `updatePolicy=always`，已在代码注释与文档写明。 |
+| R-067 | Legado `JsExtensions.kt:93-111` 与 `AnalyzeRule.kt` 的 `getOrElse` 在 ajax 失败时返回错误堆栈文本，并非 null；Reader 返回 `err.Error()` 与之一致，故不改。 |
+| R-070 | Legado `ReplaceRuleDao.kt:58-71` 的 `findEnabledByTitleScope/findEnabledByContentScope` 本身就是未转义的 `LIKE '%'||name||'%'` 子串匹配（`excludeScope` 用 `NOT LIKE`），Reader 现有 SQL 与其一致；改成逐项精确匹配反而偏离上游。 |
+
+### 5.4 修复过程中新发现并已修复的问题
+
+| 编号 | 问题 | 证据 | 修复 |
+|---|---|---|---|
+| R-extra-nil-rulebookinfo | 书源未声明 `ruleBookInfo` 且走详情兜底路径时，`internal/app/book/info.go` 直接解引用空规则导致 panic（HTTP 500） | `parseInfo` 对 `src.RuleBookInfo.Value` 无空值保护；`PreviewSearchBookFromInfo` 兜底路径可触发 | `fix/content`：返回 `ErrBookInfoRuleMissing`，补回归测试 |
+| （端到端验证发现）API 创建/更新书源未套用 Legado 缺省值 | `POST/PUT /book-sources` 缺省 `enabled`/`enabledExplore`/`enabledCookieJar` 时落库为 `false`，与导入路径（`true`）及 Legado `BookSource` 默认值不一致 | 端到端实测：同一份 JSON 走导入得到 `enabled=true`，走 API 得到 `enabled=false` | `3326ed8`：新增 `BookSource.ApplyLegadoDefaults`，DTO 路径按 JSON 原文是否缺省补齐（显式 `false`/`null` 语义保留），补表驱动测试 |
+| （端到端验证发现）`READER_DATA_DIR` 不影响默认 SQLite 路径 | 只设置 `READER_DATA_DIR=/tmp/x/data` 启动 `serve` 时，数据库仍建在进程当前目录的 `./data/reader.db`（`config.SQLiteDSN` 是独立默认值 `data/reader.db`，未被 `DataDir` 派生），部署时会出现“数据不在数据目录里”的静默错位 | 实测：`READER_DATA_DIR=<tmp>/data` 启动后 `<tmp>/data` 为空，仓库 `./data/reader.db` 被创建 | 已修：`config.Load` 在未显式设置 `READER_SQLITE_DSN` 时按 `filepath.Join(DataDir, "reader.db")` 派生（默认仍是 `data/reader.db`），补表驱动用例；实测数据库落在 `<DataDir>/reader.db`、仓库 `./data` 不再被创建；`docs/Development.md` 补充两者关系说明 |
+
+### 5.5 验证证据
+
+- 每个工作包在自身 worktree 内运行 `go build ./... && go vet ./... && go test -race -count=1 ./...`，全部通过；合并后主仓库复核同一门禁：39 个包全部 ok、无 FAIL、无 DATA RACE，`gofmt -l internal cmd test` 无输出。
+- 架构约束实测：`go list -deps ./internal/domain/... | grep -E 'net/http|database/sql|chi|goja'` 无输出（R-098 后 domain 层不再依赖 HTTP/DB/脚本栈）。
+- OpenAPI 一致性：`go generate ./...` 后 `internal/api/generated/server.gen.go` 与 `api/openapi.yaml` 一致（多分支合并后重新生成并校验），`go test ./test/openapi` 通过。
+- 真实进程端到端（本机 `reader serve`，临时数据目录，`READER_TOKEN=smoke-token`）：
+  - 免鉴权端点按 `internal/api/middleware/auth.go:43` 白名单生效：`GET /api/v1/health` 200、`GET /api/v1/version` 返回 `{"version":"0.0.1"}`；`GET /api/v1/book-sources` 无 Authorization 401；`Bearer`/`bearer`/`BEARER` 方案大小写均通过；`Bearer <token>+NBSP` 401（R-001/R-106）。
+  - `POST /api/v1/book-sources` 201 并返回完整 DTO，缺省字段按 Legado 补齐（`enabled`/`enabledExplore`/`enabledCookieJar`=true、`respondTime`=180000）；未知字段原样回写；`Content-Type: text/plain` 400；`pageSize=500` 400；11 MiB 普通 JSON 与 43 MiB 导入体均 413（R-039/078/081/120）。
+  - `GET /api/v1/openapi.yaml` 返回 `application/yaml`（R-096）。
+  - `POST /api/v1/book-sources/{id}/login` 对不存在书源 404（R-103）。
+  - `POST /api/v1/debug/book-source` 202 且会话终态落库为 `failed` + `completedAt`；SSE 回放历史事件后按序推送 `debug.*` 事件（R-003/R-018）；非法 mode 400（R-094）。
+  - `POST /api/v1/check/book-sources` 202，任务终态 `completed` 且 items 带 `failureCode`/`message`（R-004/R-043/R-119）。
+  - 书详情/目录兜底路径实测无 panic：书源无任何规则时 `POST /api/v1/books/{id}/refresh-info`、`refresh-toc` 返回错误响应且服务日志 `panic`/`runtime error` 计数为 0（R-extra-nil-rulebookinfo）。
+  - 数据落盘实测：仅设置 `READER_DATA_DIR=<tmp>/data` 时数据库建在 `<tmp>/data/reader.db`（13 张表），仓库工作目录不再生成 `./data`（见 5.4 第二条）。
+  - CLI：`reader source list/show`、`reader import <file>`、`reader --help`、`reader book --help` 正常；用法错误退出码 1 且不创建数据库；`READER_TOKEN=` + `--addr 0.0.0.0:18081` 拒绝启动（退出码 2，R-001）。
+- 失败前/通过后的红绿验证抽样：规则引擎 CSS/JSONPath 用例、`R-048` 校验早退分支、`R-026` 并发注入值、`R-005` 分页并章、`R-015`/`R-016` 数据竞态（`-race`）、`R-091` 装配入口、`R-149` 报告 traceId 均有明确“修复前失败、修复后通过”的记录。
+
+### 5.6 残余事项与风险
+
+- 真实远程书源集合 E2E（`READER_REAL_E2E_ENABLED=true`）本轮**未重跑**：`test/reports/real_source_collection_e2e_report.*` 仍为既有快照（testTime 2026-10-14T10:05:57Z，fullSuccessCount=39）。prerequisite 是外网与第三方书源/站点可用性，不属本轮修复范围；下一次 release gate 应重跑并覆盖本报告的 R-149（报告新增 `traceId`/`failureTraceIds` 字段）。
+- R-082 的多分页并发上限（8）、R-088 的图片缓存 TTL（7 天）均为硬编码常量，未接配置项；如需要可用环境变量暴露。
+- 限流（`READER_GLOBAL_CONCURRENCY`/`READER_SOURCE_CONCURRENCY` 与源 `concurrentRate`）已接入搜索/发现/校验入口，`internal/app/book`、`internal/app/content` 的抓取路径未接同一 Limiter 实例，属已知未接线点。
+- `ruleContent.sourceRegex` 与 `webView*`/`startBrowser*`/`getVerificationCode`/`openUrl`、7z/rar 等能力保持明确 unsupported（一期决策：不引入无头浏览器等重依赖）；校验阶段已提前给出 `failureClass=source_unsupported_rule_feature`。
+- 错误码映射的语义偏窄：`writeBookError` 把 `source.ErrNotFound` 也映射成 404 `book_not_found`（`internal/api/handlers/source_handler.go:786-787`）。当书已存在但其 `origin` 书源 URL 找不到时，客户端看到的是 `book not found`，与真实原因（书源不存在）不一致。实测：书 `origin=http://127.0.0.1:9/s` 且书源被删后 `POST /books/{id}/refresh-info` 返回 404 `book_not_found`。改动会触碰既有契约测试，本轮未改。

@@ -44,6 +44,8 @@ export READER_CONTENT_CHINESE_CONVERTER_TYPE="0"
 - `1`：繁体转简体
 - `2`：简体转繁体
 
+`READER_DATA_DIR` 与 SQLite 路径的关系：`READER_SQLITE_DSN` 未设置时，数据库默认落在 `READER_DATA_DIR` 下（默认 `data/reader.db`）；显式设置 `READER_SQLITE_DSN` 时以该值为准。相对路径按进程当前工作目录解析，部署时建议用绝对路径。
+
 `READER_ENV` 取值约定：
 
 - `development`：默认值。
