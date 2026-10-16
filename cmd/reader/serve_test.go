@@ -1,59 +1,27 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"reader/internal/api/middleware"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"reader/internal/api/middleware"
 	"reader/internal/infra/config"
 )
 
-func TestNewServerSetsBaselineHTTPServerOptions(t *testing.T) {
-	server := newServer(":0")
-
-	if server.Addr != ":0" {
-		t.Fatalf("server Addr = %q, want :0", server.Addr)
-	}
-	if server.Handler == nil {
-		t.Fatal("server Handler is nil")
-	}
-	if server.ReadHeaderTimeout != 5*time.Second {
-		t.Fatalf("ReadHeaderTimeout = %s, want 5s", server.ReadHeaderTimeout)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
-	rec := httptest.NewRecorder()
-	server.Handler.ServeHTTP(rec, req)
-
-	if got := rec.Header().Get(middleware.TraceHeader); got == "" {
-		t.Fatal("trace header is empty")
-	}
-}
-
-func TestNewServerProtectsBusinessRoutes(t *testing.T) {
-	server := newServerWithToken(":0", "secret")
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/book-sources/import", nil)
-	rec := httptest.NewRecorder()
-
-	server.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
-	}
-	if got := rec.Header().Get(middleware.TraceHeader); got == "" {
-		t.Fatal("trace header is empty")
-	}
-}
-
-func TestNewRuntimeServerConstrainsSQLiteConnections(t *testing.T) {
-	dbPath := t.TempDir() + "/reader.db"
-	cfg := config.Config{
+func testServeConfig(t *testing.T, token string) config.Config {
+	t.Helper()
+	return config.Config{
 		Addr:              "127.0.0.1:0",
-		SQLiteDSN:         dbPath,
-		Token:             "secret",
+		SQLiteDSN:         filepath.Join(t.TempDir(), "reader.db"),
+		Token:             token,
 		Env:               config.EnvDevelopment,
 		DefaultUserAgent:  "Reader/Test",
 		FetchTimeout:      30 * time.Second,
@@ -65,16 +33,121 @@ func TestNewRuntimeServerConstrainsSQLiteConnections(t *testing.T) {
 		RegexTimeout:      500 * time.Millisecond,
 		DebugBodyLimit:    32 * 1024,
 	}
+}
 
+func TestNewRuntimeServerOptions(t *testing.T) {
+	cfg := testServeConfig(t, "secret")
 	server, cleanup, err := newRuntimeServer(cfg)
 	if err != nil {
 		t.Fatalf("newRuntimeServer() error = %v", err)
 	}
 	defer cleanup()
-	if server == nil {
-		t.Fatal("server is nil")
+	if server.Addr != cfg.Addr {
+		t.Fatalf("Addr = %q, want %q", server.Addr, cfg.Addr)
 	}
-	if _, err := os.Stat(dbPath); err != nil {
+	if server.ReadHeaderTimeout <= 0 || server.ReadTimeout <= 0 || server.IdleTimeout <= 0 {
+		t.Fatalf("timeouts header=%s read=%s idle=%s, want all > 0", server.ReadHeaderTimeout, server.ReadTimeout, server.IdleTimeout)
+	}
+	// SSE 长连接依赖无全局写截止。
+	if server.WriteTimeout != 0 {
+		t.Fatalf("WriteTimeout = %s, want 0", server.WriteTimeout)
+	}
+	if _, err := os.Stat(cfg.SQLiteDSN); err != nil {
 		t.Fatalf("sqlite db not created: %v", err)
+	}
+}
+
+func TestNewRuntimeServerRoutesAndAuth(t *testing.T) {
+	tests := []struct {
+		name       string
+		token      string
+		path       string
+		authHeader string
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "health public", token: "secret", path: "/api/v1/health", wantStatus: http.StatusOK},
+		{name: "business without token", token: "secret", path: "/api/v1/book-sources", wantStatus: http.StatusUnauthorized, wantCode: "auth_required"},
+		{name: "business wrong token", token: "secret", path: "/api/v1/book-sources", authHeader: "Bearer wrong", wantStatus: http.StatusUnauthorized, wantCode: "auth_invalid"},
+		{name: "business valid token", token: "secret", path: "/api/v1/book-sources", authHeader: "bearer secret", wantStatus: http.StatusOK},
+		{name: "loopback without token", token: "", path: "/api/v1/book-sources", wantStatus: http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, cleanup, err := newRuntimeServer(testServeConfig(t, tt.token))
+			if err != nil {
+				t.Fatalf("newRuntimeServer() error = %v", err)
+			}
+			defer cleanup()
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+			rec := httptest.NewRecorder()
+			server.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if rec.Header().Get(middleware.TraceHeader) == "" {
+				t.Fatal("trace header is empty")
+			}
+			if tt.wantCode != "" {
+				var body struct {
+					Code string `json:"code"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Code != tt.wantCode {
+					t.Fatalf("error code = %q (%v), want %q", body.Code, err, tt.wantCode)
+				}
+			}
+		})
+	}
+}
+
+func TestRunServeRejectsEmptyTokenOnNonLoopback(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "data", "reader.db")
+	for _, addr := range []string{"0.0.0.0:0", ":0"} {
+		t.Run(addr, func(t *testing.T) {
+			t.Setenv("READER_TOKEN", "")
+			t.Setenv("READER_ENV", config.EnvDevelopment)
+			t.Setenv("READER_SQLITE_DSN", dbPath)
+			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+			code := runServe(context.Background(), []string{"--addr", addr}, stdout, stderr)
+			if code != 2 {
+				t.Fatalf("runServe() = %d, want 2; stderr: %s", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "READER_TOKEN is required") {
+				t.Fatalf("stderr = %q, want token error", stderr.String())
+			}
+			if _, err := os.Stat(filepath.Dir(dbPath)); !os.IsNotExist(err) {
+				t.Fatalf("data dir must not be created on rejected start: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunServeShutsDownOnContextCancel(t *testing.T) {
+	t.Setenv("READER_TOKEN", "")
+	t.Setenv("READER_ENV", config.EnvDevelopment)
+	t.Setenv("READER_SQLITE_DSN", filepath.Join(t.TempDir(), "reader.db"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	if code := runServe(ctx, []string{"--addr", "127.0.0.1:0"}, stdout, stderr); code != 0 {
+		t.Fatalf("runServe() = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "reader server stopping") {
+		t.Fatalf("stderr = %q, want JSON shutdown log", stderr.String())
+	}
+}
+
+func TestRunServeHelpExitsZero(t *testing.T) {
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	if code := runServe(context.Background(), []string{"--help"}, stdout, stderr); code != 0 {
+		t.Fatalf("runServe(--help) = %d, want 0", code)
+	}
+	if !strings.Contains(stdout.String(), "--addr <string>") || stderr.Len() != 0 {
+		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
 	}
 }

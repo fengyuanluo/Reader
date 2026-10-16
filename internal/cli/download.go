@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"reader/internal/bootstrap"
 	"reader/internal/domain/book"
 )
 
@@ -21,17 +19,16 @@ type downloadFailureJSON struct {
 
 // runDownload 实现 `reader download <bookId>`：逐章取正文写入 SQLite 缓存，默认导出 TXT。
 // 缓存命中的章节不再发起抓取，重跑即断点续跑。
-func runDownload(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runDownload(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("download", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	from := fs.Int("from", 0, "first chapter index")
-	to := fs.Int("to", -1, "last chapter index (-1 = last chapter)")
+	from := fs.Int("from", 0, "first chapter index (>= 0)")
+	to := fs.Int("to", -1, "last chapter index (-1 = last chapter; larger values clamp to last)")
 	exportPath := fs.String("export", "", "TXT export path (default downloads/<bookId>.txt)")
 	noExport := fs.Bool("no-export", false, "skip TXT export")
 	workers := fs.Int("workers", 1, "reserved; downloads run serially (SQLite single-conn)")
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "download <bookId> [flags]", args, stdout, stderr); done {
+		return code
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(stderr, "error: download requires exactly one <bookId> argument")
@@ -41,10 +38,19 @@ func runDownload(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer)
 		fmt.Fprintln(stderr, "warn: --workers > 1 ignored, running serially")
 	}
 	if *from < 0 {
-		*from = 0
+		fmt.Fprintf(stderr, "error: --from must be >= 0, got %d\n", *from)
+		return 1
+	}
+	if *to >= 0 && *to < *from {
+		fmt.Fprintf(stderr, "error: --to %d is before --from %d\n", *to, *from)
+		return 1
 	}
 
-	ctx := context.Background()
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
+	ctx := env.ctx
 	id := fs.Arg(0)
 	chapters, b, err := rt.Books.ListChapters(ctx, id)
 	if err != nil {
@@ -57,14 +63,15 @@ func runDownload(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer)
 	}
 
 	last := len(chapters) - 1
+	if *from > last {
+		fmt.Fprintf(stderr, "error: --from %d out of range (last chapter index %d)\n", *from, last)
+		return 1
+	}
 	if *to < 0 || *to > last {
 		*to = last
 	}
 	bookID := book.IDFromURL(b.BookURL)
-	total := 0
-	if *to >= *from {
-		total = *to - *from + 1
-	}
+	total := *to - *from + 1
 
 	summary := struct {
 		BookID     string                `json:"bookId"`
@@ -79,6 +86,9 @@ func runDownload(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer)
 
 	var sections []string
 	for seq, index := 0, *from; index <= *to; seq, index = seq+1, index+1 {
+		if ctx.Err() != nil {
+			break
+		}
 		chapter := chapters[index]
 		fmt.Fprintf(stderr, "[%d/%d] %d %s\n", seq+1, total, index, chapter.Title)
 		if chapter.IsVolume {
@@ -101,8 +111,18 @@ func runDownload(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer)
 		summary.Downloaded++
 		sections = append(sections, chapterSection(index, chapter.Title, result.Content))
 	}
+	// 被信号中断：已抓章节已入缓存可续跑，不导出以免残缺内容覆盖已有 TXT。
+	if ctx.Err() != nil {
+		fmt.Fprintln(stderr, "error: interrupted, export skipped; rerun to resume from cache")
+		return 2
+	}
 
-	if !*noExport {
+	switch {
+	case *noExport:
+	case len(sections) == 0:
+		// 无任何正文（全为卷章节或全部失败）时不导出，避免覆盖已有 TXT。
+		fmt.Fprintln(stderr, "warn: no chapter content, export skipped")
+	default:
 		path := *exportPath
 		if path == "" {
 			path = filepath.Join("downloads", id+".txt")

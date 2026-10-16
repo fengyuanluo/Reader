@@ -16,6 +16,12 @@ import (
 	"reader/internal/infra/config"
 )
 
+// newTestEnv 返回已装配临时 SQLite 运行时的执行环境，ctx 随测试结束取消。
+func newTestEnv(t *testing.T) *cmdEnv {
+	t.Helper()
+	return &cmdEnv{ctx: t.Context(), rt: newTestRuntime(t)}
+}
+
 func newTestRuntime(t *testing.T) *bootstrap.Runtime {
 	t.Helper()
 	cfg := config.Config{
@@ -45,6 +51,8 @@ func newTestRuntime(t *testing.T) *bootstrap.Runtime {
 type cliMockSource struct {
 	*httptest.Server
 	content2Status int
+	// onContent1 在第一章正文请求到达时回调，用于模拟下载中途收到中断信号。
+	onContent1 func()
 }
 
 func newCLIMockSource(t *testing.T) *cliMockSource {
@@ -72,6 +80,9 @@ func newCLIMockSource(t *testing.T) *cliMockSource {
 			`</ul>`))
 	})
 	mux.HandleFunc("/content/1", func(w http.ResponseWriter, r *http.Request) {
+		if mock.onContent1 != nil {
+			mock.onContent1()
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(`<div class="content">广告
 真正正文一</div>`))
@@ -137,10 +148,10 @@ func (m *cliMockSource) sourceJSON() string {
 }
 
 // importMockURL 通过远程 URL 导入完整规则书源，验证 import 的 URL 链路。
-func importMockURL(t *testing.T, rt *bootstrap.Runtime, mockURL string) int {
+func importMockURL(t *testing.T, env *cmdEnv, mockURL string) int {
 	t.Helper()
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	code := runImport(rt, []string{mockURL + "/sources.json"}, stdout, stderr)
+	code := runImport(env, []string{mockURL + "/sources.json"}, stdout, stderr)
 	if code != 0 || !strings.Contains(stdout.String(), "summary: added=1") {
 		t.Fatalf("runImport(url) = %d, stdout: %s, stderr: %s", code, stdout.String(), stderr.String())
 	}
@@ -148,10 +159,10 @@ func importMockURL(t *testing.T, rt *bootstrap.Runtime, mockURL string) int {
 }
 
 // addMockBook 完成导入（URL 链路）+ 加书架 + 刷新，返回 bookId。
-func addMockBook(t *testing.T, rt *bootstrap.Runtime, mock *cliMockSource) string {
+func addMockBook(t *testing.T, env *cmdEnv, mock *cliMockSource) string {
 	t.Helper()
-	importMockURL(t, rt, mock.URL)
-	page, err := rt.Sources.List(t.Context(), source.BookSourceFilter{Page: 1, PageSize: 10})
+	importMockURL(t, env, mock.URL)
+	page, err := env.rt.Sources.List(t.Context(), source.BookSourceFilter{Page: 1, PageSize: 10})
 	if err != nil || len(page.Items) != 1 {
 		t.Fatalf("list sources: %v (n=%d)", err, len(page.Items))
 	}
@@ -159,7 +170,7 @@ func addMockBook(t *testing.T, rt *bootstrap.Runtime, mock *cliMockSource) strin
 	bookURL := mock.URL + "/book/1"
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	if code := runBookAdd(rt, []string{"--source", sourceID, "--url", bookURL}, stdout, stderr); code != 0 {
+	if code := runBookAdd(env, []string{"--source", sourceID, "--url", bookURL}, stdout, stderr); code != 0 {
 		t.Fatalf("runBookAdd() = %d, stderr: %s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "added\t"+book.IDFromURL(bookURL)) {
@@ -167,7 +178,7 @@ func addMockBook(t *testing.T, rt *bootstrap.Runtime, mock *cliMockSource) strin
 	}
 
 	stdout, stderr = &bytes.Buffer{}, &bytes.Buffer{}
-	if code := runBookRefresh(rt, []string{book.IDFromURL(bookURL)}, stdout, stderr); code != 0 {
+	if code := runBookRefresh(env, []string{book.IDFromURL(bookURL)}, stdout, stderr); code != 0 {
 		t.Fatalf("runBookRefresh() = %d, stderr: %s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "chapters=3") {
@@ -187,11 +198,11 @@ func TestRunUnknownCommandReturnsUsageError(t *testing.T) {
 }
 
 func TestImportAndSourceList(t *testing.T) {
-	rt := newTestRuntime(t)
+	env := newTestEnv(t)
 	mock := newCLIMockSource(t)
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	if code := runImport(rt, []string{"--json", mock.URL + "/sources.json"}, stdout, stderr); code != 0 {
+	if code := runImport(env, []string{"--json", mock.URL + "/sources.json"}, stdout, stderr); code != 0 {
 		t.Fatalf("runImport() = %d, stderr: %s", code, stderr.String())
 	}
 	var result struct {
@@ -209,7 +220,7 @@ func TestImportAndSourceList(t *testing.T) {
 	}
 
 	stdout, stderr = &bytes.Buffer{}, &bytes.Buffer{}
-	if code := runSourceList(rt, []string{"--json"}, stdout, stderr); code != 0 {
+	if code := runSourceList(env, []string{"--json"}, stdout, stderr); code != 0 {
 		t.Fatalf("runSourceList() = %d, stderr: %s", code, stderr.String())
 	}
 	var list struct {
@@ -230,12 +241,12 @@ func TestImportAndSourceList(t *testing.T) {
 }
 
 func TestSearchJSONAndText(t *testing.T) {
-	rt := newTestRuntime(t)
+	env := newTestEnv(t)
 	mock := newCLIMockSource(t)
-	importMockURL(t, rt, mock.URL)
+	importMockURL(t, env, mock.URL)
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	if code := runSearch(rt, []string{"斗破", "--json", "--limit", "5"}, stdout, stderr); code != 0 {
+	if code := runSearch(env, []string{"斗破", "--json", "--limit", "5"}, stdout, stderr); code != 0 {
 		t.Fatalf("runSearch() = %d, stderr: %s", code, stderr.String())
 	}
 	var out struct {
@@ -259,7 +270,7 @@ func TestSearchJSONAndText(t *testing.T) {
 	}
 
 	stdout, stderr = &bytes.Buffer{}, &bytes.Buffer{}
-	if code := runSearch(rt, []string{"斗破", "--limit", "5"}, stdout, stderr); code != 0 {
+	if code := runSearch(env, []string{"斗破", "--limit", "5"}, stdout, stderr); code != 0 {
 		t.Fatalf("runSearch(text) = %d, stderr: %s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), item.SourceID) || !strings.Contains(stdout.String(), "斗破苍穹") {
@@ -268,12 +279,12 @@ func TestSearchJSONAndText(t *testing.T) {
 }
 
 func TestBookListInfoAndToc(t *testing.T) {
-	rt := newTestRuntime(t)
+	env := newTestEnv(t)
 	mock := newCLIMockSource(t)
-	bookID := addMockBook(t, rt, mock)
+	bookID := addMockBook(t, env, mock)
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	if code := runBookList(rt, []string{"--json"}, stdout, stderr); code != 0 {
+	if code := runBookList(env, []string{"--json"}, stdout, stderr); code != 0 {
 		t.Fatalf("runBookList() = %d, stderr: %s", code, stderr.String())
 	}
 	var list struct {
@@ -290,7 +301,7 @@ func TestBookListInfoAndToc(t *testing.T) {
 	}
 
 	stdout, stderr = &bytes.Buffer{}, &bytes.Buffer{}
-	if code := runToc(rt, []string{bookID, "--json"}, stdout, stderr); code != 0 {
+	if code := runToc(env, []string{bookID, "--json"}, stdout, stderr); code != 0 {
 		t.Fatalf("runToc() = %d, stderr: %s", code, stderr.String())
 	}
 	var toc struct {
@@ -314,13 +325,13 @@ func TestBookListInfoAndToc(t *testing.T) {
 }
 
 func TestDownloadExportAndCache(t *testing.T) {
-	rt := newTestRuntime(t)
+	env := newTestEnv(t)
 	mock := newCLIMockSource(t)
-	bookID := addMockBook(t, rt, mock)
+	bookID := addMockBook(t, env, mock)
 	exportPath := filepath.Join(t.TempDir(), "out", "book.txt")
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	code := runDownload(rt, []string{bookID, "--from", "0", "--to", "2", "--export", exportPath, "--json"}, stdout, stderr)
+	code := runDownload(env, []string{bookID, "--from", "0", "--to", "2", "--export", exportPath, "--json"}, stdout, stderr)
 	if code != 0 {
 		t.Fatalf("runDownload() = %d, stderr: %s", code, stderr.String())
 	}
@@ -364,7 +375,7 @@ func TestDownloadExportAndCache(t *testing.T) {
 
 	// 重跑：全部命中缓存，不再抓取。
 	stdout, stderr = &bytes.Buffer{}, &bytes.Buffer{}
-	if code := runDownload(rt, []string{bookID, "--from", "0", "--to", "2", "--export", exportPath, "--json"}, stdout, stderr); code != 0 {
+	if code := runDownload(env, []string{bookID, "--from", "0", "--to", "2", "--export", exportPath, "--json"}, stdout, stderr); code != 0 {
 		t.Fatalf("runDownload(rerun) = %d, stderr: %s", code, stderr.String())
 	}
 	summary = struct {
@@ -388,13 +399,13 @@ func TestDownloadExportAndCache(t *testing.T) {
 }
 
 func TestDownloadChapterFailureExitsTwo(t *testing.T) {
-	rt := newTestRuntime(t)
+	env := newTestEnv(t)
 	mock := newCLIMockSource(t)
 	mock.content2Status = http.StatusInternalServerError
-	bookID := addMockBook(t, rt, mock)
+	bookID := addMockBook(t, env, mock)
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	code := runDownload(rt, []string{bookID, "--from", "0", "--to", "2", "--no-export", "--json"}, stdout, stderr)
+	code := runDownload(env, []string{bookID, "--from", "0", "--to", "2", "--no-export", "--json"}, stdout, stderr)
 	if code != 2 {
 		t.Fatalf("runDownload() = %d, want 2; stderr: %s", code, stderr.String())
 	}

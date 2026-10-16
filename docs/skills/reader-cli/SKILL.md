@@ -27,9 +27,13 @@ Reader 提供单二进制 CLI（`go run ./cmd/reader` 或构建后的 `reader`�
 ## 调用约定
 
 - 解析输出一律加 `--json` + jq；不要解析 tab 文本（仅人类可读）。
-- 退出码：0 成功；1 用法/参数错误；2 运行失败。`download` 有章节失败时 exit 2，`failed` 数组含失败章节索引与原因。
+- 不确定参数时先查 `reader <command> --help`（flag 统一双横线写法，exit 0）；`reader book --help` / `reader source --help` 列出子命令。
+- 退出码：0 成功；1 用法/参数错误（在打开数据库前判定，不会建库）；2 运行失败。`download` 有章节失败时 exit 2，`failed` 数组含失败章节索引与原因。
+- `import --update` 只接受 `lastUpdateTime`（默认）、`always`、`skipExisting`；带 UTF-8 BOM 的 JSON 可直接导入。
+- `search --limit` 必须 >= 1；`download --from` 必须在 0 到最后一章索引之间。
+- Ctrl-C / SIGTERM 取消进行中的命令；`download` 被中断时不导出 TXT，exit 2，重跑从缓存续传。
 - 链式句柄：`search --json` 返回 `items[].bookUrl` 与 `items[].sourceId` → 原样传给 `book add`；`bookId` 从 `book add` 返回值取，不要自行计算。
-- CLI 直连 SQLite（`READER_SQLITE_DSN`，默认 `data/reader.db`），不需要启动 server、不需要 token；`READER_TOKEN` 只有 `reader serve` 需要。
+- CLI 直连 SQLite（`READER_SQLITE_DSN`，默认 `data/reader.db`），不需要启动 server、不需要 token。`reader serve` 默认监听 `127.0.0.1:8080`，此时可以不设 token；监听非回环地址必须设置 `READER_TOKEN`（production 始终必须）。serve 的 JSON 日志在 stderr。
 - `book add` 默认自动刷新书名与简介（可 `--no-refresh` 跳过）；`toc` 为空先执行 `reader book refresh <bookId>`。
 - `download` 幂等：缓存命中的章节不再抓取，重跑即断点续跑；卷章节自动 skip，不写入 TXT。
 - 默认禁止抓内网地址；对本地 httptest mock 源调试时需 `READER_ALLOW_PRIVATE_NETWORK=true`。

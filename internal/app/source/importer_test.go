@@ -47,6 +47,41 @@ func TestImporterReturnsItemErrorForMissingRequiredFields(t *testing.T) {
 	}
 }
 
+func TestImporterStripsUTF8BOM(t *testing.T) {
+	payloads := map[string]string{
+		"array":  "\xef\xbb\xbf[{\"bookSourceUrl\":\"https://bom-array.test\",\"bookSourceName\":\"BOM\"}]",
+		"object": "\xef\xbb\xbf {\"bookSourceUrl\":\"https://bom-object.test\",\"bookSourceName\":\"BOM\"}",
+	}
+	for name, payload := range payloads {
+		t.Run(name, func(t *testing.T) {
+			importer := NewImporter(repositories.NewBookSourceRepository(openImporterTestDB(t)))
+			result, err := importer.Import(context.Background(), ImportInput{Payload: []byte(payload)})
+			if err != nil {
+				t.Fatalf("Import() error = %v", err)
+			}
+			if result.Added != 1 {
+				t.Fatalf("Added = %d, want 1; items %+v", result.Added, result.Items)
+			}
+		})
+	}
+}
+
+func TestValidUpdatePolicy(t *testing.T) {
+	tests := map[string]bool{
+		"":               true,
+		"lastUpdateTime": true,
+		"always":         true,
+		"skipExisting":   true,
+		"Always":         false,
+		"skip":           false,
+	}
+	for policy, want := range tests {
+		if got := ValidUpdatePolicy(policy); got != want {
+			t.Fatalf("ValidUpdatePolicy(%q) = %v, want %v", policy, got, want)
+		}
+	}
+}
+
 func openImporterTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
