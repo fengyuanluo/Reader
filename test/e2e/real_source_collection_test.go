@@ -2,6 +2,8 @@ package e2e_test
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +53,7 @@ type realE2EReport struct {
 	Keyword              string                     `json:"keyword"`
 	StageResults         []realStageResult          `json:"stageResults"`
 	FailureSummary       map[string]int             `json:"failureSummary,omitempty"`
+	FailureTraceIDs      map[string][]string        `json:"failureTraceIds,omitempty"`
 	ReleaseAllowed       bool                       `json:"releaseAllowed"`
 	FailureClass         string                     `json:"failureClass,omitempty"`
 }
@@ -88,6 +91,8 @@ type realStageResult struct {
 	Status         string `json:"status"`
 	Message        string `json:"message,omitempty"`
 	FailureClass   string `json:"failureClass,omitempty"`
+	// TraceID 标识本条阶段结果的执行链路，便于把报告与日志、DB 记录对应起来（Design 17.6）。
+	TraceID string `json:"traceId,omitempty"`
 }
 
 type realStageCounts struct {
@@ -182,6 +187,49 @@ func TestRealSourceReportWriters(t *testing.T) {
 	}
 	if !strings.Contains(string(rawMD), "source_url_host_polluted") {
 		t.Fatalf("markdown report missing failure summary: %s", string(rawMD))
+	}
+}
+
+// TestRealE2EReportCarriesTraceIDs 验证报告包含 Design 17.6 要求的 traceId：
+// 每条阶段结果有唯一 traceId，失败分类能追溯到对应 traceId，且写进 JSON 与 Markdown。
+func TestRealE2EReportCarriesTraceIDs(t *testing.T) {
+	dir := t.TempDir()
+	report := realE2EReport{TestTime: "2026-10-16T00:00:00Z", CollectionURL: defaultRealCollectionURL}
+	report.addStageResult(newRealStageResult(nil, "我的", "search", "passed", ""))
+	failed := newRealStageResult(nil, "我的", "search", "failed", `Get "https://x": net/http: TLS handshake timeout`)
+	report.addStageResult(failed)
+	stored := report.StageResults[1]
+	if report.StageResults[0].TraceID == "" || report.StageResults[0].TraceID == stored.TraceID {
+		t.Fatalf("阶段结果 traceId 未生成或不唯一: %#v", report.StageResults)
+	}
+	if stored.FailureClass == "" {
+		t.Fatalf("失败阶段未分类: %#v", stored)
+	}
+	traces := report.FailureTraceIDs[stored.FailureClass]
+	if len(traces) != 1 || traces[0] != stored.TraceID {
+		t.Fatalf("失败分类未关联 traceId: %#v", report.FailureTraceIDs)
+	}
+
+	jsonPath, mdPath, err := writeRealE2EReports(dir, report)
+	if err != nil {
+		t.Fatalf("write reports: %v", err)
+	}
+	rawJSON, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read json report: %v", err)
+	}
+	if !strings.Contains(string(rawJSON), `"traceId": "`+stored.TraceID+`"`) {
+		t.Fatalf("json 报告缺少阶段 traceId: %s", string(rawJSON))
+	}
+	if !strings.Contains(string(rawJSON), `"failureTraceIds"`) {
+		t.Fatalf("json 报告缺少 failureTraceIds: %s", string(rawJSON))
+	}
+	rawMD, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatalf("read markdown report: %v", err)
+	}
+	if !strings.Contains(string(rawMD), "traceId: "+stored.TraceID) {
+		t.Fatalf("markdown 报告缺少 traceId: %s", string(rawMD))
 	}
 }
 
@@ -801,6 +849,7 @@ func (r *realE2EReport) addStageResult(result realStageResult) {
 				r.FailureSummary = map[string]int{}
 			}
 			r.FailureSummary[result.FailureClass]++
+			recordFailureTraceID(&r.FailureTraceIDs, result.FailureClass, result.TraceID)
 		}
 	}
 	r.StageSummary[result.Stage] = counts
@@ -812,6 +861,7 @@ func newRealStageResult(candidate *domainsource.BookSource, keywordUsed string, 
 		Stage:       stage,
 		Status:      status,
 		Message:     message,
+		TraceID:     newRealTraceID(),
 	}
 	if candidate != nil {
 		result.SourceID = candidate.SourceID
@@ -819,6 +869,37 @@ func newRealStageResult(candidate *domainsource.BookSource, keywordUsed string, 
 		result.BookSourceName = candidate.BookSourceName
 	}
 	return result
+}
+
+// newRealTraceID 生成 16 字节十六进制 traceId，与 HTTP 中间件的 traceId 形式一致。
+func newRealTraceID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(buf)
+}
+
+// recordFailureTraceID 把 traceId 归入对应失败分类，去重并限制每类最多保留 20 条。
+func recordFailureTraceID(target *map[string][]string, class string, traceID string) {
+	if class == "" || traceID == "" {
+		return
+	}
+	if *target == nil {
+		*target = map[string][]string{}
+	}
+	existing := (*target)[class]
+	for _, item := range existing {
+		if item == traceID {
+			return
+		}
+	}
+	if len(existing) >= 20 {
+		existing[19] = traceID
+		(*target)[class] = existing
+		return
+	}
+	(*target)[class] = append(existing, traceID)
 }
 
 func selectRealCandidates(sources []*domainsource.BookSource, max int) []*domainsource.BookSource {
@@ -1041,7 +1122,11 @@ func writeRealE2EReports(dir string, report realE2EReport) (string, string, erro
 	if len(report.FailureSummary) > 0 {
 		md += "\n## Failure Summary\n\n"
 		for _, item := range sortedFailureSummary(report.FailureSummary) {
-			md += "- " + item.Name + ": " + strconvItoa(item.Count) + "\n"
+			md += "- " + item.Name + ": " + strconvItoa(item.Count)
+			if traces := report.FailureTraceIDs[item.Name]; len(traces) > 0 {
+				md += " (traceId: " + strings.Join(traces, ", ") + ")"
+			}
+			md += "\n"
 		}
 	}
 	failed := failedStageResults(report.StageResults)
@@ -1058,6 +1143,9 @@ func writeRealE2EReports(dir string, report realE2EReport) (string, string, erro
 			}
 			if strings.TrimSpace(item.Message) != "" {
 				md += ": " + item.Message
+			}
+			if item.TraceID != "" {
+				md += " (traceId: " + item.TraceID + ")"
 			}
 			md += "\n"
 		}
@@ -1092,6 +1180,7 @@ func normalizeRealE2EReport(report realE2EReport) realE2EReport {
 	}
 	report.StageSummary = map[string]realStageCounts{}
 	report.FailureSummary = map[string]int{}
+	report.FailureTraceIDs = nil
 	normalized := make([]realStageResult, 0, len(report.StageResults))
 	for _, result := range report.StageResults {
 		if result.Status == "failed" && result.FailureClass == "" {
@@ -1106,12 +1195,16 @@ func normalizeRealE2EReport(report realE2EReport) realE2EReport {
 			counts.Failed++
 			if result.FailureClass != "" {
 				report.FailureSummary[result.FailureClass]++
+				recordFailureTraceID(&report.FailureTraceIDs, result.FailureClass, result.TraceID)
 			}
 		}
 		report.StageSummary[result.Stage] = counts
 	}
 	if len(report.FailureSummary) == 0 {
 		report.FailureSummary = nil
+	}
+	if len(report.FailureTraceIDs) == 0 {
+		report.FailureTraceIDs = nil
 	}
 	report.StageResults = normalized
 	return report
