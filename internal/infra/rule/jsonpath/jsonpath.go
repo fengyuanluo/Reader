@@ -1,13 +1,16 @@
 package jsonpath
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/PaesslerAG/gval"
 	pjsonpath "github.com/PaesslerAG/jsonpath"
 
+	"reader/internal/infra/rule/internal/lru"
 	"reader/internal/infra/rule/parser"
 )
 
@@ -15,6 +18,33 @@ var (
 	ErrInvalidJSON = errors.New("invalid json")
 	ErrRuleParse   = errors.New("rule_parse_failed")
 )
+
+// language 在 JSONPath 基础语言上补齐数值/文本比较与逻辑运算，
+// 使过滤表达式支持 Legado（jayway）常用的 > < >= <= && || ! 等运算符。
+var language = gval.NewLanguage(
+	pjsonpath.Language(),
+	gval.Arithmetic(),
+	gval.Text(),
+	gval.PropositionalLogic(),
+)
+
+// evaluableCacheSize 为 JSONPath 编译缓存容量，按规则字符串复用解析结果。
+const evaluableCacheSize = 512
+
+type evaluableResult struct {
+	eval gval.Evaluable
+	err  error
+}
+
+var evaluableCache = lru.New[string, evaluableResult](evaluableCacheSize)
+
+func compilePath(path string) (gval.Evaluable, error) {
+	result := evaluableCache.GetOrCompute(path, func() evaluableResult {
+		eval, err := language.NewEvaluable(path)
+		return evaluableResult{eval: eval, err: err}
+	})
+	return result.eval, result.err
+}
 
 type Adapter struct {
 	data any
@@ -34,7 +64,11 @@ func (a *Adapter) Object(rule string) (any, error) {
 	if rule == "" {
 		return nil, fmt.Errorf("%w: empty jsonpath", ErrRuleParse)
 	}
-	value, err := pjsonpath.Get(rule, a.data)
+	eval, err := compilePath(rule)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrRuleParse, err)
+	}
+	value, err := eval(context.Background(), a.data)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrRuleParse, err)
 	}
@@ -108,14 +142,15 @@ func (a *Adapter) values(rule string) ([]any, error) {
 	return out, nil
 }
 
+// isScalarTraversalError 判断是否为在标量（float64/string/bool/nil 等）上继续取子路径的错误。
+// PaesslerAG/jsonpath 以 %T 输出类型名（如 float64），Legado 对这类异常容错返回空。
 func isScalarTraversalError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "unsupported value type string for select") ||
-		strings.Contains(msg, "unsupported value type number for select") ||
-		strings.Contains(msg, "unsupported value type bool for select")
+	idx := strings.Index(msg, "unsupported value type ")
+	return idx >= 0 && strings.Contains(msg[idx:], " for select")
 }
 
 func flatten(value any) []any {

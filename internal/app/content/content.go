@@ -455,23 +455,19 @@ func (s *Service) parsePage(ctx context.Context, src *source.BookSource, b *book
 			chapter.Title = strings.TrimSpace(title)
 		}
 	}
-	content, err := analyzer.GetString(ctx, contentRule.Content, body)
+	// 正文不在规则层反转义实体，normalizeContent 在格式化后统一处理（对齐 Legado getString(content, unescape=false)）。
+	content, err := analyzer.GetStringRaw(ctx, contentRule.Content, body)
 	if err != nil {
 		return "", nil, err
 	}
 	content = normalizeContent(content, redirectURL)
 	nextURLs := []string{}
 	if getNext && strings.TrimSpace(contentRule.NextContentURL) != "" {
-		values, err := analyzer.GetStringList(ctx, contentRule.NextContentURL, body)
+		values, err := analyzer.GetURLList(ctx, contentRule.NextContentURL, body)
 		if err != nil {
 			return "", nil, err
 		}
-		for _, value := range values {
-			value = strings.TrimSpace(urlrule.Absolute(redirectURL, value))
-			if value != "" {
-				nextURLs = append(nextURLs, value)
-			}
-		}
+		nextURLs = append(nextURLs, values...)
 	}
 	return content, nextURLs, nil
 }

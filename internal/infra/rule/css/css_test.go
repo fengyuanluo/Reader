@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
 const searchHTML = `
@@ -371,5 +373,114 @@ func TestAdapterReturnsTypedErrorForEmptySelector(t *testing.T) {
 	}
 	if _, err := adapter.Strings(""); !errors.Is(err, ErrEmptySelector) {
 		t.Fatalf("error = %v, want ErrEmptySelector", err)
+	}
+}
+
+// R-010/R-061/R-062/R-063/R-117：选择器语义对齐 Legado AnalyzeByJSoup。
+func TestAdapterLegadoSelectorSemantics(t *testing.T) {
+	tests := []struct {
+		name string
+		html string
+		rule string
+		want []string
+	}{
+		{
+			name: "text prefix with legacy dot index",
+			html: `<div><p>关键词甲</p><p>其他</p><p>关键词乙</p></div>`,
+			rule: "text.关键词.0@text",
+			want: []string{"关键词甲"},
+		},
+		{
+			name: "text prefix with bracket index",
+			html: `<div><p>关键词甲</p><p>其他</p><p>关键词乙</p></div>`,
+			rule: "text.关键词[-1]@text",
+			want: []string{"关键词乙"},
+		},
+		{
+			name: "text prefix with index in middle step",
+			html: `<div><p>关键词甲<a href="/1">一</a></p><p>关键词乙<a href="/2">二</a></p></div>`,
+			rule: "text.关键词.1@a@href",
+			want: []string{"/2"},
+		},
+		{
+			name: "comma selector keeps document order",
+			html: `<div><b>b1</b><a>a1</a><b>b2</b></div>`,
+			rule: "a,b@text",
+			want: []string{"b1", "a1", "b2"},
+		},
+		{
+			name: "comma selector trailing index applies to merged result",
+			html: `<div><b>b1</b><a>a1</a><b>b2</b></div>`,
+			rule: "a,b.1@text",
+			want: []string{"a1"},
+		},
+		{
+			name: "children with tag suffix and index",
+			html: `<div class="box"><span>零</span><p>一</p><p>二</p></div>`,
+			rule: ".box@children.div.1@text",
+			want: []string{"一"},
+		},
+		{
+			name: "children with tag suffix",
+			html: `<div class="box"><span>零</span><p>一</p></div>`,
+			rule: ".box@children.p@text",
+			want: []string{"零", "一"},
+		},
+		{
+			name: "attribute values are deduplicated",
+			html: `<div><a href="/1">一</a><a href="/1">一again</a><a href="/2">二</a></div>`,
+			rule: "a@href",
+			want: []string{"/1", "/2"},
+		},
+		{
+			name: "text values are not deduplicated",
+			html: `<div><a>同</a><a>同</a></div>`,
+			rule: "a@text",
+			want: []string{"同", "同"},
+		},
+		{
+			name: "zero step range keeps only first",
+			html: `<div><i>0</i><i>1</i><i>2</i><i>3</i></div>`,
+			rule: "i[0:2:0]@text",
+			want: []string{"0"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter, err := New(tt.html)
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			got, err := adapter.Strings(tt.rule)
+			if err != nil {
+				t.Fatalf("Strings(%q) error = %v", tt.rule, err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Strings(%q) = %#v, want %#v", tt.rule, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAdapterElementsTextPrefixIndexAndCommaOrder(t *testing.T) {
+	adapter, err := New(`<div><b>b1</b><a>关键词a</a><b>关键词b</b></div>`)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	selected, err := adapter.Elements("text.关键词.0")
+	if err != nil {
+		t.Fatalf("Elements() error = %v", err)
+	}
+	if selected.Length() != 1 || selected.Text() != "关键词a" {
+		t.Fatalf("text prefix elements = %d %q", selected.Length(), selected.Text())
+	}
+	merged, err := adapter.Elements("a,b")
+	if err != nil {
+		t.Fatalf("Elements() error = %v", err)
+	}
+	got := []string{}
+	merged.Each(func(_ int, item *goquery.Selection) { got = append(got, item.Text()) })
+	if want := []string{"b1", "关键词a", "关键词b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("comma elements = %#v, want %#v", got, want)
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/source"
 	ruleinfra "reader/internal/infra/rule"
-	urlrule "reader/internal/infra/rule/url"
 	"reader/internal/infra/script"
 )
 
@@ -124,18 +123,10 @@ func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseUR
 	if value, err := analyzer.GetString(ctx, infoRule.Intro, content); err == nil && strings.TrimSpace(value) != "" {
 		b.Intro = strings.TrimSpace(value)
 	}
-	if value := firstNonEmptyURLValue(ctx, analyzer, infoRule.CoverURL, content); value != "" {
-		value = strings.TrimSpace(value)
-		if absolute := urlrule.Absolute(redirectURL, value); absolute != "" {
-			value = absolute
-		}
+	if value, err := analyzer.GetURL(ctx, infoRule.CoverURL, content); err == nil && value != "" {
 		b.CoverURL = value
 	}
-	if value := firstNonEmptyURLValue(ctx, analyzer, infoRule.TocURL, content); value != "" {
-		value = strings.TrimSpace(value)
-		if absolute := urlrule.Absolute(redirectURL, value); absolute != "" {
-			value = absolute
-		}
+	if value, err := analyzer.GetURL(ctx, infoRule.TocURL, content); err == nil && value != "" {
 		b.TocURL = value
 	}
 	if b.TocURL == "" {
@@ -145,19 +136,8 @@ func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseUR
 		b.TocHTML = body
 	}
 	if src.BookSourceType == 3 && strings.TrimSpace(infoRule.DownloadURLs) != "" {
-		if values, err := analyzer.GetStringList(ctx, infoRule.DownloadURLs, content); err == nil {
-			downloads := make([]string, 0, len(values))
-			for _, value := range values {
-				value = strings.TrimSpace(value)
-				if value == "" {
-					continue
-				}
-				if absolute := urlrule.Absolute(redirectURL, value); absolute != "" {
-					value = absolute
-				}
-				downloads = append(downloads, value)
-			}
-			b.DownloadURLs = downloads
+		if values, err := analyzer.GetURLList(ctx, infoRule.DownloadURLs, content); err == nil {
+			b.DownloadURLs = values
 		}
 	}
 	if variable := analyzer.VariablesJSON(); variable != "" {
@@ -165,20 +145,6 @@ func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseUR
 	}
 	b.InfoHTML = body
 	return nil
-}
-
-func firstNonEmptyURLValue(ctx context.Context, analyzer *ruleinfra.Analyzer, rule string, input any) string {
-	values, err := analyzer.GetStringList(ctx, rule, input)
-	if err != nil {
-		return ""
-	}
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func PreviewSearchBookFromInfo(ctx context.Context, src *source.BookSource, redirectURL string, body string, seed book.SearchBook, scriptRuntime *script.Runtime) (book.SearchBook, error) {

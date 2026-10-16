@@ -315,9 +315,9 @@ func TestAnalyzerGetsRegexElements(t *testing.T) {
 
 func TestAnalyzerAppliesReplaceAndURLNormalization(t *testing.T) {
 	analyzer := NewAnalyzer(Context{RedirectURL: "https://example.test/book/index.html"})
-	got, err := analyzer.GetStringList(context.Background(), `.book@a@href`, `<div class="book"><a href="../c/1.html">go</a></div>`)
+	got, err := analyzer.GetURLList(context.Background(), `.book@a@href`, `<div class="book"><a href="../c/1.html">go</a><a href="../c/1.html">dup</a></div>`)
 	if err != nil {
-		t.Fatalf("GetStringList() error = %v", err)
+		t.Fatalf("GetURLList() error = %v", err)
 	}
 	if !reflect.DeepEqual(got, []string{"https://example.test/c/1.html"}) {
 		t.Fatalf("values = %#v", got)
@@ -419,7 +419,7 @@ func TestAnalyzerPreservesCSSElementContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetString(text) error = %v", err)
 	}
-	url, err := analyzer.GetString(context.Background(), "href", elements[0])
+	url, err := analyzer.GetURL(context.Background(), "href", elements[0])
 	if err != nil {
 		t.Fatalf("GetString(href) error = %v", err)
 	}
@@ -456,12 +456,98 @@ func TestAnalyzerPreservesJavaGetElementsOutputContext(t *testing.T) {
 	if title != "怪男孩" {
 		t.Fatalf("title = %q", title)
 	}
-	image, err := analyzer.GetString(context.Background(), ".infoText@img@data-src", elements[0])
+	image, err := analyzer.GetURL(context.Background(), ".infoText@img@data-src", elements[0])
 	if err != nil {
 		t.Fatalf("GetString(image) error = %v", err)
 	}
 	if image != "https://example.test/1.jpg" {
 		t.Fatalf("image = %q", image)
+	}
+}
+
+// R-008/R-064/R-116：替换段中的 @get/{{}} 在求值前展开，主规则不再被误判为字面量。
+func TestAnalyzerExpandsTemplatesInReplaceSegments(t *testing.T) {
+	type book struct{ Name string }
+	type chapter struct{ Title string }
+	tests := []struct {
+		name string
+		rule string
+		html string
+		want string
+	}{
+		{name: "get in replacement", rule: "class.title@text##【.*】##@get:{k}", html: `<div class="title">【卷一】正文</div>`, want: "变量正文"},
+		{name: "js in replacement", rule: "class.title@text##【.*】##{{java.x()}}", html: `<div class="title">【卷一】正文</div>`, want: "脚本正文"},
+		{name: "get in regex", rule: "class.title@text##@get:{k}", html: `<div class="title">变量正文</div>`, want: "正文"},
+		{name: "template main rule stays literal", rule: "@get:{k}##变##不", html: `<div></div>`, want: "不量"},
+		{name: "bookName special key", rule: "class.title@text##.+##pre-@get:{bookName}", html: `<div class="title">x</div>`, want: "pre-书名"},
+		{name: "title special key", rule: "class.title@text##.+##@get:{title}", html: `<div class="title">x</div>`, want: "章节名"},
+		// ##regex##replacement### 且 replacement 为空时写作 ##regex#####（与 Legado Kotlin split("##") 一致）。
+		{name: "replace first without match is empty", rule: "class.title@text##【.*】#####", html: `<div class="title">普通标题</div>`, want: ""},
+		{name: "replace first keeps first match", rule: "class.title@text##【(.*?)】##$1###", html: `<div class="title">前【卷一】后</div>`, want: "卷一"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			analyzer := NewAnalyzer(Context{
+				Script:  fakeRuleScript{value: "脚本"},
+				Book:    &book{Name: "书名"},
+				Chapter: &chapter{Title: "章节名"},
+			})
+			analyzer.SetVariables(map[string]string{"k": "变量"})
+			got, err := analyzer.GetString(context.Background(), tt.rule, tt.html)
+			if err != nil {
+				t.Fatalf("GetString() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("GetString(%q) = %q, want %q", tt.rule, got, tt.want)
+			}
+		})
+	}
+}
+
+// R-009：普通文本字段不做 URL 绝对化；URL 字段走 GetURL/GetURLList 统一绝对化。
+func TestAnalyzerOnlyAbsolutizesURLRules(t *testing.T) {
+	analyzer := NewAnalyzer(Context{RedirectURL: "https://host/book/1"})
+	html := `<div><span class="wc">1.2万</span><span class="score">3.5分</span><a href="catalog/123">目录</a><a href="javascript:void(0)">x</a></div>`
+	text, err := analyzer.GetString(context.Background(), "class.wc@text", html)
+	if err != nil || text != "1.2万" {
+		t.Fatalf("GetString() = %q, %v", text, err)
+	}
+	list, err := analyzer.GetStringList(context.Background(), "class.score@text", html)
+	if err != nil || !reflect.DeepEqual(list, []string{"3.5分"}) {
+		t.Fatalf("GetStringList() = %#v, %v", list, err)
+	}
+	url, err := analyzer.GetURL(context.Background(), "a@href", html)
+	if err != nil || url != "https://host/book/catalog/123" {
+		t.Fatalf("GetURL() = %q, %v", url, err)
+	}
+	urls, err := analyzer.GetURLList(context.Background(), "a@href", html)
+	if err != nil || !reflect.DeepEqual(urls, []string{"https://host/book/catalog/123"}) {
+		t.Fatalf("GetURLList() = %#v, %v", urls, err)
+	}
+	empty, err := analyzer.GetURL(context.Background(), ".missing@href", html)
+	if err != nil || empty != "" {
+		t.Fatalf("GetURL(missing) = %q, %v", empty, err)
+	}
+}
+
+// R-115：GetString 对最终文本反转义以分号结尾的 HTML 实体；GetStringList/GetStringRaw 保持原样。
+func TestAnalyzerGetStringUnescapesHTMLEntities(t *testing.T) {
+	raw := "A&amp;B&#x4e2d;&nbsp;C?a=1&para=2"
+	analyzer := NewAnalyzer(Context{Script: fakeRuleScript{value: raw}})
+	got, err := analyzer.GetString(context.Background(), "@js:result", "x")
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	if want := "A&B中\u00a0C?a=1&para=2"; got != want {
+		t.Fatalf("GetString() = %q, want %q", got, want)
+	}
+	rawGot, err := analyzer.GetStringRaw(context.Background(), "@js:result", "x")
+	if err != nil || rawGot != raw {
+		t.Fatalf("GetStringRaw() = %q, %v", rawGot, err)
+	}
+	list, err := analyzer.GetStringList(context.Background(), "@js:result", "x")
+	if err != nil || !reflect.DeepEqual(list, []string{raw}) {
+		t.Fatalf("GetStringList() = %#v, %v", list, err)
 	}
 }
 
