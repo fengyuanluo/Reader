@@ -129,11 +129,11 @@ func (p *ImageProxy) decodeImage(ctx context.Context, input ImageProxyInput, ima
 		}
 		bookValue, err = p.books.FindByID(ctx, input.BookID)
 		if err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "not found") {
-				bookValue = nil
-			} else {
+			// 书籍记录缺失时按无 book 绑定继续解码；其余错误（如数据库故障）仍需上抛。
+			if !errors.Is(err, book.ErrNotFound) {
 				return nil, err
 			}
+			bookValue = nil
 		}
 	}
 	value, err := p.script.EvalWithBindings(ctx, scriptText, script.Bindings{

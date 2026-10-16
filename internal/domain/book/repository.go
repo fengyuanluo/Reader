@@ -27,6 +27,8 @@ type ChapterRepository interface {
 	ReplaceByBook(ctx context.Context, bookID string, chapters []*BookChapter) error
 	ListByBook(ctx context.Context, bookID string) ([]*BookChapter, error)
 	FindByIndex(ctx context.Context, bookID string, index int) (*BookChapter, error)
+	// SaveTitle 用正文规则解析出的标题更新章节标题（对齐 Legado BookContent.kt:66-69 写回 bookChapter.title）。
+	SaveTitle(ctx context.Context, bookID string, chapterIndex int, title string) error
 	SaveContent(ctx context.Context, bookID string, chapterIndex int, content string) error
 	GetContent(ctx context.Context, bookID string, chapterIndex int) (string, bool, error)
 }

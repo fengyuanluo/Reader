@@ -3,6 +3,7 @@ package contentapp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -157,6 +158,55 @@ func TestImageProxyReturnsSourceNotFoundForDecodeContext(t *testing.T) {
 	}
 }
 
+// 书籍记录不存在（book.ErrNotFound）时按无 book 绑定继续解码；其他仓储错误必须上抛，不能靠错误文本判断。
+func TestImageProxyToleratesMissingBookButPropagatesOtherErrors(t *testing.T) {
+	src := &source.BookSource{
+		SourceID:       "src-1",
+		BookSourceURL:  "https://source.example.test",
+		BookSourceName: "Source",
+		RuleContent:    rule.Flexible[rule.ContentRule]{Value: &rule.ContentRule{ImageDecode: `result`}},
+	}
+	response := &fetch.Response{
+		URL:        "https://img.example.test/chapter.bin",
+		Headers:    http.Header{"Content-Type": []string{"image/png"}},
+		Body:       []byte{9, 9, 9},
+		StatusCode: http.StatusOK,
+	}
+
+	missingBook := NewImageProxy(&fakeImageFetcher{response: response}, &fakeImageSourceRepo{byID: map[string]*source.BookSource{src.SourceID: src}}, &fakeImageBookRepo{}, script.NewRuntime(script.Policy{}))
+	got, err := missingBook.Fetch(context.Background(), ImageProxyInput{URL: response.URL, SourceID: src.SourceID, BookID: "missing-book", DecodeMode: DecodeModeContent})
+	if err != nil {
+		t.Fatalf("missing book should not fail decode: %v", err)
+	}
+	if len(got.Body) != 3 {
+		t.Fatalf("body = %v", got.Body)
+	}
+
+	brokenBook := NewImageProxy(&fakeImageFetcher{response: response}, &fakeImageSourceRepo{byID: map[string]*source.BookSource{src.SourceID: src}}, &brokenImageBookRepo{}, script.NewRuntime(script.Policy{}))
+	if _, err := brokenBook.Fetch(context.Background(), ImageProxyInput{URL: response.URL, SourceID: src.SourceID, BookID: "book-1", DecodeMode: DecodeModeContent}); !errors.Is(err, errBrokenBookRepo) {
+		t.Fatalf("err = %v, want repository error propagated", err)
+	}
+}
+
+var errBrokenBookRepo = errors.New("book repository unavailable")
+
+type brokenImageBookRepo struct{}
+
+func (r *brokenImageBookRepo) Save(ctx context.Context, item *book.Book) error { return nil }
+func (r *brokenImageBookRepo) FindByID(ctx context.Context, id string) (*book.Book, error) {
+	return nil, errBrokenBookRepo
+}
+func (r *brokenImageBookRepo) FindByURL(ctx context.Context, bookURL string) (*book.Book, error) {
+	return nil, errBrokenBookRepo
+}
+func (r *brokenImageBookRepo) List(ctx context.Context, filter book.BookFilter) ([]*book.Book, int, error) {
+	return nil, 0, nil
+}
+func (r *brokenImageBookRepo) Delete(ctx context.Context, id string) error { return nil }
+func (r *brokenImageBookRepo) SaveProgress(ctx context.Context, id string, progress book.BookProgress) error {
+	return nil
+}
+
 func TestImageProxyReturnsDecodeFailureWhenScriptErrors(t *testing.T) {
 	src := &source.BookSource{
 		SourceID:       "src-1",
@@ -239,6 +289,9 @@ func (r *fakeImageSourceRepo) Reorder(ctx context.Context, orders []source.Sourc
 	return nil
 }
 
+// errFakeRepoNotFound 模拟仓储层通用 NotFound 哨兵：领域哨兵 book.ErrNotFound 与之一起被包裹。
+var errFakeRepoNotFound = errors.New("record not found")
+
 type fakeImageBookRepo struct {
 	byID map[string]*book.Book
 }
@@ -248,10 +301,10 @@ func (r *fakeImageBookRepo) FindByID(ctx context.Context, id string) (*book.Book
 	if item, ok := r.byID[id]; ok {
 		return item, nil
 	}
-	return nil, errors.New("book not found")
+	return nil, fmt.Errorf("%w: %w", book.ErrNotFound, errFakeRepoNotFound)
 }
 func (r *fakeImageBookRepo) FindByURL(ctx context.Context, bookURL string) (*book.Book, error) {
-	return nil, errors.New("book not found")
+	return nil, fmt.Errorf("%w: %w", book.ErrNotFound, errFakeRepoNotFound)
 }
 func (r *fakeImageBookRepo) List(ctx context.Context, filter book.BookFilter) ([]*book.Book, int, error) {
 	return nil, 0, nil

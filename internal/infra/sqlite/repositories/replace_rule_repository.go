@@ -16,9 +16,26 @@ func NewReplaceRuleRepository(db *sql.DB) *ReplaceRuleRepository {
 	return &ReplaceRuleRepository{db: db}
 }
 
+// Save 写入替换规则：rule.ID 为 0 时由 SQLite 自增 rowid 生成主键并回写到 rule，
+// 避免上层用时间戳生成主键在并发创建时碰撞；ID 非 0 时按主键 upsert。
 func (r *ReplaceRuleRepository) Save(ctx context.Context, rule *replace.ReplaceRule) error {
 	if err := rule.Validate(); err != nil {
 		return err
+	}
+	if rule.ID == 0 {
+		result, err := r.db.ExecContext(ctx, `
+INSERT INTO replace_rules(name, rule_group, pattern, replacement, scope, scope_title, scope_content, exclude_scope, is_enabled, is_regex, timeout_millisecond, sort_order)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			rule.Name, nullable(rule.Group), rule.Pattern, rule.Replacement, nullable(rule.Scope), boolInt(rule.ScopeTitle), boolInt(rule.ScopeContent), nullable(rule.ExcludeScope), boolInt(rule.IsEnabled), boolInt(rule.IsRegex), rule.ValidTimeoutMillisecond(), rule.Order)
+		if err != nil {
+			return err
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			return err
+		}
+		rule.ID = id
+		return nil
 	}
 	_, err := r.db.ExecContext(ctx, `
 INSERT INTO replace_rules(id, name, rule_group, pattern, replacement, scope, scope_title, scope_content, exclude_scope, is_enabled, is_regex, timeout_millisecond, sort_order)

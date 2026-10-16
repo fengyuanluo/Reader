@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"reader/internal/domain/book"
 )
@@ -121,7 +122,8 @@ func scanBook(s scanner) (*book.Book, error) {
 	err := s.Scan(&b.BookURL, &b.TocURL, &b.Origin, &b.OriginName, &b.Name, &b.Author, &b.Kind, &b.CoverURL, &b.Intro, &b.Type,
 		&b.WordCount, &b.LatestChapterTitle, &b.InfoHTML, &b.TocHTML, &rawDownloadURLs, &b.DurChapterTitle, &b.DurChapterIndex, &b.DurChapterPos, &b.DurChapterTime, &b.OriginOrder, &b.Variable)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
+		// 同时包裹领域哨兵 book.ErrNotFound 与仓储层通用 ErrNotFound：调用方按所在域用 errors.Is 判定。
+		return nil, fmt.Errorf("%w: %w", book.ErrNotFound, ErrNotFound)
 	}
 	if err != nil {
 		return nil, err

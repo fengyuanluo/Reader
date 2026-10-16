@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"reader/internal/domain/book"
@@ -52,7 +53,9 @@ func TestProcessorAppliesTitleAndContentRules(t *testing.T) {
 	}
 }
 
-func TestProcessorDisablesRegexRuleWhenRegexLimitExceeded(t *testing.T) {
+// 对齐 Legado ContentProcessor.kt:160-180：单条规则正则超限时禁用该规则并继续，
+// 不中止整章净化（旧实现返回错误，让一次正文请求整体失败）。
+func TestProcessorDisablesRegexRuleAndContinuesWhenRegexLimitExceeded(t *testing.T) {
 	rule := &replace.ReplaceRule{ID: 3, Name: "regex", Pattern: `坏(\d+)`, Replacement: "好$1", IsRegex: true, IsEnabled: true, ScopeContent: true}
 	repo := &fakeReplaceRepo{
 		content: []*replace.ReplaceRule{rule},
@@ -60,16 +63,66 @@ func TestProcessorDisablesRegexRuleWhenRegexLimitExceeded(t *testing.T) {
 	processor := NewProcessor(repo)
 	large := strings.Repeat("坏123\n", 600000)
 
-	_, err := processor.Process(context.Background(), ProcessInput{
+	result, err := processor.Process(context.Background(), ProcessInput{
 		Book:    book.Book{Name: "斗破苍穹", Origin: "source"},
 		Chapter: book.BookChapter{Title: "第一章"},
 		Content: large,
 	})
-	if !errors.Is(err, ErrRegexLimitExceeded) {
-		t.Fatalf("err = %v", err)
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
 	}
 	if repo.saved == nil || repo.saved.ID != rule.ID || repo.saved.IsEnabled {
 		t.Fatalf("saved rule = %#v", repo.saved)
+	}
+	if len(result.EffectiveRuleIDs) != 0 {
+		t.Fatalf("effective rules = %#v", result.EffectiveRuleIDs)
+	}
+	if !strings.Contains(result.Content, "坏123") {
+		t.Fatalf("content should keep original text, got %q", result.Content[:40])
+	}
+}
+
+// 一条规则失败后，后续规则仍要生效（旧实现在第一条失败时就 return，整章净化被中止）。
+func TestProcessorContinuesWithNextRulesAfterRuleFailure(t *testing.T) {
+	// 超长正文触发第 1 条正则规则的输入上限，第 2 条普通替换规则仍应生效。
+	first := &replace.ReplaceRule{ID: 1, Name: "huge", Pattern: `x`, Replacement: "y", IsRegex: true, IsEnabled: true, ScopeContent: true}
+	second := &replace.ReplaceRule{ID: 2, Name: "ad", Pattern: "广告", Replacement: "", IsEnabled: true, ScopeContent: true}
+	repo := &fakeReplaceRepo{content: []*replace.ReplaceRule{first, second}}
+	processor := NewProcessor(repo)
+
+	result, err := processor.Process(context.Background(), ProcessInput{
+		Book:    book.Book{Name: "斗破苍穹", Origin: "source"},
+		Chapter: book.BookChapter{Title: "第一章"},
+		Content: strings.Repeat("x", maxRegexInputBytes+1) + "\n广告",
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if strings.Contains(result.Content, "广告") {
+		t.Fatalf("rule after the failing rule was not applied: %q", result.Content[len(result.Content)-20:])
+	}
+	if len(result.EffectiveRuleIDs) != 1 || result.EffectiveRuleIDs[0] != second.ID {
+		t.Fatalf("effective rules = %#v", result.EffectiveRuleIDs)
+	}
+}
+
+// ctx 已取消时仍要中止，避免请求取消后继续做无意义的净化。
+func TestProcessorAbortsWhenContextCancelled(t *testing.T) {
+	rule := &replace.ReplaceRule{ID: 3, Name: "regex", Pattern: `坏(\d+)`, Replacement: "好$1", IsRegex: true, IsEnabled: true, ScopeContent: true}
+	repo := &fakeReplaceRepo{content: []*replace.ReplaceRule{rule}}
+	processor := NewProcessor(repo)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := processor.Process(ctx, ProcessInput{
+		Book:    book.Book{Name: "斗破苍穹", Origin: "source"},
+		Chapter: book.BookChapter{Title: "第一章"},
+		Content: "坏12",
+	}); !errors.Is(err, ErrRegexLimitExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+	if repo.saved != nil {
+		t.Fatalf("cancelled request must not disable rules, saved = %#v", repo.saved)
 	}
 }
 
@@ -217,4 +270,30 @@ func (r *fakeReplaceRepo) FindEnabledByTitleScope(ctx context.Context, bookName,
 }
 func (r *fakeReplaceRepo) FindEnabledByContentScope(ctx context.Context, bookName, origin string) ([]*replace.ReplaceRule, error) {
 	return r.content, nil
+}
+
+// Processor 是进程级共享实例，繁简转换的词典懒加载必须并发安全（旧实现无锁写指针字段，-race 必报）。
+func TestProcessorConvertsChineseConcurrently(t *testing.T) {
+	processor := NewProcessor(&fakeReplaceRepo{}).WithOptions(ProcessorOptions{ChineseConverterType: 1})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := processor.Process(context.Background(), ProcessInput{
+				Book:    book.Book{Name: "輕小說", Origin: "source"},
+				Chapter: book.BookChapter{Title: "第一章"},
+				Content: "輕小說內容",
+			})
+			if err != nil {
+				t.Errorf("Process() error = %v", err)
+				return
+			}
+			if result.Content != "　　轻小说内容" {
+				t.Errorf("content = %q", result.Content)
+			}
+		}()
+	}
+	wg.Wait()
 }

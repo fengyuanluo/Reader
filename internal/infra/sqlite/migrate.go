@@ -19,6 +19,8 @@ var migrations = []migration{
 	{version: 2, name: "check_task_items.failure_class", apply: addCheckItemFailureClass},
 	{version: 3, name: "drop unused search_books", apply: execSQL(`DROP TABLE IF EXISTS search_books`)},
 	{version: 4, name: "debug_events session index", apply: execSQL(`CREATE INDEX IF NOT EXISTS idx_debug_events_session ON debug_events(session_id, event_id)`)},
+	// 版本 5：正文缓存改为保存净化前正文，旧库里保存的是已应用用户替换规则的内容，清掉等待重新抓取。
+	{version: 5, name: "drop preprocessed content cache", apply: execSQL(`DELETE FROM cache_entries WHERE namespace = 'content'`)},
 }
 
 // Migrate 把数据库升级到最新版本。连接级 PRAGMA（外键、busy_timeout、WAL）由 Open 通过 DSN 设置。

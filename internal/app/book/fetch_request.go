@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	sourceapp "reader/internal/app/source"
@@ -68,8 +67,12 @@ func buildBookFetchRequest(ctx context.Context, rawURL string, src *source.BookS
 		case "body":
 			switch body := value.(type) {
 			case string:
-				rawFormBody = body
-				req.Body = []byte(body)
+				// 表单编码推迟到 charset 与全部 URL 选项（含 headers）解析完成后统一做一次（见下方）。
+				if sourceapp.LooksLikeFormBody(body) {
+					rawFormBody = body
+				} else {
+					req.Body = []byte(body)
+				}
 			case map[string]any, []any:
 				if encoded, err := json.Marshal(body); err == nil {
 					req.Body = encoded
@@ -96,13 +99,14 @@ func buildBookFetchRequest(ctx context.Context, rawURL string, src *source.BookS
 				charsetName = strings.TrimSpace(text)
 			}
 		case "retry":
-			applyRetryOption(&req, value)
+			sourceapp.ApplyRetryOption(&req, value)
 		}
 	}
 	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
-	if rawFormBody != "" && looksLikeFormBody(rawFormBody) {
-		// 对齐 Legado AnalyzeUrl:279-283：仅在没有显式 Content-Type 时才做一次表单编码并补头。
-		if strings.TrimSpace(req.Headers["Content-Type"]) == "" {
+	// 对齐 Legado AnalyzeUrl.kt:262-283：body 不是 JSON/XML 且未显式设置 Content-Type 时才按表单编码，
+	// 且只编码一次（旧实现先按空 charset 编码、末尾再按 charset 编码，正文被 percent 编码两次导致服务端解析失败）。
+	if rawFormBody != "" {
+		if req.Headers["Content-Type"] == "" {
 			req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
 			req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
 		} else {
@@ -111,27 +115,6 @@ func buildBookFetchRequest(ctx context.Context, rawURL string, src *source.BookS
 	}
 	sourceapp.ApplyNetworkOptions(&req, custom.Attribute)
 	return req, nil
-}
-
-func applyRetryOption(req *fetch.Request, value any) {
-	switch typed := value.(type) {
-	case float64:
-		if typed > 0 {
-			req.Retry = int(typed)
-		}
-	case int:
-		if typed > 0 {
-			req.Retry = typed
-		}
-	case int64:
-		if typed > 0 {
-			req.Retry = int(typed)
-		}
-	case string:
-		if parsed, err := strconv.Atoi(strings.TrimSpace(typed)); err == nil && parsed > 0 {
-			req.Retry = parsed
-		}
-	}
 }
 
 func requestBaseURL(rawURL string, src *source.BookSource) string {
@@ -153,24 +136,13 @@ func sourceURLForAnalyzer(src *source.BookSource) string {
 	return strings.TrimSpace(src.BookSourceURL)
 }
 
-func looksLikeFormBody(body string) bool {
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return false
-	}
-	if strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[") || strings.HasPrefix(body, "<") {
-		return false
-	}
-	return strings.Contains(body, "=") || strings.Contains(body, "&")
-}
-
 func mergeBookHeaders(headers map[string]string, value any) {
 	switch typed := value.(type) {
 	case map[string]any:
+		// 对齐 Legado AnalyzeUrl.kt:235-237 entry.value.toString()：非字符串头值（数字、布尔）统一转字符串，
+		// 不静默丢弃。键在 JSON 对象中本就是字符串。
 		for key, raw := range typed {
-			if text, ok := raw.(string); ok {
-				headers[key] = text
-			}
+			headers[key] = fmt.Sprint(raw)
 		}
 	case string:
 		nested := map[string]string{}

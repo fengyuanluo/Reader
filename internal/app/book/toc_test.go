@@ -2,7 +2,9 @@ package bookapp
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -390,9 +392,155 @@ func (r *fakeChapterRepo) ListByBook(ctx context.Context, bookID string) ([]*dom
 func (r *fakeChapterRepo) FindByIndex(ctx context.Context, bookID string, index int) (*domainbook.BookChapter, error) {
 	return nil, nil
 }
+func (r *fakeChapterRepo) SaveTitle(ctx context.Context, bookID string, chapterIndex int, title string) error {
+	return nil
+}
 func (r *fakeChapterRepo) SaveContent(ctx context.Context, bookID string, chapterIndex int, content string) error {
 	return nil
 }
 func (r *fakeChapterRepo) GetContent(ctx context.Context, bookID string, chapterIndex int) (string, bool, error) {
 	return "", false, nil
+}
+
+// 对齐 Legado StringExtensions.kt:74-79：非空且不是 false/no/not/0 即为真。
+// 书源常用“VIP”“是”表示真值，旧实现把它们判成 false，丢掉 VIP/付费标识与卷章节语义。
+func TestIsTruthyMatchesLegadoIsTrue(t *testing.T) {
+	cases := map[string]bool{
+		"":      false,
+		"   ":   false,
+		"null":  false,
+		"false": false,
+		"FALSE": false,
+		"no":    false,
+		"not":   false,
+		"0":     false,
+		"true":  true,
+		"1":     true,
+		"yes":   true,
+		"VIP":   true,
+		"是":     true,
+		"否":     true,
+		" null": true,
+	}
+	for value, want := range cases {
+		if got := isTruthy(value); got != want {
+			t.Fatalf("isTruthy(%q) = %v, want %v", value, got, want)
+		}
+	}
+}
+
+func TestTocServiceParsesTruthyFlagsLikeLegado(t *testing.T) {
+	src := testTocSource()
+	service := NewTocService(&fakeChapterRepo{}, &fakeTocFetcher{}, nil)
+
+	got, err := service.RefreshToc(context.Background(), TocInput{
+		Source: src,
+		Book:   testTocBook(),
+		TocHTML: `<ul>
+<li class="chapter"><span class="name">第一卷</span><span class="volume">是</span></li>
+<li class="chapter"><a class="name" href="/c/1">第一章</a><span class="vip">VIP</span><span class="pay">0</span></li>
+</ul>`,
+	})
+	if err != nil {
+		t.Fatalf("RefreshToc() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("chapters = %#v", got)
+	}
+	if !got[0].IsVolume {
+		t.Fatalf("volume flag = false, want true: %#v", got[0])
+	}
+	if !got[1].IsVIP || got[1].IsPay {
+		t.Fatalf("vip/pay = %v/%v, want true/false: %#v", got[1].IsVIP, got[1].IsPay, got[1])
+	}
+}
+
+// 对齐 Legado BookChapterList.kt:135-146：单章 formatJs 出错只记日志并保留原标题，不中断整次目录刷新。
+func TestTocServiceKeepsChapterTitleWhenFormatJSFails(t *testing.T) {
+	src := testTocSource()
+	src.RuleToc.Value.FormatJS = `if (index === 1) { throw new Error("boom"); }
+"第" + index + "节 " + title`
+	book := testTocBook()
+	service := NewTocService(&fakeChapterRepo{}, &fakeTocFetcher{pages: map[string]fetch.Response{
+		book.TocURL: {URL: book.TocURL, Body: []byte(tocHTML(false))},
+	}}, script.NewRuntime(script.Policy{Timeout: time.Second}))
+
+	got, err := service.RefreshToc(context.Background(), TocInput{Source: src, Book: book})
+	if err != nil {
+		t.Fatalf("RefreshToc() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("chapters = %#v", got)
+	}
+	if got[0].Title != "第一章" {
+		t.Fatalf("first title = %q, want original title kept", got[0].Title)
+	}
+	if got[1].Title != "第2节 第二章" {
+		t.Fatalf("second title = %q", got[1].Title)
+	}
+}
+
+// 对齐 Legado BookChapterList.kt:101-113：多个 nextTocUrl 并发抓取，章节按规则返回顺序拼接。
+func TestTocServiceFetchesMultipleNextPagesConcurrentlyInOrder(t *testing.T) {
+	src := testTocSource()
+	book := testTocBook()
+	pages := map[string]fetch.Response{
+		book.TocURL:                       {URL: book.TocURL, Body: []byte(`<html><body><ul><li class="chapter"><a class="name" href="/c/1">第一章</a></li></ul><a class="next" href="/toc/2">n</a><a class="next" href="/toc/3">n</a></body></html>`)},
+		"https://site.example.test/toc/2": {URL: "https://site.example.test/toc/2", Body: []byte(`<html><body><ul><li class="chapter"><a class="name" href="/c/2">第二章</a></li></ul></body></html>`)},
+		"https://site.example.test/toc/3": {URL: "https://site.example.test/toc/3", Body: []byte(`<html><body><ul><li class="chapter"><a class="name" href="/c/3">第三章</a></li></ul></body></html>`)},
+	}
+	fetcher := newRendezvousTocFetcher(2, pages, []string{"https://site.example.test/toc/2", "https://site.example.test/toc/3"})
+	service := NewTocService(&fakeChapterRepo{}, fetcher, nil)
+
+	got, err := service.RefreshToc(context.Background(), TocInput{Source: src, Book: book})
+	if err != nil {
+		t.Fatalf("RefreshToc() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("chapters = %#v", got)
+	}
+	for i, want := range []string{"第一章", "第二章", "第三章"} {
+		if got[i].Title != want || got[i].Index != i {
+			t.Fatalf("chapter %d = %#v, want %q", i, got[i], want)
+		}
+	}
+}
+
+// rendezvousTocFetcher 让 paginated 中的每个 URL 都等到 wait 个请求同时在途才返回，
+// 从而把“并发抓取”变成可断言的行为（顺序抓取会等到超时）。
+type rendezvousTocFetcher struct {
+	pages     map[string]fetch.Response
+	paginated map[string]struct{}
+	wait      int32
+	arrived   int32
+	gate      chan struct{}
+}
+
+func newRendezvousTocFetcher(wait int32, pages map[string]fetch.Response, paginated []string) *rendezvousTocFetcher {
+	marked := make(map[string]struct{}, len(paginated))
+	for _, url := range paginated {
+		marked[url] = struct{}{}
+	}
+	return &rendezvousTocFetcher{pages: pages, paginated: marked, wait: wait, gate: make(chan struct{})}
+}
+
+func (f *rendezvousTocFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
+	resp, ok := f.pages[req.URL]
+	if !ok {
+		return &fetch.Response{URL: req.URL}, nil
+	}
+	if _, ok := f.paginated[req.URL]; ok {
+		if atomic.AddInt32(&f.arrived, 1) == f.wait {
+			close(f.gate)
+		}
+		select {
+		case <-f.gate:
+		case <-time.After(5 * time.Second):
+			return nil, errors.New("next toc pages were not fetched concurrently")
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	copy := resp
+	return &copy, nil
 }
