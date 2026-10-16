@@ -2323,7 +2323,7 @@
 
 ### 5.6 残余事项与风险
 
-- 真实远程书源集合 E2E（`READER_REAL_E2E_ENABLED=true`）本轮**未重跑**：`test/reports/real_source_collection_e2e_report.*` 仍为既有快照（testTime 2026-10-14T10:05:57Z，fullSuccessCount=39）。prerequisite 是外网与第三方书源/站点可用性，不属本轮修复范围；下一次 release gate 应重跑并覆盖本报告的 R-149（报告新增 `traceId`/`failureTraceIds` 字段）。
+- 真实远程书源集合 E2E（`READER_REAL_E2E_ENABLED=true`）已在修复后重跑（2026-10-16T07:57:53Z，100 候选、关键词「斗破苍穹」、`continueAfterSuccess=true`、上限 1800s，耗时 630s，测试 PASS）：集合 HTTP 200、解析并导入 459 源，**全链路成功 41/100（修复前快照 39/100）**，releaseAllowed=true；阶段 search 47/53（前 46/54）、info 45/2（前 43/3）、toc 43/2（前 41/2）、content 41/2（前 39/2），四阶段均未退化。失败分类变化来自网络抖动与分类器口径（`network_tls_invalid` 8→11、`network_timeout` 3→1、`network_connection_reset` 5→3、`source_upstream_http_403` 6→7、`source_upstream_http_404` 5→4），仍以站点/网络侧为主（`source_search_empty_result` 16、`source_upstream_http_403` 7、`network_tls_invalid` 11 为前三），实现侧仅 `source_rule_script_failed` 1 条。报告已刷新并提交（`test/reports/real_source_collection_e2e_report.*` 新增 `failureTraceIds`，对应 R-149）。注意该 gate 的判定是「至少 1 个候选全链路成功」，不是通过率阈值。
 - R-082 的多分页并发上限（8）、R-088 的图片缓存 TTL（7 天）均为硬编码常量，未接配置项；如需要可用环境变量暴露。
 - 限流（`READER_GLOBAL_CONCURRENCY`/`READER_SOURCE_CONCURRENCY` 与源 `concurrentRate`）已接入搜索/发现/校验入口，`internal/app/book`、`internal/app/content` 的抓取路径未接同一 Limiter 实例，属已知未接线点。
 - `ruleContent.sourceRegex` 与 `webView*`/`startBrowser*`/`getVerificationCode`/`openUrl`、7z/rar 等能力保持明确 unsupported（一期决策：不引入无头浏览器等重依赖）；校验阶段已提前给出 `failureClass=source_unsupported_rule_feature`。
