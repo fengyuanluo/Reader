@@ -27,13 +27,13 @@
 ## 3. 当前总体状态
 
 - 常规工程门禁已具备：OpenAPI、mock E2E、安全测试、CI、本地验证脚本均已落地。
-- 真实远程集合 release gate 已具备，且最新 100 候选快照已达到 `releaseAllowed = true`。
-- 最新真实报告摘要：
+- 真实远程集合 release gate 已具备，且仓库内最新 100 候选快照已达到 `releaseAllowed = true`。
+- 仓库内最新真实报告（`test/reports/real_source_collection_e2e_report.*`，报告时间 `2026-10-14T10:05:57Z`）摘要：
   - `Parsed count = 459`
   - `Attempted candidates = 100`
-  - `Full success count = 51`
+  - `Full success count = 39`
   - `Release allowed = true`
-- 结论：截至 `0.0.1` 版本，Reader 已经具备可发布的第一轮移植重构成果；本文后续历史快照仍保留 17/21/32/33/44 等阶段性数值，用于追溯演进过程，而不是作为当前状态判断。
+- 结论：截至 `0.0.1` 版本，Reader 已经具备可发布的第一轮移植重构成果；本文后续历史快照仍保留 51/44/33/32/21/17 等阶段性数值，用于追溯演进过程，而不是作为当前状态判断。
 - 最新真实样本口径下，Reader 已经从“基础规则链不通”推进到“主链路可发布、剩余主要是少量站点状态 / 反爬 / 源级请求差异”的阶段。后续工作应避免把外部 404/403/401 与 Reader 通用实现缺口混在一起。
 
 ## 4. 分项对照
@@ -188,9 +188,8 @@
 
 - 任务 1：未完全结束，但已经具备第一版正式审计基线；后续需持续增补。
 - 任务 2：正在进行；`source` 状态语义、`java.getElements()`、cookie session 联通、form body 编码等通用缺口已补齐，当前应转向少量剩余请求链差异与站点级 triage。
-- 任务 3：未完成；当前 100 候选已有 17 条完整成功，但仍不满足“绝大多数书源生产可用”。当前剩余非搜索失败已收敛为：
-  - `猫眼看书（优++）`：`toc_empty`
-- 2026-05-04 的 source-specific 深层 triage 进一步确认：这条剩余 `toc_empty` 仍然是 `api.lemiyigou.com` 详情/目录接口直接返回 `code=4005 认证失败`，而不是 Reader 目录解析主链缺少新语义；同时，搜索阶段里剩余最显眼的 `番茄小说（优++）` 与 `七猫小说（优++）` 也分别暴露出死域名和 host 字段污染。现阶段继续扩大通过数，更可能依赖源级修复或站点恢复，而不是再追加一轮高收益框架补丁。
+- 任务 3：未完成；按仓库内最新 100 候选快照（`test/reports/real_source_collection_e2e_report.*`）已有 39 条完整成功，但仍不满足“绝大多数书源生产可用”。当前剩余非搜索失败已收敛为少量 `toc_empty`/`content_empty` 与上游/网络级失败。
+- 2026-05-04 的 source-specific 深层 triage 进一步确认：当时剩余的 `toc_empty` 仍是 `api.lemiyigou.com` 详情/目录接口直接返回 `code=4005 认证失败`，而不是 Reader 目录解析主链缺少新语义；同时，搜索阶段里剩余最显眼的 `番茄小说（优++）` 与 `七猫小说（优++）` 也分别暴露出死域名和 host 字段污染。现阶段继续扩大通过数，更可能依赖源级修复或站点恢复，而不是再追加一轮高收益框架补丁。
 - 为避免后续重复人工 triage，真实集合 E2E 报告现在已补结构化失败分类：`real_source_collection_e2e_report.json/.md` 会输出逐条 `failureClass` 和聚合 `failureSummary`，把失败拆成 `source_search_empty_result`、`source_upstream_http_*`、`source_rule_script_syntax_error`、`source_url_host_polluted`、`source_authorization_failed`、`network_dns_failure`、`network_tls_invalid`、`network_timeout`、`network_connection_reset` 等类别。最新真实 100 候选报告已验证该分类在当前样本上可用，后续 source-specific 修复应直接以这些类别为入口，而不是再次从原始 message 扫描开始。
 - 2026-05-04 后续两轮 source-specific 修复已进一步把三类 Reader 自身兼容缺口从真实失败集合里清掉：
   - `bookSourceUrl` / `source.getKey()` 现在会清洗全角 `＃` 后缀，`七猫小说（优++）` 已从 `lookup api-bc.wtzw.com＃妍希` 推进到 `search/info/toc` 全通过，仅剩正文阶段上游代理返回非 JSON。
@@ -338,5 +337,5 @@
   - 通用实现缺口（已修）：`小米阅读（优+）/小米书城（优+）` content 阶段 `invalid json: invalid character '<'` 的根因不是站点改回 HTML，也不是 JSON 误判，而是 Reader 缺少 Legado `WebBook.getContentAwait` 对一级目录（卷名）章节的短路语义——卷章节 URL 是 toc 阶段合成的 `title+index` 占位串，抓取必然得到 404/HTML，再喂给 `$..` JSONPath 规则报 `ErrInvalidJSON`。已在 `internal/app/content/content.go` 补上 `isVolume && url 前缀 title` 短路（返回 `chapter.Tag`，不抓取、不缓存、不跑 processor），并补 3 条确定性回归测试。
   - 站点/源侧（不改代码，证据确凿）：报告里的 `TypeError: Cannot read property 'join'...` 实际属于同名源 `m.zym888.com`（`src_ae48dc2981afcd5dbeea4255`），其 `<js>` 第 4 行 `.match(...)` 因 `java.ajax` 拿到 openresty 403 WAF 页返回 null 而失败；`炫动小说` 的 `script_timeout` 是上游 TCP 可连但 HTTP 永不响应，`java.ajax` 阻塞至 10s 沙箱预算；`fq-book.netsite.cc` 共享 Xposed 云手机 API 后端自返 `InvocationTargetError` 后宕机。三者均无 Reader 通用修复点（且禁止站点特判）。git 事实：`a6def37..HEAD` 零提交，源 JSON `lastUpdateTime` 早于 05-05 快照，排除 Reader 回归。
   - 失败分类器（已修）：`net/http: TLS handshake timeout`、裸 `EOF`/`unexpected EOF` 此前漏配网络类，导致起点读书被误归 `source_search_empty_result`、阿巴小说/全本小说被误归 `implementation_or_rule_failed`，污染"剩余实现缺口"口径。已在 `internal/app/diagnostic/failure.go` 及 e2e 镜像分类器同步补齐并加表驱动回归测试；对旧报告 sweep 复核共 10 条翻转、0 条误翻。
-  - 本轮 100 候选 gate（修复前）：`fullSuccessCount=39`，search 49/51、info 47/2、toc 44/3、content 39/5；修复后复跑 content 阶段 `invalid json` 与 `implementation_or_rule_failed` 均清零，content 39 通过/2 失败（全本小说 POST EOF、七猫 JS 语法错，均为上游/源侧且与修复前相同）。
+  - 本轮 100 候选 gate 与仓库内快照（`test/reports/real_source_collection_e2e_report.*`，报告时间 `2026-10-14T10:05:57Z`）一致：`fullSuccessCount=39`，search 46/54、info 43/3、toc 41/2、content 39/2；修复后 `invalid json` 与 `implementation_or_rule_failed` 已清零，剩下的 content 两条失败为上游/源侧问题（全本小说 POST EOF、七猫 JS 语法错）。
   - 单源复核：`小米阅读（优+）` 真实 debug 全链路 search(17)→info→toc(442)→content 短路通过（卷章节返回 `tag ?: ''` 即空正文，与 Legado 一致）。

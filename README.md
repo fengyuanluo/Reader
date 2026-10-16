@@ -35,6 +35,8 @@ READER_CONTENT_CHINESE_CONVERTER_TYPE=0 \
 go run ./cmd/reader serve
 ```
 
+`serve` 默认监听 `127.0.0.1:8080`，只接受本机连接；结构化 JSON 日志输出到 **stderr**（收集日志用 `reader serve 2>app.log`）。`READER_TOKEN` 为空时只允许监听回环地址（`127.0.0.0/8`、`::1`、`localhost`），监听 `0.0.0.0`、`:8080`、局域网 IP 等非回环地址会拒绝启动（退出码 2，不创建数据库）；`READER_ENV=production` 无论监听哪里都必须设置 `READER_TOKEN`。
+
 Health check:
 
 ```bash
@@ -64,7 +66,7 @@ Full reference: `docs/CLI.md`.
 
 ```bash
 go generate ./...
-go test ./...
+go test -race -count=1 ./...
 go vet ./...
 git diff --exit-code internal/api/generated
 ```
@@ -79,7 +81,7 @@ make verify
 Default E2E does not access real external sources:
 
 ```bash
-go test ./test/e2e
+go test -count=1 ./test/e2e
 ```
 
 The real remote source collection release gate is opt-in:
