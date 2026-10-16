@@ -1,36 +1,90 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 )
 
-const initialSchemaVersion int64 = 1
+// migration 是一个版本化迁移步骤；apply 与版本记录在同一事务内完成。
+type migration struct {
+	version int64
+	name    string
+	apply   func(ctx context.Context, tx *sql.Tx) error
+}
 
+// migrations 按版本升序排列。已发布的版本禁止修改，结构变更只能追加新版本。
+var migrations = []migration{
+	{version: 1, name: "initial schema", apply: execSQL(initialSchema)},
+	{version: 2, name: "check_task_items.failure_class", apply: addCheckItemFailureClass},
+	{version: 3, name: "drop unused search_books", apply: execSQL(`DROP TABLE IF EXISTS search_books`)},
+	{version: 4, name: "debug_events session index", apply: execSQL(`CREATE INDEX IF NOT EXISTS idx_debug_events_session ON debug_events(session_id, event_id)`)},
+}
+
+// Migrate 把数据库升级到最新版本。连接级 PRAGMA（外键、busy_timeout、WAL）由 Open 通过 DSN 设置。
 func Migrate(db *sql.DB) error {
-	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		return fmt.Errorf("enable foreign keys: %w", err)
+	return applyMigrations(context.Background(), db, migrations)
+}
+
+func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`); err != nil {
+		return fmt.Errorf("create schema_migrations: %w", err)
 	}
-	if _, err := db.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
-		return fmt.Errorf("enable busy timeout: %w", err)
+	var current int64
+	if err := db.QueryRowContext(ctx, `SELECT coalesce(max(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
 	}
-	if _, err := db.Exec(initialSchema); err != nil {
-		return fmt.Errorf("apply initial schema: %w", err)
-	}
-	if err := ensureColumn(db, "check_task_items", "failure_class", `ALTER TABLE check_task_items ADD COLUMN failure_class TEXT`); err != nil {
-		return fmt.Errorf("ensure check_task_items.failure_class: %w", err)
+	for _, step := range steps {
+		if step.version <= current {
+			continue
+		}
+		if err := applyMigration(ctx, db, step); err != nil {
+			return fmt.Errorf("migration %d (%s): %w", step.version, step.name, err)
+		}
 	}
 	return nil
 }
 
+func applyMigration(ctx context.Context, db *sql.DB, step migration) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := step.apply(ctx, tx); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES (?)`, step.version); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func execSQL(statements string) func(context.Context, *sql.Tx) error {
+	return func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, statements)
+		return err
+	}
+}
+
+// addCheckItemFailureClass 兼容旧库：版本机制引入前 failure_class 已可能被探测式补列添加过。
+func addCheckItemFailureClass(ctx context.Context, tx *sql.Tx) error {
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('check_task_items') WHERE name = 'failure_class'`).Scan(&exists); err != nil {
+		return err
+	}
+	if exists > 0 {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `ALTER TABLE check_task_items ADD COLUMN failure_class TEXT`)
+	return err
+}
+
+// initialSchema 是版本 1 的建表语句，已发布后不再修改；新结构变更只追加迁移版本。
 const initialSchema = `
-CREATE TABLE IF NOT EXISTS schema_migrations (
-  version INTEGER PRIMARY KEY,
-  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-INSERT OR IGNORE INTO schema_migrations(version) VALUES (1);
-
 CREATE TABLE IF NOT EXISTS book_sources (
   source_id TEXT NOT NULL UNIQUE,
   book_source_url TEXT NOT NULL UNIQUE,
@@ -242,43 +296,3 @@ CREATE TABLE IF NOT EXISTS check_task_items (
   FOREIGN KEY(task_id) REFERENCES check_tasks(task_id) ON DELETE CASCADE
 );
 `
-
-func SchemaVersion(db *sql.DB) (int64, error) {
-	var version int64
-	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil {
-		return 0, err
-	}
-	return version, nil
-}
-
-func InitialSchemaVersion() int64 {
-	return initialSchemaVersion
-}
-
-func ensureColumn(db *sql.DB, table string, column string, ddl string) error {
-	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var cid int
-		var name string
-		var valueType string
-		var notNull int
-		var defaultValue any
-		var pk int
-		if err := rows.Scan(&cid, &name, &valueType, &notNull, &defaultValue, &pk); err != nil {
-			return err
-		}
-		if name == column {
-			return nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	_, err = db.Exec(ddl)
-	return err
-}

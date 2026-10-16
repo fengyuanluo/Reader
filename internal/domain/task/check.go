@@ -71,11 +71,18 @@ func CanTransitionCheckTask(from CheckTaskStatus, to CheckTaskStatus) bool {
 	}
 }
 
-func ValidateCheckTaskTransition(from CheckTaskStatus, to CheckTaskStatus) error {
-	if CanTransitionCheckTask(from, to) {
-		return nil
+// checkTaskStatuses 列出全部已持久化的任务状态，供按目标状态反推合法前驱。
+var checkTaskStatuses = []CheckTaskStatus{CheckTaskPending, CheckTaskRunning, CheckTaskSucceeded, CheckTaskFailed, CheckTaskCancelled}
+
+// CheckTaskPredecessors 返回可以迁移到 to 的全部状态，供仓储用条件 UPDATE 原子完成“校验+写入”。
+func CheckTaskPredecessors(to CheckTaskStatus) []CheckTaskStatus {
+	var from []CheckTaskStatus
+	for _, status := range checkTaskStatuses {
+		if CanTransitionCheckTask(status, to) {
+			from = append(from, status)
+		}
 	}
-	return ErrInvalidCheckTaskTransition
+	return from
 }
 
 type CheckRepository interface {

@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -101,5 +102,70 @@ func TestCheckRepositorySavesAndListsItems(t *testing.T) {
 	}
 	if len(got.Items) != 1 || got.Items[0].SourceID != "source-1" {
 		t.Fatalf("task items = %#v", got.Items)
+	}
+}
+
+func TestUpdateTaskStatusIsAtomicUnderConcurrency(t *testing.T) {
+	db := openRepoTestDB(t)
+	// 放开连接池，让两个更新真正并发执行（WAL + busy_timeout 保证不报锁错误）。
+	db.SetMaxOpenConns(4)
+	repo := NewCheckRepository(db)
+	ctx := context.Background()
+	for i := 0; i < 20; i++ {
+		taskID := "race-" + string(rune('a'+i))
+		if err := repo.CreateTask(ctx, &task.CheckTask{TaskID: taskID, Status: task.CheckTaskPending, CreatedAt: time.Now().UTC()}); err != nil {
+			t.Fatalf("CreateTask() error = %v", err)
+		}
+		if err := repo.UpdateTaskStatus(ctx, taskID, task.CheckTaskRunning, 0, nil); err != nil {
+			t.Fatalf("UpdateTaskStatus(running) error = %v", err)
+		}
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for j, status := range []task.CheckTaskStatus{task.CheckTaskSucceeded, task.CheckTaskCancelled} {
+			wg.Add(1)
+			go func(j int, status task.CheckTaskStatus) {
+				defer wg.Done()
+				errs[j] = repo.UpdateTaskStatus(ctx, taskID, status, 1, nil)
+			}(j, status)
+		}
+		wg.Wait()
+		succeeded := 0
+		for _, err := range errs {
+			switch {
+			case err == nil:
+				succeeded++
+			case errors.Is(err, task.ErrInvalidCheckTaskTransition):
+			default:
+				t.Fatalf("UpdateTaskStatus() unexpected error = %v", err)
+			}
+		}
+		if succeeded != 1 {
+			t.Fatalf("task %s: %d concurrent terminal transitions succeeded, want exactly 1 (errs=%v)", taskID, succeeded, errs)
+		}
+	}
+}
+
+func TestUpdateTaskStatusErrors(t *testing.T) {
+	repo := NewCheckRepository(openRepoTestDB(t))
+	ctx := context.Background()
+	if err := repo.CreateTask(ctx, &task.CheckTask{TaskID: "done", Status: task.CheckTaskPending, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	cases := []struct {
+		name    string
+		taskID  string
+		status  task.CheckTaskStatus
+		wantErr error
+	}{
+		{name: "missing task", taskID: "missing", status: task.CheckTaskRunning, wantErr: ErrNotFound},
+		{name: "invalid transition", taskID: "done", status: task.CheckTaskSucceeded, wantErr: task.ErrInvalidCheckTaskTransition},
+		{name: "no predecessor", taskID: "done", status: task.CheckTaskPending, wantErr: task.ErrInvalidCheckTaskTransition},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := repo.UpdateTaskStatus(ctx, tc.taskID, tc.status, 0, nil); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("UpdateTaskStatus() error = %v, want %v", err, tc.wantErr)
+			}
+		})
 	}
 }
