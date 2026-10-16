@@ -6,7 +6,12 @@ import (
 	"strings"
 )
 
-var ErrInvalidChapterIndex = errors.New("chapter index must be >= 0")
+var (
+	ErrInvalidChapterIndex = errors.New("chapter index must be >= 0")
+	// ErrNotFound 表示书籍记录不存在。仓储实现必须返回（或包裹）该哨兵错误，
+	// 调用方用 errors.Is 判定，禁止比较错误文本。
+	ErrNotFound = errors.New("book not found")
+)
 
 type Book struct {
 	BookURL            string `json:"bookUrl"`

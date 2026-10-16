@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -211,7 +212,9 @@ func TestContentServiceRejectsSourceRegexBrowserFlow(t *testing.T) {
 	}
 }
 
-func TestContentServiceAppliesProcessorBeforeCaching(t *testing.T) {
+// 缓存保存净化前正文（对齐 Legado BookContent.kt:150-153 needSave 的时机），用户替换规则在读取时应用，
+// 这样用户事后改规则对已抓章节立即生效。
+func TestContentServiceCachesRawContentAndAppliesProcessorOnRead(t *testing.T) {
 	src := testContentSource()
 	src.RuleContent.Value.ReplaceRegex = ""
 	b := testContentBook()
@@ -234,8 +237,32 @@ func TestContentServiceAppliesProcessorBeforeCaching(t *testing.T) {
 	if got.Content != "　　正文" {
 		t.Fatalf("content = %q", got.Content)
 	}
-	if chapters.savedContent != "　　正文" {
-		t.Fatalf("saved content = %q", chapters.savedContent)
+	if chapters.savedContent != "第一章\n广告\n正文" {
+		t.Fatalf("saved content = %q, want raw content without user replace rules", chapters.savedContent)
+	}
+}
+
+// 缓存命中时同样要应用用户替换规则，否则用户新增规则对已抓章节无效（R-045）。
+func TestContentServiceAppliesProcessorToCachedContent(t *testing.T) {
+	src := testContentSource()
+	b := testContentBook()
+	chapter := testContentChapter()
+	chapters := &fakeChapterRepo{cached: "第一章\n广告\n正文", cachedOK: true}
+	fetcher := &fakeContentFetcher{}
+	processor := replaceapp.NewProcessor(&fakeContentReplaceRepo{
+		content: []*replace.ReplaceRule{{ID: 10, Name: "ad", Pattern: "广告", Replacement: "", IsEnabled: true, ScopeContent: true}},
+	})
+	service := NewService(chapters, fetcher, nil).WithProcessor(processor)
+
+	got, err := service.GetContent(context.Background(), Input{Source: src, Book: b, Chapter: chapter})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Content != "　　正文" {
+		t.Fatalf("content = %q", got.Content)
+	}
+	if fetcher.calls != 0 {
+		t.Fatalf("fetch calls = %d", fetcher.calls)
 	}
 }
 
@@ -762,6 +789,8 @@ type fakeChapterRepo struct {
 	cachedOK     bool
 	savedIndex   int
 	savedContent string
+	savedTitle   string
+	savedTitles  int
 }
 
 func (r *fakeChapterRepo) ReplaceByBook(ctx context.Context, bookID string, chapters []*book.BookChapter) error {
@@ -772,6 +801,11 @@ func (r *fakeChapterRepo) ListByBook(ctx context.Context, bookID string) ([]*boo
 }
 func (r *fakeChapterRepo) FindByIndex(ctx context.Context, bookID string, index int) (*book.BookChapter, error) {
 	return nil, nil
+}
+func (r *fakeChapterRepo) SaveTitle(ctx context.Context, bookID string, chapterIndex int, title string) error {
+	r.savedTitles++
+	r.savedTitle = title
+	return nil
 }
 func (r *fakeChapterRepo) SaveContent(ctx context.Context, bookID string, chapterIndex int, content string) error {
 	r.savedIndex = chapterIndex
@@ -802,4 +836,220 @@ func (r *fakeContentReplaceRepo) FindEnabledByTitleScope(ctx context.Context, bo
 }
 func (r *fakeContentReplaceRepo) FindEnabledByContentScope(ctx context.Context, bookName, origin string) ([]*replace.ReplaceRule, error) {
 	return r.content, nil
+}
+
+// 对齐 Legado BookContent.kt:86-89：本章末页的“下一章”链接与下一章 URL 相同时停止分页，
+// 否则会把下一章正文并入本章并写入缓存（旧实现只做 seen 去重）。
+func TestContentServiceStopsPagingAtNextChapterURL(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.Title = ""
+	src.RuleContent.Value.Content = ".content@text"
+	src.RuleContent.Value.ReplaceRegex = ""
+	chapter := testContentChapter()
+	chapters := &fakeChapterRepo{}
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL:                     {URL: chapter.URL, Body: []byte(`<div class="content">CH1-para1</div><a class="next" href="/c/2">下一章</a>`)},
+		"https://site.example.test/c/2": {URL: "https://site.example.test/c/2", Body: []byte(`<div class="content">CH2-para1</div>`)},
+	}}
+	service := NewService(chapters, fetcher, nil)
+
+	got, err := service.GetContent(context.Background(), Input{
+		Source:         src,
+		Book:           testContentBook(),
+		Chapter:        chapter,
+		NextChapterURL: "https://site.example.test/c/2",
+	})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Content != "CH1-para1" {
+		t.Fatalf("content = %q, want only current chapter", got.Content)
+	}
+	if fetcher.calls != 1 {
+		t.Fatalf("fetch calls = %d, want 1", fetcher.calls)
+	}
+	if chapters.savedContent != "CH1-para1" {
+		t.Fatalf("saved content = %q", chapters.savedContent)
+	}
+}
+
+// 下一页链接与下一章 URL 不同（正常分页）时仍要抓取，避免把停止条件做得过宽。
+func TestContentServiceKeepsPagingWhenNextURLIsNotNextChapter(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.Title = ""
+	src.RuleContent.Value.Content = ".content@text"
+	src.RuleContent.Value.ReplaceRegex = ""
+	chapter := testContentChapter()
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL:                       {URL: chapter.URL, Body: []byte(`<div class="content">第一页</div><a class="next" href="/c/1-2">下一页</a>`)},
+		"https://site.example.test/c/1-2": {URL: "https://site.example.test/c/1-2", Body: []byte(`<div class="content">第二页</div>`)},
+	}}
+	service := NewService(&fakeChapterRepo{}, fetcher, nil)
+
+	got, err := service.GetContent(context.Background(), Input{
+		Source:         src,
+		Book:           testContentBook(),
+		Chapter:        chapter,
+		NextChapterURL: "https://site.example.test/c/2",
+	})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Content != "第一页\n第二页" {
+		t.Fatalf("content = %q", got.Content)
+	}
+}
+
+// 正文规则解析出的标题要写回章节表（对齐 Legado BookContent.kt:66-69 更新 bookChapter.title）。
+func TestContentServicePersistsParsedChapterTitle(t *testing.T) {
+	src := testContentSource()
+	chapter := testContentChapter()
+	chapters := &fakeChapterRepo{}
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL: {URL: chapter.URL, Body: []byte(`<html><body><h1>第一章 正文标题</h1><div class="content">正文</div></body></html>`)},
+	}}
+	service := NewService(chapters, fetcher, nil)
+
+	got, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Chapter.Title != "第一章 正文标题" {
+		t.Fatalf("title = %q", got.Chapter.Title)
+	}
+	if chapters.savedTitles != 1 || chapters.savedTitle != "第一章 正文标题" {
+		t.Fatalf("saved titles = %d %q", chapters.savedTitles, chapters.savedTitle)
+	}
+}
+
+// 标题未变化时不写库，避免每次读正文都白写一次章节表。
+func TestContentServiceSkipsTitleSaveWhenUnchanged(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.Title = ""
+	chapter := testContentChapter()
+	chapters := &fakeChapterRepo{}
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL: {URL: chapter.URL, Body: []byte(`<div class="content">正文</div>`)},
+	}}
+	service := NewService(chapters, fetcher, nil)
+
+	if _, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter}); err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if chapters.savedTitles != 0 {
+		t.Fatalf("saved titles = %d, want 0", chapters.savedTitles)
+	}
+}
+
+// 对齐 Legado AnalyzeRule.kt:785：evalJS 顶层 title 绑定取当前章节标题。
+func TestContentServiceBindsChapterTitleToJS(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.Title = ""
+	src.RuleContent.Value.NextContentURL = ""
+	src.RuleContent.Value.ReplaceRegex = ""
+	src.RuleContent.Value.Content = `@js:title`
+	chapter := testContentChapter()
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL: {URL: chapter.URL, Body: []byte(`<html></html>`)},
+	}}
+	service := NewService(&fakeChapterRepo{}, fetcher, script.NewRuntime(script.Policy{Timeout: time.Second}))
+
+	got, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Content != "第一章" {
+		t.Fatalf("content = %q, want chapter title binding", got.Content)
+	}
+}
+
+// 对齐 Legado BookContent.kt:103-130：多个 nextContentUrl 并发抓取，结果按规则返回顺序拼接。
+// rendezvousFetcher 让所有分页请求互相等待，顺序抓取会让第一个请求等到超时。
+func TestContentServiceFetchesMultipleNextPagesConcurrentlyInOrder(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.Title = ""
+	src.RuleContent.Value.Content = ".content@text"
+	src.RuleContent.Value.ReplaceRegex = ""
+	chapter := testContentChapter()
+	pages := map[string]fetch.Response{
+		chapter.URL:                       {URL: chapter.URL, Body: []byte(`<div class="content">第一页</div><a class="next" href="/c/1-2">n</a><a class="next" href="/c/1-3">n</a><a class="next" href="/c/1-4">n</a>`)},
+		"https://site.example.test/c/1-2": {URL: "https://site.example.test/c/1-2", Body: []byte(`<div class="content">第二页</div>`)},
+		"https://site.example.test/c/1-3": {URL: "https://site.example.test/c/1-3", Body: []byte(`<div class="content">第三页</div>`)},
+		"https://site.example.test/c/1-4": {URL: "https://site.example.test/c/1-4", Body: []byte(`<div class="content">第四页</div>`)},
+	}
+	fetcher := newRendezvousFetcher(3, pages, []string{
+		"https://site.example.test/c/1-2",
+		"https://site.example.test/c/1-3",
+		"https://site.example.test/c/1-4",
+	})
+	service := NewService(&fakeChapterRepo{}, fetcher, nil)
+
+	got, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Content != "第一页\n第二页\n第三页\n第四页" {
+		t.Fatalf("content = %q", got.Content)
+	}
+}
+
+// rendezvousFetcher 让 paginated 中的每个 URL 都等到 wait 个请求同时在途才返回，
+// 从而把“并发抓取”变成可断言的行为。
+type rendezvousFetcher struct {
+	pages     map[string]fetch.Response
+	paginated map[string]struct{}
+	wait      int32
+	arrived   int32
+	gate      chan struct{}
+}
+
+func newRendezvousFetcher(wait int32, pages map[string]fetch.Response, paginated []string) *rendezvousFetcher {
+	marked := make(map[string]struct{}, len(paginated))
+	for _, url := range paginated {
+		marked[url] = struct{}{}
+	}
+	return &rendezvousFetcher{pages: pages, paginated: marked, wait: wait, gate: make(chan struct{})}
+}
+
+func (f *rendezvousFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
+	resp, ok := f.pages[req.URL]
+	if !ok {
+		return &fetch.Response{URL: req.URL}, nil
+	}
+	if _, ok := f.paginated[req.URL]; ok {
+		if atomic.AddInt32(&f.arrived, 1) == f.wait {
+			close(f.gate)
+		}
+		select {
+		case <-f.gate:
+		case <-time.After(5 * time.Second):
+			return nil, errors.New("next pages were not fetched concurrently")
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	copy := resp
+	return &copy, nil
+}
+
+// 正文链路的 URL 选项 headers 同样要把非字符串值转成字符串（对齐 Legado AnalyzeUrl.kt:235-237）。
+func TestContentServiceWidensNonStringHeaderValues(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.Title = ""
+	src.RuleContent.Value.Content = "$.content"
+	src.RuleContent.Value.NextContentURL = ""
+	src.RuleContent.Value.ReplaceRegex = ""
+	chapter := testContentChapter()
+	chapter.URL = `https://site.example.test/api/content,{"headers":{"X-Count":3,"X-Flag":true}}`
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		"https://site.example.test/api/content": {URL: "https://site.example.test/api/content", Body: []byte(`{"content":"第一段"}`)},
+	}}
+	service := NewService(&fakeChapterRepo{}, fetcher, nil)
+
+	if _, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter}); err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if fetcher.lastReq.Headers["X-Count"] != "3" || fetcher.lastReq.Headers["X-Flag"] != "true" {
+		t.Fatalf("headers = %#v", fetcher.lastReq.Headers)
+	}
 }

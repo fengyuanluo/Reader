@@ -3,6 +3,8 @@ package bookapp
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -10,10 +12,15 @@ import (
 	"reader/internal/domain/book"
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/source"
+	"reader/internal/infra/concurrency"
 	ruleinfra "reader/internal/infra/rule"
 	urlrule "reader/internal/infra/rule/url"
 	"reader/internal/infra/script"
 )
+
+// tocPageConcurrency 是目录多分页并发抓取的 worker 上限；Legado 用 AppConfig.threadCount（默认 16），
+// Reader 保守取 8，避免同时打满单个书源站点。
+const tocPageConcurrency = 8
 
 var (
 	ErrTocRuleMissing = errors.New("ruleToc is required")
@@ -100,6 +107,9 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 	}
 	seenPages := map[string]struct{}{redirectURL: {}}
 	for len(nextURLs) == 1 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		next := nextURLs[0]
 		if next == "" {
 			break
@@ -130,6 +140,7 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 		nextURLs = pageNext
 	}
 	if len(nextURLs) > 1 {
+		targets := make([]string, 0, len(nextURLs))
 		for _, next := range nextURLs {
 			if next == "" {
 				continue
@@ -137,7 +148,13 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 			if _, ok := seenPages[next]; ok {
 				continue
 			}
-			req, err := buildBookFetchRequest(ctx, next, src, s.script)
+			seenPages[next] = struct{}{}
+			targets = append(targets, next)
+		}
+		// 对齐 Legado BookChapterList.kt:101-113：多分页并发抓取，章节按规则返回顺序拼接。
+		// 每个分页用 book 快照，避免脚本并发写书变量造成数据竞争。
+		pageChapters, err := concurrency.Map(ctx, tocPageConcurrency, targets, func(ctx context.Context, _ int, target string) ([]*book.BookChapter, error) {
+			req, err := buildBookFetchRequest(ctx, target, src, s.script)
 			if err != nil {
 				return nil, err
 			}
@@ -151,11 +168,15 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 					return nil, err
 				}
 			}
-			pageChapters, _, err := parseTocPage(ctx, src, b, next, resp.URL, string(resp.Body), listRule, false, s.script)
-			if err != nil {
-				return nil, err
-			}
-			chapters = append(chapters, pageChapters...)
+			pageBook := *b
+			parsed, _, err := parseTocPage(ctx, src, &pageBook, target, resp.URL, string(resp.Body), listRule, false, s.script)
+			return parsed, err
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, page := range pageChapters {
+			chapters = append(chapters, page...)
 		}
 	}
 	if reverse {
@@ -200,10 +221,12 @@ func parseTocPage(ctx context.Context, src *source.BookSource, b *book.Book, bas
 		itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
 			RedirectURL: redirectURL,
 			SourceURL:   src.BookSourceURL,
-			Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, book: b, src: body},
-			Chapter:     chapter,
-			Book:        b,
-			Source:      scriptRuntime.SourceBindings(ctx, src),
+			// 对齐 Legado BookChapterList.kt:220-224：逐章先 setChapter 再解析标题/链接等规则，
+			// 脚本里的 chapter 与顶层 title 绑定取当前章节（title 在标题规则解析后即可用）。
+			Script:  scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, book: b, chapter: chapter, src: body},
+			Chapter: chapter,
+			Book:    b,
+			Source:  scriptRuntime.SourceBindings(ctx, src),
 		})
 		itemAnalyzer.SetVariables(baseVars)
 		title, _ := itemAnalyzer.GetString(ctx, tocRule.ChapterName, element)
@@ -266,7 +289,9 @@ func (s *TocService) formatChapters(ctx context.Context, src *source.BookSource,
 			"gInt":    0,
 		})
 		if err != nil {
-			return err
+			// 对齐 Legado BookChapterList.kt:135-146：单章格式出错只记日志并保留原标题，不中断整次目录刷新。
+			slog.Warn("toc formatJs failed", "source", src.BookSourceURL, "chapterIndex", i, "error", err)
+			continue
 		}
 		if title, ok := value.(string); ok && strings.TrimSpace(title) != "" {
 			chapter.Title = title
@@ -310,11 +335,14 @@ func reverseChapters(chapters []*book.BookChapter) {
 	}
 }
 
+// falseLikePattern 对应 Legado StringExtensions.kt:74-79 的 (?i)^(false|no|not|0)$。
+var falseLikePattern = regexp.MustCompile(`(?i)^(false|no|not|0)$`)
+
+// isTruthy 对齐 Legado String?.isTrue(nullIsTrue = false)：空值或字面量 "null" 为 false，
+// 其余只要不是 false/no/not/0 即为 true（书源常用“VIP”“是”表示真值）。
 func isTruthy(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "true", "1", "yes", "y":
-		return true
-	default:
+	if strings.TrimSpace(value) == "" || value == "null" {
 		return false
 	}
+	return !falseLikePattern.MatchString(strings.TrimSpace(value))
 }

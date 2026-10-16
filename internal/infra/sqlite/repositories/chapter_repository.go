@@ -63,6 +63,11 @@ func (r *ChapterRepository) FindByIndex(ctx context.Context, bookID string, inde
 	return scanChapter(r.db.QueryRowContext(ctx, selectChapterSQL+` WHERE book_id = ? AND chapter_index = ?`, bookID, index))
 }
 
+func (r *ChapterRepository) SaveTitle(ctx context.Context, bookID string, chapterIndex int, title string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE chapters SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE book_id = ? AND chapter_index = ?`, title, bookID, chapterIndex)
+	return err
+}
+
 func (r *ChapterRepository) SaveContent(ctx context.Context, bookID string, chapterIndex int, content string) error {
 	key := contentCacheKey(bookID, chapterIndex)
 	_, err := r.db.ExecContext(ctx, `

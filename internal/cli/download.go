@@ -99,8 +99,14 @@ func runDownload(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 			summary.Failed = append(summary.Failed, downloadFailureJSON{Index: index, Error: err.Error()})
 			continue
 		} else if ok {
+			// 缓存保存净化前正文，导出前同样要应用用户替换规则（见 contentapp.Service.ProcessContent）。
+			processed, err := rt.Content.Content.ProcessContent(ctx, *b, *chapter, cached)
+			if err != nil {
+				summary.Failed = append(summary.Failed, downloadFailureJSON{Index: index, Error: err.Error()})
+				continue
+			}
 			summary.Cached++
-			sections = append(sections, chapterSection(index, chapter.Title, cached))
+			sections = append(sections, chapterSection(index, chapter.Title, processed))
 			continue
 		}
 		result, _, err := rt.Content.GetChapterContent(ctx, id, index)

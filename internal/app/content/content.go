@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html"
 	"regexp"
-	"strconv"
 	"strings"
 
 	replaceapp "reader/internal/app/replace"
@@ -15,11 +14,16 @@ import (
 	"reader/internal/domain/book"
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/source"
+	"reader/internal/infra/concurrency"
 	ruleinfra "reader/internal/infra/rule"
 	"reader/internal/infra/rule/regex"
 	urlrule "reader/internal/infra/rule/url"
 	"reader/internal/infra/script"
 )
+
+// pageConcurrency 是正文多分页并发抓取的 worker 上限；Legado 用 AppConfig.threadCount（默认 16），
+// Reader 保守取 8，避免同时打满单个书源站点。
+const pageConcurrency = 8
 
 var (
 	ErrContentRuleMissing            = errors.New("ruleContent is required")
@@ -74,6 +78,9 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 	if src == nil || src.RuleContent.Value == nil {
 		return Result{}, ErrContentRuleMissing
 	}
+	// contentRule.sourceRegex 在 Legado 中只由 BackstageWebView 通过 WebViewClient.onLoadResource
+	// 嗅探页面加载的资源 URL（BackstageWebView.kt:283-296）并把命中的 URL 当作响应体返回，
+	// 没有浏览器拿不到这些资源请求；本项目明确不引入 webView，因此统一返回“不支持”而不是静默忽略规则。
 	if strings.TrimSpace(src.RuleContent.Value.SourceRegex) != "" {
 		return Result{}, ErrUnsupportedContentBrowserFlow
 	}
@@ -85,96 +92,106 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 		return Result{Content: chapter.Tag, Chapter: chapter}, nil
 	}
 	bookID := book.IDFromURL(bookValue.BookURL)
+	originalTitle := chapter.Title
 	if s.chapters != nil {
 		if cached, ok, err := s.chapters.GetContent(ctx, bookID, chapter.Index); err != nil {
 			return Result{}, err
 		} else if ok {
-			return Result{Content: cached, Chapter: chapter}, nil
+			// 缓存保存的是净化前正文，用户替换规则在读取时应用（对齐 Legado BookContent.kt:150-153）。
+			content, err := s.ProcessContent(ctx, bookValue, chapter, cached)
+			if err != nil {
+				return Result{}, err
+			}
+			return Result{Content: content, Chapter: chapter}, nil
 		}
 	}
 	chapterURL := urlrule.Absolute(chapter.BaseURL, chapter.URL)
 	if chapterURL == "" {
 		chapterURL = chapter.AbsoluteURL()
 	}
+	var content string
 	if chapterURL == bookValue.BookURL && strings.TrimSpace(bookValue.TocHTML) != "" {
-		content, err := s.parseAllPages(ctx, src, &bookValue, &chapter, chapterURL, chapterURL, bookValue.TocHTML, input.NextChapterURL)
+		parsed, err := s.parseAllPages(ctx, src, &bookValue, &chapter, chapterURL, chapterURL, bookValue.TocHTML, input.NextChapterURL)
 		if err != nil {
 			return Result{}, err
 		}
-		if !chapter.IsVolume && strings.TrimSpace(content) == "" {
-			return Result{}, ErrContentEmpty
+		content = parsed
+	} else {
+		expander := ruleinfra.NewAnalyzer(ruleinfra.Context{
+			BaseURL:     chapter.BaseURL,
+			RedirectURL: chapter.BaseURL,
+			SourceURL:   src.BookSourceURL,
+			Script:      scriptAdapter{runtime: s.script, baseURL: chapter.BaseURL, source: src, book: &bookValue, chapter: &chapter},
+			Chapter:     &chapter,
+			Book:        &bookValue,
+			Source:      s.script.SourceBindings(ctx, src),
+		})
+		expander.LoadVariables(bookValue.Variable)
+		expander.LoadVariables(chapter.Variable)
+		if expanded, err := expander.ExpandString(ctx, chapterURL, map[string]any{}); err == nil && strings.TrimSpace(expanded) != "" {
+			chapterURL = expanded
 		}
-		if s.processor != nil {
-			processed, err := s.processor.Process(ctx, replaceapp.ProcessInput{Book: bookValue, Chapter: chapter, Content: content})
+		req, err := buildContentFetchRequest(ctx, chapterURL, src, s.script)
+		if err != nil {
+			return Result{}, err
+		}
+		if len(req.Body) > 0 {
+			if expandedBody, err := expander.ExpandString(ctx, string(req.Body), map[string]any{}); err == nil && strings.TrimSpace(expandedBody) != "" {
+				req.Body = []byte(expandedBody)
+			}
+		}
+		resp, err := s.fetcher.Fetch(ctx, req)
+		if err != nil {
+			return Result{}, err
+		}
+		if s.script != nil {
+			resp, err = sourceapp.NewScriptIntegration(s.script).LoginCheck(ctx, src, resp)
 			if err != nil {
 				return Result{}, err
 			}
-			content = processed.Content
-		}
-		if s.chapters != nil {
-			if err := s.chapters.SaveContent(ctx, bookID, chapter.Index, content); err != nil {
+			resp, err = s.applyContentWebJS(ctx, src, &bookValue, &chapter, resp, input.NextChapterURL)
+			if err != nil {
 				return Result{}, err
 			}
 		}
-		return Result{Content: content, Chapter: chapter}, nil
-	}
-	expander := ruleinfra.NewAnalyzer(ruleinfra.Context{
-		BaseURL:     chapter.BaseURL,
-		RedirectURL: chapter.BaseURL,
-		SourceURL:   src.BookSourceURL,
-		Script:      scriptAdapter{runtime: s.script, baseURL: chapter.BaseURL, source: src, book: &bookValue, chapter: &chapter},
-		Chapter:     &chapter,
-		Book:        &bookValue,
-		Source:      s.script.SourceBindings(ctx, src),
-	})
-	expander.LoadVariables(bookValue.Variable)
-	expander.LoadVariables(chapter.Variable)
-	if expanded, err := expander.ExpandString(ctx, chapterURL, map[string]any{}); err == nil && strings.TrimSpace(expanded) != "" {
-		chapterURL = expanded
-	}
-	req, err := buildContentFetchRequest(ctx, chapterURL, src, s.script)
-	if err != nil {
-		return Result{}, err
-	}
-	if len(req.Body) > 0 {
-		if expandedBody, err := expander.ExpandString(ctx, string(req.Body), map[string]any{}); err == nil && strings.TrimSpace(expandedBody) != "" {
-			req.Body = []byte(expandedBody)
-		}
-	}
-	resp, err := s.fetcher.Fetch(ctx, req)
-	if err != nil {
-		return Result{}, err
-	}
-	if s.script != nil {
-		resp, err = sourceapp.NewScriptIntegration(s.script).LoginCheck(ctx, src, resp)
+		parsed, err := s.parseAllPages(ctx, src, &bookValue, &chapter, req.URL, resp.URL, string(resp.Body), input.NextChapterURL)
 		if err != nil {
 			return Result{}, err
 		}
-		resp, err = s.applyContentWebJS(ctx, src, &bookValue, &chapter, resp, input.NextChapterURL)
-		if err != nil {
-			return Result{}, err
-		}
-	}
-	content, err := s.parseAllPages(ctx, src, &bookValue, &chapter, req.URL, resp.URL, string(resp.Body), input.NextChapterURL)
-	if err != nil {
-		return Result{}, err
+		content = parsed
 	}
 	if !chapter.IsVolume && strings.TrimSpace(content) == "" {
 		return Result{}, ErrContentEmpty
 	}
-	if s.processor != nil {
-		processed, err := s.processor.Process(ctx, replaceapp.ProcessInput{Book: bookValue, Chapter: chapter, Content: content})
-		if err != nil {
-			return Result{}, err
-		}
-		content = processed.Content
-	}
+	// 正文规则解析出的标题写回章节表（对齐 Legado BookContent.kt:66-69），否则重启后会退回目录标题。
 	if s.chapters != nil {
+		if chapter.Title != originalTitle {
+			if err := s.chapters.SaveTitle(ctx, bookID, chapter.Index, chapter.Title); err != nil {
+				return Result{}, err
+			}
+		}
 		if err := s.chapters.SaveContent(ctx, bookID, chapter.Index, content); err != nil {
 			return Result{}, err
 		}
 	}
-	return Result{Content: content, Chapter: chapter}, nil
+	processed, err := s.ProcessContent(ctx, bookValue, chapter, content)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Content: processed, Chapter: chapter}, nil
+}
+
+// ProcessContent 对净化前正文应用用户替换规则、重新分段与简繁转换（对齐 Legado ContentProcessor.getContent：
+// 缓存只保存净化前正文，用户规则在每次读取时应用，用户改动规则后已抓章节立即生效）。
+func (s *Service) ProcessContent(ctx context.Context, b book.Book, chapter book.BookChapter, content string) (string, error) {
+	if s.processor == nil {
+		return content, nil
+	}
+	processed, err := s.processor.Process(ctx, replaceapp.ProcessInput{Book: b, Chapter: chapter, Content: content})
+	if err != nil {
+		return "", err
+	}
+	return processed.Content, nil
 }
 
 func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *book.Book, chapter *book.BookChapter, baseURL string, redirectURL string, body string, nextChapterURL string) (string, error) {
@@ -193,24 +210,15 @@ func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *
 		if _, ok := seen[next]; ok {
 			break
 		}
+		// 对齐 Legado BookContent.kt:86-89：本章末页常带“下一章”链接，下一页 URL 等于下一章 URL 时必须停止分页，
+		// 否则会按本章正文规则解析下一章页面，把下一章正文并入本章并写入缓存。
+		if nextChapterURL != "" && next == urlrule.Absolute(redirectURL, nextChapterURL) {
+			break
+		}
 		seen[next] = struct{}{}
-		req, err := buildContentFetchRequest(ctx, next, src, s.script)
+		resp, err := s.fetchPage(ctx, src, b, chapter, next, nextChapterURL)
 		if err != nil {
 			return "", err
-		}
-		resp, err := s.fetcher.Fetch(ctx, req)
-		if err != nil {
-			return "", err
-		}
-		if s.script != nil {
-			resp, err = sourceapp.NewScriptIntegration(s.script).LoginCheck(ctx, src, resp)
-			if err != nil {
-				return "", err
-			}
-			resp, err = s.applyContentWebJS(ctx, src, b, chapter, resp, nextChapterURL)
-			if err != nil {
-				return "", err
-			}
 		}
 		pageContent, pageNext, err := s.parsePage(ctx, src, b, chapter, next, resp.URL, string(resp.Body), true, nextChapterURL)
 		if err != nil {
@@ -220,6 +228,7 @@ func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *
 		nextURLs = pageNext
 	}
 	if len(nextURLs) > 1 {
+		targets := make([]string, 0, len(nextURLs))
 		for _, next := range nextURLs {
 			next = strings.TrimSpace(urlrule.Absolute(redirectURL, next))
 			if next == "" {
@@ -228,30 +237,28 @@ func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *
 			if _, ok := seen[next]; ok {
 				continue
 			}
-			req, err := buildContentFetchRequest(ctx, next, src, s.script)
-			if err != nil {
-				return "", err
-			}
-			resp, err := s.fetcher.Fetch(ctx, req)
-			if err != nil {
-				return "", err
-			}
-			if s.script != nil {
-				resp, err = sourceapp.NewScriptIntegration(s.script).LoginCheck(ctx, src, resp)
-				if err != nil {
-					return "", err
-				}
-				resp, err = s.applyContentWebJS(ctx, src, b, chapter, resp, nextChapterURL)
-				if err != nil {
-					return "", err
-				}
-			}
-			pageContent, _, err := s.parsePage(ctx, src, b, chapter, next, resp.URL, string(resp.Body), false, nextChapterURL)
-			if err != nil {
-				return "", err
-			}
-			pages = append(pages, pageContent)
+			seen[next] = struct{}{}
+			targets = append(targets, next)
 		}
+		// 对齐 Legado BookContent.kt:103-130：多页并发抓取，结果按规则返回顺序拼接。
+		// 每个分页用 book/chapter 快照，避免并发解析时脚本写变量造成数据竞争。
+		pageContents, err := concurrency.Map(ctx, pageConcurrency, targets, func(ctx context.Context, _ int, target string) (string, error) {
+			pageBook := *b
+			pageChapter := *chapter
+			resp, err := s.fetchPage(ctx, src, &pageBook, &pageChapter, target, nextChapterURL)
+			if err != nil {
+				return "", err
+			}
+			pageContent, _, err := s.parsePage(ctx, src, &pageBook, &pageChapter, target, resp.URL, string(resp.Body), false, nextChapterURL)
+			if err != nil {
+				return "", err
+			}
+			return pageContent, nil
+		})
+		if err != nil {
+			return "", err
+		}
+		pages = append(pages, pageContents...)
 	}
 	content = strings.Join(pages, "\n")
 	if strings.TrimSpace(src.RuleContent.Value.ReplaceRegex) != "" {
@@ -262,6 +269,26 @@ func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *
 		content = strings.TrimSpace(replaced)
 	}
 	return content, nil
+}
+
+// fetchPage 抓取单个分页 URL，并按 Legado BookContent.kt 对每一页依次应用登录检查与正文 WebJS。
+func (s *Service) fetchPage(ctx context.Context, src *source.BookSource, b *book.Book, chapter *book.BookChapter, url string, nextChapterURL string) (*fetch.Response, error) {
+	req, err := buildContentFetchRequest(ctx, url, src, s.script)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.fetcher.Fetch(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if s.script == nil {
+		return resp, nil
+	}
+	resp, err = sourceapp.NewScriptIntegration(s.script).LoginCheck(ctx, src, resp)
+	if err != nil {
+		return nil, err
+	}
+	return s.applyContentWebJS(ctx, src, b, chapter, resp, nextChapterURL)
 }
 
 func (s *Service) applyContentWebJS(ctx context.Context, src *source.BookSource, b *book.Book, chapter *book.BookChapter, resp *fetch.Response, nextChapterURL string) (*fetch.Response, error) {
@@ -279,6 +306,7 @@ func (s *Service) applyContentWebJS(ctx context.Context, src *source.BookSource,
 		"source":         src,
 		"book":           b,
 		"chapter":        chapter,
+		"title":          script.ChapterTitleBinding(chapter),
 		"nextChapterUrl": nextChapterURL,
 		"response": map[string]any{
 			"statusCode": resp.StatusCode,
@@ -325,12 +353,12 @@ func buildContentFetchRequest(ctx context.Context, rawURL string, src *source.Bo
 			switch body := value.(type) {
 			case string:
 				rawFormBody = body
-				if looksLikeFormBody(body) {
+				if sourceapp.LooksLikeFormBody(body) {
 					req.Body = []byte(urlrule.EncodeFormString(body, ""))
 				} else {
 					req.Body = []byte(body)
 				}
-				if req.Headers["Content-Type"] == "" && looksLikeFormBody(body) {
+				if req.Headers["Content-Type"] == "" && sourceapp.LooksLikeFormBody(body) {
 					req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
 				}
 			case map[string]any, []any:
@@ -359,56 +387,23 @@ func buildContentFetchRequest(ctx context.Context, rawURL string, src *source.Bo
 				charsetName = strings.TrimSpace(text)
 			}
 		case "retry":
-			applyRetryOption(&req, value)
+			sourceapp.ApplyRetryOption(&req, value)
 		}
 	}
 	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
-	if rawFormBody != "" && looksLikeFormBody(rawFormBody) {
+	if rawFormBody != "" && sourceapp.LooksLikeFormBody(rawFormBody) {
 		req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
 	}
 	sourceapp.ApplyNetworkOptions(&req, custom.Attribute)
 	return req, nil
 }
 
-func looksLikeFormBody(body string) bool {
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return false
-	}
-	if strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[") || strings.HasPrefix(body, "<") {
-		return false
-	}
-	return strings.Contains(body, "=") || strings.Contains(body, "&")
-}
-
-func applyRetryOption(req *fetch.Request, value any) {
-	switch typed := value.(type) {
-	case float64:
-		if typed > 0 {
-			req.Retry = int(typed)
-		}
-	case int:
-		if typed > 0 {
-			req.Retry = typed
-		}
-	case int64:
-		if typed > 0 {
-			req.Retry = int(typed)
-		}
-	case string:
-		if parsed, err := strconv.Atoi(strings.TrimSpace(typed)); err == nil && parsed > 0 {
-			req.Retry = parsed
-		}
-	}
-}
-
 func mergeContentHeaders(headers map[string]string, value any) {
 	switch typed := value.(type) {
 	case map[string]any:
+		// 对齐 Legado AnalyzeUrl.kt:235-237 entry.value.toString()：非字符串头值（数字、布尔）统一转字符串。
 		for key, raw := range typed {
-			if text, ok := raw.(string); ok {
-				headers[key] = text
-			}
+			headers[key] = fmt.Sprint(raw)
 		}
 	case string:
 		nested := map[string]string{}
@@ -558,6 +553,7 @@ func (s scriptAdapter) Eval(ctx context.Context, scriptText string, input any) (
 		"source":         s.source,
 		"book":           s.book,
 		"chapter":        s.chapter,
+		"title":          script.ChapterTitleBinding(s.chapter),
 		"nextChapterUrl": s.nextChapterURL,
 	})
 }

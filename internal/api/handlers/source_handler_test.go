@@ -414,7 +414,8 @@ func TestBookHandlersLifecycleProgressChaptersContentAndDelete(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &content); err != nil {
 		t.Fatalf("decode content: %v", err)
 	}
-	if content.Content != "cached content" {
+	// 缓存保存净化前正文，读取时应用用户替换规则（Legado ContentProcessor 语义），因此正文按段落加缩进。
+	if content.Content != "　　cached content" {
 		t.Fatalf("content = %#v", content)
 	}
 

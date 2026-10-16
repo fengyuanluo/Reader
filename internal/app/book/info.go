@@ -15,6 +15,12 @@ import (
 
 var ErrBookInfoRuleMissing = errors.New("ruleBookInfo is required")
 
+// ErrDownloadURLsEmpty 对应 Legado BookInfo.kt:160 的 NoStackTraceException("下载链接为空")。
+var ErrDownloadURLsEmpty = errors.New("下载链接为空")
+
+// bookSourceTypeWebFile 是 Legado BookType.webFile：文件类书源只提供下载链接。
+const bookSourceTypeWebFile = 3
+
 type InfoInput struct {
 	Source    *source.BookSource
 	Book      book.Book
@@ -127,18 +133,27 @@ func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseUR
 	if value, err := analyzer.GetURL(ctx, infoRule.CoverURL, content); err == nil && value != "" {
 		b.CoverURL = value
 	}
-	if value, err := analyzer.GetURL(ctx, infoRule.TocURL, content); err == nil && value != "" {
-		b.TocURL = value
-	}
-	if b.TocURL == "" {
-		b.TocURL = baseURL
-	}
-	if b.TocURL == baseURL {
-		b.TocHTML = body
-	}
-	if src.BookSourceType == 3 && strings.TrimSpace(infoRule.DownloadURLs) != "" {
-		if values, err := analyzer.GetURLList(ctx, infoRule.DownloadURLs, content); err == nil {
-			b.DownloadURLs = values
+	// 对齐 Legado BookInfo.kt:148-171：文件类书源（type=3）只解析下载链接，不解析 tocUrl；
+	// 下载链接为空时直接报错，问题在详情阶段暴露而不是拖到下载链路。
+	if src.BookSourceType == bookSourceTypeWebFile {
+		b.DownloadURLs = nil
+		if strings.TrimSpace(infoRule.DownloadURLs) != "" {
+			if values, err := analyzer.GetURLList(ctx, infoRule.DownloadURLs, content); err == nil {
+				b.DownloadURLs = values
+			}
+		}
+		if len(b.DownloadURLs) == 0 {
+			return ErrDownloadURLsEmpty
+		}
+	} else {
+		if value, err := analyzer.GetURL(ctx, infoRule.TocURL, content); err == nil && value != "" {
+			b.TocURL = value
+		}
+		if b.TocURL == "" {
+			b.TocURL = baseURL
+		}
+		if b.TocURL == baseURL {
+			b.TocHTML = body
 		}
 	}
 	if variable := analyzer.VariablesJSON(); variable != "" {
@@ -187,6 +202,7 @@ type scriptAdapter struct {
 	baseURL string
 	source  *source.BookSource
 	book    *book.Book
+	chapter *book.BookChapter
 	src     any
 }
 
@@ -200,5 +216,7 @@ func (s scriptAdapter) Eval(ctx context.Context, scriptText string, input any) (
 		"baseUrl": s.baseURL,
 		"source":  s.source,
 		"book":    s.book,
+		"chapter": s.chapter,
+		"title":   script.ChapterTitleBinding(s.chapter),
 	})
 }

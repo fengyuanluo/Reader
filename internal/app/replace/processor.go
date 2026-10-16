@@ -3,22 +3,20 @@ package replaceapp
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"regexp"
 	"strings"
 
-	"github.com/longbridgeapp/opencc"
-
 	"reader/internal/domain/book"
 	"reader/internal/domain/replace"
+	"reader/internal/infra/chinese"
 )
 
 const paragraphIndent = "　　"
 
 type Processor struct {
-	repo      replace.ReplaceRuleRepository
-	options   ProcessorOptions
-	openccT2S *opencc.OpenCC
-	openccS2T *opencc.OpenCC
+	repo    replace.ReplaceRuleRepository
+	options ProcessorOptions
 }
 
 type ProcessorOptions struct {
@@ -58,7 +56,7 @@ func (p *Processor) Process(ctx context.Context, input ProcessInput) (ProcessRes
 		return ProcessResult{}, err
 	}
 
-	displayTitle, err := applyTitleRules(ctx, input.Chapter.Title, titleRules)
+	displayTitle, err := p.applyTitleRules(ctx, input.Chapter.Title, titleRules)
 	if err != nil {
 		return ProcessResult{}, err
 	}
@@ -86,11 +84,12 @@ func (p *Processor) Process(ctx context.Context, input ProcessInput) (ProcessRes
 		}
 		next, err := applyRule(ctx, content, *rule)
 		if err != nil {
-			if errors.Is(err, ErrRegexLimitExceeded) && rule.IsRegex {
-				rule.IsEnabled = false
-				_ = p.repo.Save(ctx, rule)
+			// 对齐 Legado ContentProcessor.kt:160-180：单条规则出错只影响该条规则，不中止整章净化。
+			if ctx.Err() != nil {
+				return ProcessResult{}, err
 			}
-			return ProcessResult{}, err
+			p.handleRuleFailure(ctx, rule, err)
+			continue
 		}
 		if next != content {
 			effectiveRuleIDs = append(effectiveRuleIDs, rule.ID)
@@ -110,7 +109,8 @@ func (p *Processor) Process(ctx context.Context, input ProcessInput) (ProcessRes
 	}, nil
 }
 
-func applyTitleRules(ctx context.Context, title string, rules []*replace.ReplaceRule) (string, error) {
+// applyTitleRules 应用标题域替换规则；与 Legado BookChapter.getDisplayTitle 一致，单条规则出错不中止。
+func (p *Processor) applyTitleRules(ctx context.Context, title string, rules []*replace.ReplaceRule) (string, error) {
 	displayTitle := strings.ReplaceAll(strings.ReplaceAll(title, "\r", ""), "\n", "")
 	for _, rule := range rules {
 		if rule == nil || rule.Pattern == "" {
@@ -118,13 +118,29 @@ func applyTitleRules(ctx context.Context, title string, rules []*replace.Replace
 		}
 		next, err := applyRule(ctx, displayTitle, *rule)
 		if err != nil {
-			return "", err
+			if ctx.Err() != nil {
+				return "", err
+			}
+			p.handleRuleFailure(ctx, rule, err)
+			continue
 		}
 		if strings.TrimSpace(next) != "" {
 			displayTitle = next
 		}
 	}
 	return displayTitle, nil
+}
+
+// handleRuleFailure 处理单条替换规则失败：正则超限时禁用该规则（对齐 Legado 的 RegexTimeoutException 分支），
+// 保存失败也要记录，否则该规则会一直保持启用并反复失败。
+func (p *Processor) handleRuleFailure(ctx context.Context, rule *replace.ReplaceRule, err error) {
+	if errors.Is(err, ErrRegexLimitExceeded) && rule.IsRegex {
+		rule.IsEnabled = false
+		if saveErr := p.repo.Save(ctx, rule); saveErr != nil {
+			slog.Warn("disable replace rule failed", "ruleId", rule.ID, "ruleName", rule.Name, "error", saveErr)
+		}
+	}
+	slog.Warn("replace rule failed", "ruleId", rule.ID, "ruleName", rule.Name, "error", err)
 }
 
 func applyRule(ctx context.Context, text string, rule replace.ReplaceRule) (string, error) {
@@ -199,33 +215,13 @@ func (p *Processor) convertWithMode(content string, mode string) string {
 	if strings.TrimSpace(content) == "" {
 		return content
 	}
-	var (
-		converter *opencc.OpenCC
-		err       error
-	)
+	// 词典加载与转换由 infra/chinese 用 sync.Once 保护：Processor 为进程级共享实例，不能在此做无锁懒初始化。
 	switch mode {
 	case "t2s":
-		if p.openccT2S == nil {
-			p.openccT2S, err = opencc.New("t2s")
-			if err != nil {
-				return content
-			}
-		}
-		converter = p.openccT2S
+		return chinese.T2S(content)
 	case "s2t":
-		if p.openccS2T == nil {
-			p.openccS2T, err = opencc.New("s2t")
-			if err != nil {
-				return content
-			}
-		}
-		converter = p.openccS2T
+		return chinese.S2T(content)
 	default:
 		return content
 	}
-	converted, err := converter.Convert(content)
-	if err != nil {
-		return content
-	}
-	return converted
 }

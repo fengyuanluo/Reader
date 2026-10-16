@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	sourceapp "reader/internal/app/source"
@@ -69,12 +68,12 @@ func buildBookFetchRequest(ctx context.Context, rawURL string, src *source.BookS
 			switch body := value.(type) {
 			case string:
 				rawFormBody = body
-				if looksLikeFormBody(body) {
+				if sourceapp.LooksLikeFormBody(body) {
 					req.Body = []byte(urlrule.EncodeFormString(body, ""))
 				} else {
 					req.Body = []byte(body)
 				}
-				if req.Headers["Content-Type"] == "" && looksLikeFormBody(body) {
+				if req.Headers["Content-Type"] == "" && sourceapp.LooksLikeFormBody(body) {
 					req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
 				}
 			case map[string]any, []any:
@@ -103,36 +102,15 @@ func buildBookFetchRequest(ctx context.Context, rawURL string, src *source.BookS
 				charsetName = strings.TrimSpace(text)
 			}
 		case "retry":
-			applyRetryOption(&req, value)
+			sourceapp.ApplyRetryOption(&req, value)
 		}
 	}
 	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
-	if rawFormBody != "" && looksLikeFormBody(rawFormBody) {
+	if rawFormBody != "" && sourceapp.LooksLikeFormBody(rawFormBody) {
 		req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
 	}
 	sourceapp.ApplyNetworkOptions(&req, custom.Attribute)
 	return req, nil
-}
-
-func applyRetryOption(req *fetch.Request, value any) {
-	switch typed := value.(type) {
-	case float64:
-		if typed > 0 {
-			req.Retry = int(typed)
-		}
-	case int:
-		if typed > 0 {
-			req.Retry = typed
-		}
-	case int64:
-		if typed > 0 {
-			req.Retry = int(typed)
-		}
-	case string:
-		if parsed, err := strconv.Atoi(strings.TrimSpace(typed)); err == nil && parsed > 0 {
-			req.Retry = parsed
-		}
-	}
 }
 
 func requestBaseURL(rawURL string, src *source.BookSource) string {
@@ -154,24 +132,13 @@ func sourceURLForAnalyzer(src *source.BookSource) string {
 	return strings.TrimSpace(src.BookSourceURL)
 }
 
-func looksLikeFormBody(body string) bool {
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return false
-	}
-	if strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[") || strings.HasPrefix(body, "<") {
-		return false
-	}
-	return strings.Contains(body, "=") || strings.Contains(body, "&")
-}
-
 func mergeBookHeaders(headers map[string]string, value any) {
 	switch typed := value.(type) {
 	case map[string]any:
+		// 对齐 Legado AnalyzeUrl.kt:235-237 entry.value.toString()：非字符串头值（数字、布尔）统一转字符串，
+		// 不静默丢弃。键在 JSON 对象中本就是字符串。
 		for key, raw := range typed {
-			if text, ok := raw.(string); ok {
-				headers[key] = text
-			}
+			headers[key] = fmt.Sprint(raw)
 		}
 	case string:
 		nested := map[string]string{}

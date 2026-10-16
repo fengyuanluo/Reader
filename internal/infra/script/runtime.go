@@ -60,6 +60,15 @@ var defaultScriptTimeout = 30 * time.Second
 
 type Bindings map[string]any
 
+// ChapterTitleBinding 返回 Legado AnalyzeRule.kt:785 顶层 title 绑定的取值（chapter?.title）：
+// 正文、目录、详情各脚本适配器共用它，无章节上下文时与 Legado 一致为 null。
+func ChapterTitleBinding(chapter *domainbook.BookChapter) any {
+	if chapter == nil {
+		return nil
+	}
+	return chapter.Title
+}
+
 type Policy struct {
 	AllowLog  bool
 	Timeout   time.Duration

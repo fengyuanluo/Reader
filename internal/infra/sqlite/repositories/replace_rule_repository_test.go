@@ -80,6 +80,34 @@ func TestReplaceRuleRepositoryScopes(t *testing.T) {
 	}
 }
 
+// ID 为 0 时由 SQLite 生成主键并回写（R-123：避免上层用时间戳生成主键在并发创建时碰撞）。
+func TestReplaceRuleRepositoryAssignsIDWhenZero(t *testing.T) {
+	ctx := context.Background()
+	repo := NewReplaceRuleRepository(openRepoTestDB(t))
+	rule := replaceRule(0, "auto", 1)
+	if err := repo.Save(ctx, rule); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if rule.ID == 0 {
+		t.Fatalf("Save() did not backfill rule ID")
+	}
+	found, err := repo.FindByID(ctx, rule.ID)
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if found.Name != "auto" {
+		t.Fatalf("FindByID() = %#v", found)
+	}
+
+	other := replaceRule(0, "auto2", 2)
+	if err := repo.Save(ctx, other); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if other.ID == rule.ID {
+		t.Fatalf("two inserts got the same ID %d", other.ID)
+	}
+}
+
 func replaceRule(id int64, name string, order int) *replace.ReplaceRule {
 	return &replace.ReplaceRule{
 		ID:                 id,

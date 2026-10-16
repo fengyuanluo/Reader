@@ -23,22 +23,31 @@ func (s *AppService) GetChapterContent(ctx context.Context, id string, index int
 	if err != nil {
 		return Result{}, nil, err
 	}
-	chapter, err := s.Chapters.FindByIndex(ctx, book.IDFromURL(b.BookURL), index)
+	bookID := book.IDFromURL(b.BookURL)
+	chapter, err := s.Chapters.FindByIndex(ctx, bookID, index)
 	if err != nil {
 		return Result{}, nil, err
 	}
-	if cached, ok, err := s.Chapters.GetContent(ctx, book.IDFromURL(b.BookURL), index); err != nil {
+	if cached, ok, err := s.Chapters.GetContent(ctx, bookID, index); err != nil {
 		return Result{}, nil, err
 	} else if ok {
-		return Result{Content: cached, Chapter: *chapter}, b, nil
+		// 缓存保存的是净化前正文，命中缓存也要应用用户替换规则（对齐 Legado 阅读时净化）。
+		content, err := s.Content.ProcessContent(ctx, *b, *chapter, cached)
+		if err != nil {
+			return Result{}, nil, err
+		}
+		return Result{Content: content, Chapter: *chapter}, b, nil
 	}
 	src, err := s.Sources.FindByURL(ctx, b.Origin)
 	if err != nil {
 		return Result{}, nil, err
 	}
+	// 对齐 Legado BookContent.kt:52-56：末章时 nextChapterUrl 回退到第 0 章 URL，供依赖它的正文规则使用。
 	nextChapterURL := ""
-	if next, err := s.Chapters.FindByIndex(ctx, book.IDFromURL(b.BookURL), index+1); err == nil && next != nil {
+	if next, err := s.Chapters.FindByIndex(ctx, bookID, index+1); err == nil && next != nil {
 		nextChapterURL = next.URL
+	} else if first, err := s.Chapters.FindByIndex(ctx, bookID, 0); err == nil && first != nil {
+		nextChapterURL = first.URL
 	}
 	result, err := s.Content.GetContent(ctx, Input{Source: src, Book: *b, Chapter: *chapter, NextChapterURL: nextChapterURL})
 	if err != nil {
