@@ -119,7 +119,7 @@ func (f *captureFetcher) Fetch(ctx context.Context, req domainfetch.Request) (*d
 	if resp != nil {
 		respCopy := *resp
 		if resp.Headers != nil {
-			respCopy.Headers = resp.Headers.Clone()
+			respCopy.Headers = cloneHeaderMap(resp.Headers)
 		}
 		if resp.Body != nil {
 			respCopy.Body = append([]byte(nil), resp.Body...)
@@ -1334,6 +1334,17 @@ func failedStageResults(results []realStageResult) []realStageResult {
 		if result.Status == "failed" {
 			out = append(out, result)
 		}
+	}
+	return out
+}
+
+func cloneHeaderMap(in domainfetch.Headers) domainfetch.Headers {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(domainfetch.Headers, len(in))
+	for key, values := range in {
+		out[key] = append([]string(nil), values...)
 	}
 	return out
 }

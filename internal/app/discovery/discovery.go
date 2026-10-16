@@ -314,7 +314,7 @@ func parseBookList(ctx context.Context, src *source.BookSource, listRule rule.Se
 	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
 		RedirectURL: redirectURL,
 		SourceURL:   src.BookSourceURL,
-		Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, src: body},
+		Script:      sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL, Source: src, Src: body},
 		Source:      scriptRuntime.SourceBindings(ctx, src),
 	})
 	elements, err := analyzer.GetElements(ctx, ruleText, body)
@@ -336,7 +336,7 @@ func parseBookList(ctx context.Context, src *source.BookSource, listRule rule.Se
 		itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
 			RedirectURL: redirectURL,
 			SourceURL:   src.BookSourceURL,
-			Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, src: body, book: &searchBook},
+			Script:      sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL, Source: src, Src: body, Book: &searchBook},
 			Book:        &searchBook,
 			Source:      scriptRuntime.SourceBindings(ctx, src),
 		})
@@ -487,27 +487,6 @@ func normalizeDiscoveryListRule(rule string) (string, bool) {
 		rule = strings.TrimSpace(rule[1:])
 	}
 	return rule, reverse
-}
-
-type scriptAdapter struct {
-	runtime *script.Runtime
-	baseURL string
-	source  *source.BookSource
-	src     any
-	book    *book.SearchBook
-}
-
-func (s scriptAdapter) Eval(ctx context.Context, scriptText string, input any) (any, error) {
-	if s.runtime == nil {
-		return nil, ruleinfra.ErrScriptUnavailable
-	}
-	return s.runtime.EvalWithBindings(ctx, scriptText, script.Bindings{
-		"result":  input,
-		"src":     s.src,
-		"baseUrl": s.baseURL,
-		"source":  s.source,
-		"book":    s.book,
-	})
 }
 
 func encodeDiscoveryVariables(vars map[string]string) string {

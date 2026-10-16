@@ -31,7 +31,6 @@ var (
 	reSegmentQuoteEnd           = regexp.MustCompile(`["”“]+(？。！?!~)["”“]+`)
 	reSegmentQuoteTail          = regexp.MustCompile(`["”“]+(？。！?!~)([^"”“])`)
 	reSegmentSaidDot            = regexp.MustCompile(`([问说喊唱叫骂道着答])[\\.。]`)
-	reSegmentDialogueCut        = regexp.MustCompile(`([。！？?!~]["”]?)([^“"\n]+[:：]["“])`)
 	reSegmentQuoteNarrationCut  = regexp.MustCompile(`([。！？?!~]["”])([^“"\n]{1,24}(?:问|说|喊|唱|叫|骂|道|着|答)[^“"\n]{0,12}[:：]["“])`)
 	reSegmentQuoteAfterNarrator = regexp.MustCompile(`([。！？?!~][”"])([^“"\n]{1,24})`)
 	reSegmentTrimStart          = regexp.MustCompile(`^\s+`)

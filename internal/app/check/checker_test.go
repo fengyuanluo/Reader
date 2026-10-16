@@ -161,6 +161,71 @@ func TestCheckerMarksEmptyDiscoveryRule(t *testing.T) {
 	}
 }
 
+func TestCheckerFailsEarlyOnUnsupportedContentBrowserFlow(t *testing.T) {
+	checker := newTestChecker()
+	src := testCheckSource()
+	src.RuleContent = rule.Flexible[rule.ContentRule]{Value: &rule.ContentRule{Content: ".content", SourceRegex: ".*\\.html"}}
+
+	item, err := checker.CheckSource(context.Background(), src, defaultCheckOptions())
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.Status != task.CheckItemFailed || item.FailureCode != FailureContentFailed {
+		t.Fatalf("item = %#v", item)
+	}
+	if item.FailureClass != diagnosticapp.FailureClassSourceUnsupportedRule {
+		t.Fatalf("failure class = %#v", item)
+	}
+	if item.Message != contentapp.ErrUnsupportedContentBrowserFlow.Error() {
+		t.Fatalf("message = %q", item.Message)
+	}
+	if item.Path != task.CheckPathSearch {
+		t.Fatalf("path = %q, want search path", item.Path)
+	}
+	if checker.search.input.Keyword != "" {
+		t.Fatalf("search ran before the unsupported content rule was reported: %#v", checker.search.input)
+	}
+}
+
+func TestCheckerFailsEarlyOnUnsupportedContentBrowserFlowForDiscoveryChain(t *testing.T) {
+	checker := newTestChecker()
+	src := testCheckSource()
+	src.RuleContent = rule.Flexible[rule.ContentRule]{Value: &rule.ContentRule{Content: ".content", SourceRegex: ".*"}}
+	opts := defaultCheckOptions()
+	opts.CheckSearch = false
+	opts.CheckDiscovery = true
+
+	item, err := checker.CheckSource(context.Background(), src, opts)
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.Status != task.CheckItemFailed || item.FailureCode != FailureContentFailed {
+		t.Fatalf("item = %#v", item)
+	}
+	if item.Path != task.CheckPathDiscovery {
+		t.Fatalf("path = %q, want discovery path", item.Path)
+	}
+}
+
+func TestCheckerIgnoresUnsupportedContentRuleWhenContentCheckDisabled(t *testing.T) {
+	checker := newTestChecker()
+	src := testCheckSource()
+	src.RuleContent = rule.Flexible[rule.ContentRule]{Value: &rule.ContentRule{Content: ".content", SourceRegex: ".*"}}
+	opts := defaultCheckOptions()
+	opts.CheckContent = false
+
+	item, err := checker.CheckSource(context.Background(), src, opts)
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.Status != task.CheckItemPassed || item.FailureCode != "" {
+		t.Fatalf("item = %#v", item)
+	}
+	if checker.search.input.Keyword == "" {
+		t.Fatal("search stage skipped although content check was disabled")
+	}
+}
+
 func TestCheckerRecordsItemPathForBookStages(t *testing.T) {
 	checker := newTestChecker()
 	checker.content.err = contentapp.ErrContentEmpty

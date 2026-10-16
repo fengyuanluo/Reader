@@ -21,7 +21,7 @@ func prepareBookFetchRequest(ctx context.Context, rawURL string, src *source.Boo
 		BaseURL:     baseURL,
 		RedirectURL: baseURL,
 		SourceURL:   sourceURLForAnalyzer(src),
-		Script:      scriptAdapter{runtime: scriptRuntime, baseURL: baseURL, source: src, book: b},
+		Script:      sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: baseURL, Source: src, Book: b},
 	})
 	if b != nil {
 		expander.LoadVariables(b.Variable)
@@ -68,7 +68,7 @@ func buildBookFetchRequest(ctx context.Context, rawURL string, src *source.BookS
 			switch body := value.(type) {
 			case string:
 				// 表单编码推迟到 charset 与全部 URL 选项（含 headers）解析完成后统一做一次（见下方）。
-				if sourceapp.LooksLikeFormBody(body) {
+				if urlrule.LooksLikeFormBody(body) {
 					rawFormBody = body
 				} else {
 					req.Body = []byte(body)
@@ -99,7 +99,7 @@ func buildBookFetchRequest(ctx context.Context, rawURL string, src *source.BookS
 				charsetName = strings.TrimSpace(text)
 			}
 		case "retry":
-			sourceapp.ApplyRetryOption(&req, value)
+			urlrule.ApplyRetryOption(&req, value)
 		}
 	}
 	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)

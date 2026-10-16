@@ -328,7 +328,7 @@ func (f *HTTPFetcher) fetchOnce(ctx context.Context, client *http.Client, req fe
 		if req.EncodeBodyAsHex {
 			body = []byte(hex.EncodeToString(body))
 		}
-		return &fetch.Response{StatusCode: 200, Headers: http.Header{}, Body: body, URL: req.URL}, nil
+		return &fetch.Response{StatusCode: 200, Headers: fetch.Headers{}, Body: body, URL: req.URL}, nil
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return nil, fmt.Errorf("%w: unsupported scheme", fetch.ErrBlocked)
@@ -419,7 +419,8 @@ func (f *HTTPFetcher) fetchOnce(ctx context.Context, client *http.Client, req fe
 			return nil, err
 		}
 	}
-	return &fetch.Response{StatusCode: resp.StatusCode, Headers: resp.Header, Body: respBody, URL: resp.Request.URL.String()}, nil
+	// domain 层不依赖 net/http：在适配层把传输层响应头转成 fetch.Headers。
+	return &fetch.Response{StatusCode: resp.StatusCode, Headers: fetch.Headers(resp.Header), Body: respBody, URL: resp.Request.URL.String()}, nil
 }
 
 func hasGzipMagic(body []byte) bool {

@@ -205,7 +205,7 @@ func scriptBytes(value any) []byte {
 	}
 }
 
-func normalizeImageContentType(headers http.Header, body []byte) string {
+func normalizeImageContentType(headers fetch.Headers, body []byte) string {
 	contentType := strings.TrimSpace(headers.Get("Content-Type"))
 	if contentType == "" {
 		contentType = http.DetectContentType(body)

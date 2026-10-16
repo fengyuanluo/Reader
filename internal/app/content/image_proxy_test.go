@@ -17,7 +17,7 @@ import (
 func TestImageProxyFetchesAllowedImage(t *testing.T) {
 	proxy := NewImageProxy(&fakeImageFetcher{response: &fetch.Response{
 		URL:        "https://img.example.test/cover.png",
-		Headers:    http.Header{"Content-Type": []string{"image/png; charset=binary"}},
+		Headers:    fetch.Headers{"Content-Type": []string{"image/png; charset=binary"}},
 		Body:       []byte{0x89, 'P', 'N', 'G'},
 		StatusCode: http.StatusOK,
 	}}, nil, nil, nil)
@@ -34,7 +34,7 @@ func TestImageProxyFetchesAllowedImage(t *testing.T) {
 func TestImageProxyRejectsNonImageContentType(t *testing.T) {
 	proxy := NewImageProxy(&fakeImageFetcher{response: &fetch.Response{
 		URL:        "https://img.example.test/not-image",
-		Headers:    http.Header{"Content-Type": []string{"text/html"}},
+		Headers:    fetch.Headers{"Content-Type": []string{"text/html"}},
 		Body:       []byte("<html></html>"),
 		StatusCode: http.StatusOK,
 	}}, nil, nil, nil)
@@ -75,7 +75,7 @@ func TestImageProxySavesFetchedImageToCache(t *testing.T) {
 	cache := &fakeImageCache{}
 	proxy := NewImageProxy(&fakeImageFetcher{response: &fetch.Response{
 		URL:        "https://img.example.test/cover.png",
-		Headers:    http.Header{"Content-Type": []string{"image/png"}},
+		Headers:    fetch.Headers{"Content-Type": []string{"image/png"}},
 		Body:       []byte("png"),
 		StatusCode: http.StatusOK,
 	}}, nil, nil, nil).WithCache(cache)
@@ -106,7 +106,7 @@ func TestImageProxyAppliesCoverDecodeJS(t *testing.T) {
 	}
 	proxy := NewImageProxy(&fakeImageFetcher{response: &fetch.Response{
 		URL:        "https://img.example.test/cover.bin",
-		Headers:    http.Header{"Content-Type": []string{"image/png"}},
+		Headers:    fetch.Headers{"Content-Type": []string{"image/png"}},
 		Body:       []byte{1, 2, 3},
 		StatusCode: http.StatusOK,
 	}}, &fakeImageSourceRepo{byID: map[string]*source.BookSource{src.SourceID: src}}, nil, script.NewRuntime(script.Policy{}))
@@ -130,7 +130,7 @@ func TestImageProxyAppliesContentImageDecodeWithBookContext(t *testing.T) {
 	bookValue := &book.Book{BookURL: "https://book.example.test/1", Variable: `{"prefix":"A"}`}
 	proxy := NewImageProxy(&fakeImageFetcher{response: &fetch.Response{
 		URL:        "https://img.example.test/chapter.bin",
-		Headers:    http.Header{"Content-Type": []string{"image/png"}},
+		Headers:    fetch.Headers{"Content-Type": []string{"image/png"}},
 		Body:       []byte{1, 2},
 		StatusCode: http.StatusOK,
 	}}, &fakeImageSourceRepo{byID: map[string]*source.BookSource{src.SourceID: src}}, &fakeImageBookRepo{byID: map[string]*book.Book{"book-1": bookValue}}, script.NewRuntime(script.Policy{}))
@@ -147,7 +147,7 @@ func TestImageProxyAppliesContentImageDecodeWithBookContext(t *testing.T) {
 func TestImageProxyReturnsSourceNotFoundForDecodeContext(t *testing.T) {
 	proxy := NewImageProxy(&fakeImageFetcher{response: &fetch.Response{
 		URL:        "https://img.example.test/cover.bin",
-		Headers:    http.Header{"Content-Type": []string{"image/png"}},
+		Headers:    fetch.Headers{"Content-Type": []string{"image/png"}},
 		Body:       []byte{1, 2, 3},
 		StatusCode: http.StatusOK,
 	}}, &fakeImageSourceRepo{}, nil, script.NewRuntime(script.Policy{}))
@@ -168,7 +168,7 @@ func TestImageProxyToleratesMissingBookButPropagatesOtherErrors(t *testing.T) {
 	}
 	response := &fetch.Response{
 		URL:        "https://img.example.test/chapter.bin",
-		Headers:    http.Header{"Content-Type": []string{"image/png"}},
+		Headers:    fetch.Headers{"Content-Type": []string{"image/png"}},
 		Body:       []byte{9, 9, 9},
 		StatusCode: http.StatusOK,
 	}
@@ -216,7 +216,7 @@ func TestImageProxyReturnsDecodeFailureWhenScriptErrors(t *testing.T) {
 	}
 	proxy := NewImageProxy(&fakeImageFetcher{response: &fetch.Response{
 		URL:        "https://img.example.test/cover.bin",
-		Headers:    http.Header{"Content-Type": []string{"image/png"}},
+		Headers:    fetch.Headers{"Content-Type": []string{"image/png"}},
 		Body:       []byte{1, 2, 3},
 		StatusCode: http.StatusOK,
 	}}, &fakeImageSourceRepo{byID: map[string]*source.BookSource{src.SourceID: src}}, nil, script.NewRuntime(script.Policy{}))

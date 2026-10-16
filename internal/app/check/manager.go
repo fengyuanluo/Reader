@@ -13,6 +13,10 @@ type Runner interface {
 	Cancel(taskID string) bool
 }
 
+// DefaultConcurrency 是校验任务的默认并发上限（同时校验的书源数），
+// 装配时用 config.SourceConcurrency（READER_SOURCE_CONCURRENCY）覆盖。
+const DefaultConcurrency = 4
+
 type Manager struct {
 	repo    task.CheckRepository
 	sources source.BookSourceRepository
@@ -38,7 +42,11 @@ func (m *Manager) Subscribe(ctx context.Context, taskID string) (<-chan *task.Ch
 	return m.events.Subscribe(ctx, taskID)
 }
 
+// Start 创建并启动校验任务；concurrency 为同时校验的书源数上限，非正数时回退到 DefaultConcurrency。
 func (m *Manager) Start(ctx context.Context, checkTask *task.CheckTask, sourceIDs []string, opts Options, concurrency int) (*task.CheckTask, error) {
+	if concurrency < 1 {
+		concurrency = DefaultConcurrency
+	}
 	sources := make([]*source.BookSource, 0, len(sourceIDs))
 	for _, id := range sourceIDs {
 		src, err := m.sources.FindByID(ctx, id)

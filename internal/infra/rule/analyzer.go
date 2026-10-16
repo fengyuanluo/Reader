@@ -23,8 +23,7 @@ import (
 )
 
 var (
-	ErrUnsupportedContent = errors.New("unsupported rule content")
-	ErrScriptUnavailable  = errors.New("script runtime is not configured")
+	ErrScriptUnavailable = errors.New("script runtime is not configured")
 )
 
 type Mode string

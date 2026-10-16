@@ -1185,10 +1185,6 @@ func (s *javaByteArrayOutputStream) String() string {
 	return s.buf.String()
 }
 
-func (s *javaByteArrayOutputStream) ToString() string {
-	return s.buf.String()
-}
-
 type javaGZIPInputStream struct {
 	data []byte
 	pos  int
@@ -1746,7 +1742,7 @@ func newScriptHTTPResponse(vm *goja.Runtime, resp *fetch.Response, err error) go
 		errorText = err.Error()
 	}
 	if resp == nil {
-		resp = &fetch.Response{StatusCode: 0, Headers: http.Header{}, Body: []byte(errorText)}
+		resp = &fetch.Response{StatusCode: 0, Headers: fetch.Headers{}, Body: []byte(errorText)}
 	}
 	bodyText := string(resp.Body)
 	requestURL := resp.URL
@@ -1808,7 +1804,7 @@ func callableString(vm *goja.Runtime, value string) *goja.Object {
 	return obj
 }
 
-func callableHeaders(vm *goja.Runtime, headers http.Header) *goja.Object {
+func callableHeaders(vm *goja.Runtime, headers fetch.Headers) *goja.Object {
 	fn, err := vm.RunString(`(function(h){
   var f = function(){ return f; };
   f.get = function(name){ return (h && h[name] && h[name][0]) || (h && h[String(name).toLowerCase()] && h[String(name).toLowerCase()][0]) || ""; };
@@ -1995,7 +1991,7 @@ func applyURLOptions(req *fetch.Request, opts map[string]any) {
 			switch body := value.(type) {
 			case string:
 				rawFormBody = body
-				if looksLikeFormBody(body) {
+				if urlrule.LooksLikeFormBody(body) {
 					req.Body = []byte(urlrule.EncodeFormString(body, ""))
 					if req.Headers["Content-Type"] == "" {
 						req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
@@ -2037,24 +2033,7 @@ func applyURLOptions(req *fetch.Request, opts map[string]any) {
 				req.DNSIP = strings.TrimSpace(text)
 			}
 		case "retry":
-			switch typed := value.(type) {
-			case float64:
-				if typed > 0 {
-					req.Retry = int(typed)
-				}
-			case int:
-				if typed > 0 {
-					req.Retry = typed
-				}
-			case int64:
-				if typed > 0 {
-					req.Retry = int(typed)
-				}
-			case string:
-				if parsed, err := strconv.Atoi(strings.TrimSpace(typed)); err == nil && parsed > 0 {
-					req.Retry = parsed
-				}
-			}
+			urlrule.ApplyRetryOption(req, value)
 		}
 	}
 	// 书源 header 中的 proxy 键是代理配置而非 HTTP 头（AnalyzeUrl.kt:128-131）；URL 选项 proxy 优先。
@@ -2065,20 +2044,9 @@ func applyURLOptions(req *fetch.Request, opts map[string]any) {
 		}
 	}
 	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
-	if rawFormBody != "" && looksLikeFormBody(rawFormBody) {
+	if rawFormBody != "" && urlrule.LooksLikeFormBody(rawFormBody) {
 		req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
 	}
-}
-
-func looksLikeFormBody(body string) bool {
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return false
-	}
-	if strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[") || strings.HasPrefix(body, "<") {
-		return false
-	}
-	return strings.Contains(body, "=") || strings.Contains(body, "&")
 }
 
 func mergeHeaders(headers map[string]string, value any) {
@@ -2285,10 +2253,6 @@ func desEncodeToBase64String(data string, key string, transformation string, iv 
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(cipherText), nil
-}
-
-func parseAESTransformation(transformation string) (mode string, padding string) {
-	return parseSymmetricTransformation(transformation, "CBC", "PKCS5PADDING")
 }
 
 func parseSymmetricTransformation(transformation string, defaultMode string, defaultPadding string) (mode string, padding string) {
