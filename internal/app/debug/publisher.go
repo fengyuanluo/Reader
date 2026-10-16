@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"reader/internal/domain/task"
+	"reader/internal/infra/logging"
 )
 
 type Publisher struct {
@@ -18,6 +19,8 @@ func NewPublisher(repo task.DebugRepository) *Publisher {
 }
 
 func (p *Publisher) Publish(ctx context.Context, event *task.DebugEvent) error {
+	// 调试事件会持久化并推送给 SSE 订阅者，消息中的凭证必须在落库前脱敏。
+	event.Message = logging.RedactString(event.Message)
 	if err := p.repo.AppendEvent(ctx, event); err != nil {
 		return err
 	}

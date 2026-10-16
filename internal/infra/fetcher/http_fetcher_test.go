@@ -169,3 +169,80 @@ func TestHTTPFetcherDecodesGB2312HTMLToUTF8(t *testing.T) {
 		t.Fatalf("body = %q", string(resp.Body))
 	}
 }
+
+func TestHTTPFetcherSniffsCharsetWithoutContentType(t *testing.T) {
+	gbkHTML := func(text string) []byte {
+		var raw bytes.Buffer
+		writer := transform.NewWriter(&raw, simplifiedchinese.GBK.NewEncoder())
+		_, _ = io.WriteString(writer, text)
+		_ = writer.Close()
+		return raw.Bytes()
+	}
+	utf16 := []byte{0xFF, 0xFE}
+	for _, r := range "<p>章节</p>" {
+		utf16 = append(utf16, byte(r), byte(r>>8))
+	}
+	binary := []byte{0x89, 'P', 'N', 'G', 0xC4, 0xE3}
+	tests := []struct {
+		name string
+		body []byte
+		want []byte
+	}{
+		{name: "meta charset", body: gbkHTML(`<html><head><meta charset="gbk"></head><body>民间故事</body></html>`), want: []byte("民间故事")},
+		{name: "http-equiv charset", body: gbkHTML(`<html><head><meta http-equiv="Content-Type" content="text/html; charset=GB2312"></head><body>第一章</body></html>`), want: []byte("第一章")},
+		{name: "utf-16 bom", body: utf16, want: []byte("章节")},
+		{name: "binary untouched", body: binary, want: binary},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// nil 值阻止 net/http 自动嗅探并补 Content-Type。
+				w.Header()["Content-Type"] = nil
+				_, _ = w.Write(tt.body)
+			}))
+			defer server.Close()
+
+			f := NewHTTPFetcher(WithAllowPrivateNetwork(true))
+			resp, err := f.Fetch(context.Background(), fetch.Request{URL: server.URL})
+			if err != nil {
+				t.Fatalf("Fetch() error = %v", err)
+			}
+			if resp.Headers.Get("Content-Type") != "" {
+				t.Fatalf("test server sent Content-Type %q", resp.Headers.Get("Content-Type"))
+			}
+			if !bytes.Contains(resp.Body, tt.want) {
+				t.Fatalf("body = %q, want contains %q", resp.Body, tt.want)
+			}
+		})
+	}
+}
+
+func TestHTTPFetcherDropsBodyForGET(t *testing.T) {
+	tests := []struct {
+		method   string
+		wantBody string
+	}{
+		{method: http.MethodGet, wantBody: ""},
+		{method: http.MethodPost, wantBody: "a=1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
+			var gotBody string
+			var gotLength int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				gotBody = string(raw)
+				gotLength = r.ContentLength
+			}))
+			defer server.Close()
+
+			f := NewHTTPFetcher(WithAllowPrivateNetwork(true))
+			if _, err := f.Fetch(context.Background(), fetch.Request{URL: server.URL, Method: tt.method, Body: []byte("a=1")}); err != nil {
+				t.Fatalf("Fetch() error = %v", err)
+			}
+			if gotBody != tt.wantBody || gotLength != int64(len(tt.wantBody)) {
+				t.Fatalf("body = %q (length %d), want %q", gotBody, gotLength, tt.wantBody)
+			}
+		})
+	}
+}

@@ -141,6 +141,7 @@ func (s *Service) discoverSource(ctx context.Context, src *source.BookSource, in
 		return nil, err
 	}
 	req.Headers = headers
+	sourceapp.ApplyNetworkOptions(&req, nil)
 	resp, err := s.fetcher.Fetch(ctx, req)
 	if err != nil {
 		return nil, err

@@ -2,6 +2,7 @@ package debugapp
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,22 @@ func TestPublisherReplaysHistoryAndPublishesLiveEvents(t *testing.T) {
 		t.Fatalf("Publish() error = %v", err)
 	}
 	assertDebugEvent(t, ch, "live")
+}
+
+func TestPublisherRedactsMessageBeforePersisting(t *testing.T) {
+	repo := &fakeDebugRepo{}
+	publisher := NewPublisher(repo)
+
+	err := publisher.Publish(context.Background(), &task.DebugEvent{SessionID: "s1", Type: task.DebugEventLog, Message: "GET https://api.example.test/s?apikey=k123 X-Api-Key: secret-key"})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	stored := repo.events[0].Message
+	for _, secret := range []string{"k123", "secret-key"} {
+		if strings.Contains(stored, secret) {
+			t.Fatalf("stored message still contains %q: %s", secret, stored)
+		}
+	}
 }
 
 func assertDebugEvent(t *testing.T, ch <-chan *task.DebugEvent, want string) {

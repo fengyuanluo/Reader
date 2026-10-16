@@ -45,3 +45,25 @@ func TestCookieRepositorySaveListAndDelete(t *testing.T) {
 		t.Fatalf("cookies after delete = %#v", cookies)
 	}
 }
+
+func TestCookieRepositoryTreatsCorruptExpiresAsExpired(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := readersqlite.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO cookies(domain, name, value, expires_at, updated_at) VALUES ('example.test', 'sid', 'abc', 'not-a-time', CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	cookies, err := NewCookieRepository(db).ListByDomain(ctx, "example.test")
+	if err != nil {
+		t.Fatalf("ListByDomain() error = %v", err)
+	}
+	if len(cookies) != 1 || cookies[0].ExpiresAt == nil || cookies[0].ExpiresAt.After(time.Now()) {
+		t.Fatalf("cookies = %#v, want corrupt expires_at treated as expired", cookies)
+	}
+}

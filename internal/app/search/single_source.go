@@ -204,7 +204,7 @@ func buildSearchRequest(ctx context.Context, runtime *script.Runtime, src *sourc
 	if strings.Contains(custom.URL, "{{") || strings.Contains(custom.URL, "}}") {
 		return fetch.Request{}, fmt.Errorf("%w: unresolved expression in %q", ErrUnsupportedSearchURL, src.SearchURL)
 	}
-	if err := sourceapp.ValidateSupportedURLOptions(custom.Attribute, "method", "body", "headers", "type", "charset", "origin", "retry"); err != nil {
+	if err := sourceapp.ValidateSupportedURLOptions(custom.Attribute); err != nil {
 		return fetch.Request{}, fmt.Errorf("%w: %v", ErrUnsupportedSearchURL, err)
 	}
 	targetURL := urlrule.Absolute(sourceRequestBase(src.BookSourceURL), custom.URL)
@@ -220,6 +220,7 @@ func buildSearchRequest(ctx context.Context, runtime *script.Runtime, src *sourc
 		}
 	}
 	applySearchURLOptions(&req, custom.Attribute)
+	sourceapp.ApplyNetworkOptions(&req, custom.Attribute)
 	return req, nil
 }
 

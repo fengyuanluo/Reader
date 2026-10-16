@@ -48,9 +48,11 @@ func (r *CookieRepository) ListByDomain(ctx context.Context, domain string) ([]f
 		}
 		if expires.Valid {
 			parsed, err := time.Parse(time.RFC3339Nano, expires.String)
-			if err == nil {
-				cookie.ExpiresAt = &parsed
+			if err != nil {
+				// expires_at 损坏时按已过期处理（零值时间），由调用方丢弃并清理，不能视为永不过期。
+				parsed = time.Time{}
 			}
+			cookie.ExpiresAt = &parsed
 		}
 		out = append(out, cookie)
 	}
