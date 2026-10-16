@@ -708,9 +708,9 @@ func TestRuntimeLegadoResponseSupportsRawAndHeaderChains(t *testing.T) {
 			if string(req.Body) != "searchkey=book" {
 				t.Fatalf("post body = %q", string(req.Body))
 			}
-			return &fetch.Response{StatusCode: 302, Headers: http.Header{"Location": []string{"https://source.example.test/result.html"}}, Body: []byte("redirect"), URL: "https://source.example.test/search.html"}, nil
+			return &fetch.Response{StatusCode: 302, Headers: fetch.Headers{"Location": []string{"https://source.example.test/result.html"}}, Body: []byte("redirect"), URL: "https://source.example.test/search.html"}, nil
 		}
-		return &fetch.Response{StatusCode: 200, Headers: http.Header{"X-Trace": []string{"trace"}}, Body: []byte("home"), URL: "https://source.example.test/"}, nil
+		return &fetch.Response{StatusCode: 200, Headers: fetch.Headers{"X-Trace": []string{"trace"}}, Body: []byte("home"), URL: "https://source.example.test/"}, nil
 	})
 	src := &source.BookSource{BookSourceURL: "https://source.example.test"}
 	runtime := NewRuntime(Policy{SourceKey: src.BookSourceURL, Fetcher: fetcher})
@@ -931,7 +931,7 @@ func TestRuntimeLegadoResponseHeadersCallable(t *testing.T) {
 	fetcher := fetcherFunc(func(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
 		return &fetch.Response{
 			StatusCode: 200,
-			Headers:    http.Header{"Set-Cookie": []string{"sid=abc"}, "X-Trace": []string{"trace"}},
+			Headers:    fetch.Headers{"Set-Cookie": []string{"sid=abc"}, "X-Trace": []string{"trace"}},
 			Body:       []byte(`ok`),
 			URL:        req.URL,
 		}, nil

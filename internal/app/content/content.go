@@ -124,7 +124,7 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 			BaseURL:     chapter.BaseURL,
 			RedirectURL: chapter.BaseURL,
 			SourceURL:   src.BookSourceURL,
-			Script:      scriptAdapter{runtime: s.script, baseURL: chapter.BaseURL, source: src, book: &bookValue, chapter: &chapter},
+			Script:      sourceapp.ScriptAdapter{Runtime: s.script, BaseURL: chapter.BaseURL, Source: src, Book: &bookValue, Chapter: &chapter},
 			Chapter:     &chapter,
 			Book:        &bookValue,
 			Source:      s.script.SourceBindings(ctx, src),
@@ -356,7 +356,7 @@ func buildContentFetchRequest(ctx context.Context, rawURL string, src *source.Bo
 			switch body := value.(type) {
 			case string:
 				// 表单编码推迟到 charset 与全部 URL 选项（含 headers）解析完成后统一做一次（见下方）。
-				if sourceapp.LooksLikeFormBody(body) {
+				if urlrule.LooksLikeFormBody(body) {
 					rawFormBody = body
 				} else {
 					req.Body = []byte(body)
@@ -387,7 +387,7 @@ func buildContentFetchRequest(ctx context.Context, rawURL string, src *source.Bo
 				charsetName = strings.TrimSpace(text)
 			}
 		case "retry":
-			sourceapp.ApplyRetryOption(&req, value)
+			urlrule.ApplyRetryOption(&req, value)
 		}
 	}
 	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
@@ -436,7 +436,7 @@ func applyContentReplace(ctx context.Context, redirectURL string, rule string, c
 		}
 		return regex.Replace(content, pattern, replacement, len(parts) >= 4)
 	}
-	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{RedirectURL: redirectURL, Script: scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL}})
+	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{RedirectURL: redirectURL, Script: sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL}})
 	return analyzer.GetString(ctx, rule, content)
 }
 
@@ -446,7 +446,7 @@ func (s *Service) parsePage(ctx context.Context, src *source.BookSource, b *book
 		BaseURL:     baseURL,
 		RedirectURL: redirectURL,
 		SourceURL:   src.BookSourceURL,
-		Script:      scriptAdapter{runtime: s.script, baseURL: baseURL, source: src, book: b, chapter: chapter, src: body, nextChapterURL: nextChapterURL},
+		Script:      sourceapp.ScriptAdapter{Runtime: s.script, BaseURL: baseURL, Source: src, Book: b, Chapter: chapter, Src: body, NextChapterURL: nextChapterURL},
 		Chapter:     chapter,
 		Book:        b,
 		Source:      s.script.SourceBindings(ctx, src),
@@ -537,30 +537,4 @@ func firstNonEmptyCapture(values ...string) string {
 		}
 	}
 	return ""
-}
-
-type scriptAdapter struct {
-	runtime        *script.Runtime
-	baseURL        string
-	source         *source.BookSource
-	book           *book.Book
-	chapter        *book.BookChapter
-	src            any
-	nextChapterURL string
-}
-
-func (s scriptAdapter) Eval(ctx context.Context, scriptText string, input any) (any, error) {
-	if s.runtime == nil {
-		return nil, ruleinfra.ErrScriptUnavailable
-	}
-	return s.runtime.EvalWithBindings(ctx, scriptText, script.Bindings{
-		"result":         input,
-		"src":            s.src,
-		"baseUrl":        s.baseURL,
-		"source":         s.source,
-		"book":           s.book,
-		"chapter":        s.chapter,
-		"title":          script.ChapterTitleBinding(s.chapter),
-		"nextChapterUrl": s.nextChapterURL,
-	})
 }

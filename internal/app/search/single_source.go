@@ -13,7 +13,6 @@ import (
 	sourceapp "reader/internal/app/source"
 	"reader/internal/domain/book"
 	"reader/internal/domain/fetch"
-	domainrule "reader/internal/domain/rule"
 	"reader/internal/domain/source"
 	"reader/internal/infra/ratelimit"
 	ruleinfra "reader/internal/infra/rule"
@@ -105,7 +104,7 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
 		RedirectURL: resp.URL,
 		SourceURL:   src.BookSourceURL,
-		Script:      scriptAdapter{runtime: s.script, baseURL: resp.URL, source: src, src: string(resp.Body)},
+		Script:      sourceapp.ScriptAdapter{Runtime: s.script, BaseURL: resp.URL, Source: src, Src: string(resp.Body)},
 		Source:      s.script.SourceBindings(ctx, src),
 	})
 	items, err := analyzer.GetElements(ctx, listRule, string(resp.Body))
@@ -126,7 +125,7 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 		itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
 			RedirectURL: resp.URL,
 			SourceURL:   src.BookSourceURL,
-			Script:      scriptAdapter{runtime: s.script, baseURL: resp.URL, source: src, src: string(resp.Body), book: &searchBook},
+			Script:      sourceapp.ScriptAdapter{Runtime: s.script, BaseURL: resp.URL, Source: src, Src: string(resp.Body), Book: &searchBook},
 			Book:        &searchBook,
 			Source:      s.script.SourceBindings(ctx, src),
 		})
@@ -180,14 +179,6 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 		}
 	}
 	return results, nil
-}
-
-func buildSearchURL(template string, keyword string, page int) string {
-	req, err := buildSearchRequest(context.Background(), nil, &source.BookSource{SearchURL: template}, keyword, page)
-	if err != nil {
-		return buildSearchURLLegacy(template, keyword, page)
-	}
-	return req.URL
 }
 
 func (s *SingleSourceSearcher) buildSearchRequest(ctx context.Context, src *source.BookSource, keyword string, page int) (fetch.Request, error) {
@@ -417,10 +408,6 @@ func searchURLBindings(src *source.BookSource, keyword string, page int) script.
 	}
 }
 
-func buildSearchURLLegacy(template string, keyword string, page int) string {
-	return buildSearchURLPlaceholders(template, keyword, page, true)
-}
-
 func buildSearchURLPlaceholders(template string, keyword string, page int, includeDoubleBraces bool) string {
 	if page < 1 {
 		page = 1
@@ -575,28 +562,11 @@ func applySearchURLOptions(req *fetch.Request, opts map[string]any) {
 				charsetName = strings.TrimSpace(text)
 			}
 		case "retry":
-			switch typed := value.(type) {
-			case float64:
-				if typed > 0 {
-					req.Retry = int(typed)
-				}
-			case int:
-				if typed > 0 {
-					req.Retry = typed
-				}
-			case int64:
-				if typed > 0 {
-					req.Retry = int(typed)
-				}
-			case string:
-				if parsed, err := strconv.Atoi(strings.TrimSpace(typed)); err == nil && parsed > 0 {
-					req.Retry = parsed
-				}
-			}
+			urlrule.ApplyRetryOption(req, value)
 		}
 	}
 	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
-	if rawFormBody != "" && looksLikeFormBody(rawFormBody) {
+	if rawFormBody != "" && urlrule.LooksLikeFormBody(rawFormBody) {
 		// 对齐 Legado AnalyzeUrl:279-283：只有显式设置了非表单 Content-Type 时才保留原文，
 		// 否则按表单编码一次（不再重复编码），并补上表单 Content-Type。
 		if strings.TrimSpace(req.Headers["Content-Type"]) == "" {
@@ -606,17 +576,6 @@ func applySearchURLOptions(req *fetch.Request, opts map[string]any) {
 			req.Body = []byte(rawFormBody)
 		}
 	}
-}
-
-func looksLikeFormBody(body string) bool {
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return false
-	}
-	if strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[") || strings.HasPrefix(body, "<") {
-		return false
-	}
-	return strings.Contains(body, "=") || strings.Contains(body, "&")
 }
 
 // matchesBookURLPattern 对齐 Legado BookList.kt 的 baseUrl.matches(pattern)：整串匹配。
@@ -671,29 +630,6 @@ func mergeSearchHeaders(headers map[string]string, value any) {
 		}
 	}
 }
-
-type scriptAdapter struct {
-	runtime *script.Runtime
-	baseURL string
-	source  *source.BookSource
-	src     any
-	book    *book.SearchBook
-}
-
-func (s scriptAdapter) Eval(ctx context.Context, scriptText string, input any) (any, error) {
-	if s.runtime == nil {
-		return nil, ruleinfra.ErrScriptUnavailable
-	}
-	return s.runtime.EvalWithBindings(ctx, scriptText, script.Bindings{
-		"result":  input,
-		"src":     s.src,
-		"baseUrl": s.baseURL,
-		"source":  s.source,
-		"book":    s.book,
-	})
-}
-
-var _ domainrule.ScriptRuntime = scriptAdapter{}
 
 func encodeSearchVariables(vars map[string]string) string {
 	if len(vars) == 0 {

@@ -97,7 +97,7 @@ func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseUR
 	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
 		RedirectURL: redirectURL,
 		SourceURL:   src.BookSourceURL,
-		Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, book: b, src: body},
+		Script:      sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL, Source: src, Book: b, Src: body},
 		Book:        b,
 		Source:      scriptRuntime.SourceBindings(ctx, src),
 	})
@@ -205,28 +205,4 @@ func PreviewSearchBookFromInfo(ctx context.Context, src *source.BookSource, redi
 	seed.InfoHTML = body
 	seed.TocHTML = b.TocHTML
 	return seed, nil
-}
-
-type scriptAdapter struct {
-	runtime *script.Runtime
-	baseURL string
-	source  *source.BookSource
-	book    *book.Book
-	chapter *book.BookChapter
-	src     any
-}
-
-func (s scriptAdapter) Eval(ctx context.Context, scriptText string, input any) (any, error) {
-	if s.runtime == nil {
-		return nil, ruleinfra.ErrScriptUnavailable
-	}
-	return s.runtime.EvalWithBindings(ctx, scriptText, script.Bindings{
-		"result":  input,
-		"src":     s.src,
-		"baseUrl": s.baseURL,
-		"source":  s.source,
-		"book":    s.book,
-		"chapter": s.chapter,
-		"title":   script.ChapterTitleBinding(s.chapter),
-	})
 }

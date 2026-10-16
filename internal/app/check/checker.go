@@ -94,6 +94,19 @@ func (c *Checker) CheckSource(ctx context.Context, src *source.BookSource, opts 
 		BookSourceName: src.BookSourceName,
 		Status:         task.CheckItemPassed,
 	}
+	if opts.CheckContent && unsupportedContentBrowserFlow(src) {
+		// contentRule.sourceRegex 在 Legado 里只在 webView 中生效（WebBook.kt:335-337 把 sourceRegex/webJs
+		// 交给 getStrResponseAwait，由 WebViewClient.onLoadResource 嗅探页面资源请求），Reader 不提供 webView。
+		// 校验阶段就给出明确失败，避免用户到抓正文时才发现（对齐 content.GetContent 的 ErrUnsupportedContentBrowserFlow）。
+		item.Message = contentapp.ErrUnsupportedContentBrowserFlow.Error()
+		item.Path = contentCheckPath(opts)
+		failed, _ := c.fail(item, start, diagnosticapp.FailureDetails{
+			Code:    FailureContentFailed,
+			Class:   diagnosticapp.FailureClassSourceUnsupportedRule,
+			Message: item.Message,
+		})
+		return failed, nil
+	}
 	if opts.CheckSearch {
 		if strings.TrimSpace(src.SearchURL) == "" {
 			// Legado：没有搜索链接规则时不执行搜索，直接标记“搜索链接规则为空”。
@@ -148,6 +161,19 @@ func (c *Checker) CheckSource(ctx context.Context, src *source.BookSource, opts 
 	}
 	item.RespondTime = time.Since(start).Milliseconds()
 	return item, nil
+}
+
+// unsupportedContentBrowserFlow 判断书源正文规则是否依赖 Reader 不支持的 webView 嗅探（sourceRegex）。
+func unsupportedContentBrowserFlow(src *source.BookSource) bool {
+	return src != nil && src.RuleContent.Value != nil && strings.TrimSpace(src.RuleContent.Value.SourceRegex) != ""
+}
+
+// contentCheckPath 决定正文类失败归入哪条链路：与 checkBook 用同一规则（搜索链路可用即归搜索链路）。
+func contentCheckPath(opts Options) task.CheckItemPath {
+	if opts.CheckSearch {
+		return task.CheckPathSearch
+	}
+	return task.CheckPathDiscovery
 }
 
 // checkKeyword 按 Legado BookSource.getCheckKeyword 语义选取校验关键字：

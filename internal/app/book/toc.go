@@ -190,7 +190,7 @@ func parseTocPage(ctx context.Context, src *source.BookSource, b *book.Book, bas
 	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
 		RedirectURL: redirectURL,
 		SourceURL:   src.BookSourceURL,
-		Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, book: b, src: body},
+		Script:      sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL, Source: src, Book: b, Src: body},
 		Book:        b,
 		Source:      scriptRuntime.SourceBindings(ctx, src),
 	})
@@ -223,7 +223,7 @@ func parseTocPage(ctx context.Context, src *source.BookSource, b *book.Book, bas
 			SourceURL:   src.BookSourceURL,
 			// 对齐 Legado BookChapterList.kt:220-224：逐章先 setChapter 再解析标题/链接等规则，
 			// 脚本里的 chapter 与顶层 title 绑定取当前章节（title 在标题规则解析后即可用）。
-			Script:  scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, book: b, chapter: chapter, src: body},
+			Script:  sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL, Source: src, Book: b, Chapter: chapter, Src: body},
 			Chapter: chapter,
 			Book:    b,
 			Source:  scriptRuntime.SourceBindings(ctx, src),

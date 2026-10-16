@@ -3,7 +3,7 @@ package fetch
 import (
 	"context"
 	"errors"
-	"net/http"
+	"net/textproto"
 	"time"
 )
 
@@ -26,9 +26,22 @@ type Request struct {
 	DNSIP string
 }
 
+// Headers 是响应头的 domain 自有类型，语义与 net/http.Header 一致（键为规范形式，值为字符串切片），
+// 但避免 domain 层直接依赖 net/http；infra 的 fetcher 在适配层完成转换。
+type Headers map[string][]string
+
+// Get 返回首个值；键按 MIME 头的规范形式匹配，与 net/http.Header.Get 行为一致。
+func (h Headers) Get(name string) string {
+	values := h[textproto.CanonicalMIMEHeaderKey(name)]
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
 type Response struct {
 	StatusCode int
-	Headers    http.Header
+	Headers    Headers
 	Body       []byte
 	URL        string
 }

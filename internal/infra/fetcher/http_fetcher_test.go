@@ -246,3 +246,29 @@ func TestHTTPFetcherDropsBodyForGET(t *testing.T) {
 		})
 	}
 }
+
+// TestHTTPFetcherConvertsResponseHeadersToDomainType 覆盖 R-098：传输层响应头在适配层转成
+// domain 的 fetch.Headers，且 Get 的键匹配语义与 net/http.Header 一致（大小写不敏感）。
+func TestHTTPFetcherConvertsResponseHeadersToDomainType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Trace-Id", "trace-1")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	f := NewHTTPFetcher(WithAllowPrivateNetwork(true))
+	resp, err := f.Fetch(context.Background(), fetch.Request{URL: server.URL})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if got := resp.Headers.Get("X-Trace-Id"); got != "trace-1" {
+		t.Fatalf("Get(X-Trace-Id) = %q, want trace-1", got)
+	}
+	if got := resp.Headers.Get("x-trace-id"); got != "trace-1" {
+		t.Fatalf("Get(x-trace-id) = %q, want trace-1 (canonical key lookup)", got)
+	}
+	if got := resp.Headers.Get("Missing"); got != "" {
+		t.Fatalf("Get(Missing) = %q, want empty", got)
+	}
+}

@@ -516,7 +516,7 @@ func TestBookContentHandlerAppliesReplaceProcessor(t *testing.T) {
 func TestProxyImageReturnsImageBytes(t *testing.T) {
 	router := newImageProxyTestRouter(t, &fakeImageProxyFetcher{response: &fetch.Response{
 		URL:        "https://img.example.test/cover.png",
-		Headers:    http.Header{"Content-Type": []string{"image/png"}},
+		Headers:    fetch.Headers{"Content-Type": []string{"image/png"}},
 		Body:       []byte{0x89, 'P', 'N', 'G'},
 		StatusCode: http.StatusOK,
 	}})
@@ -537,7 +537,7 @@ func TestProxyImageReturnsImageBytes(t *testing.T) {
 func TestProxyImageRequiresSourceIDWhenDecodeModeIsSet(t *testing.T) {
 	router := newImageProxyTestRouter(t, &fakeImageProxyFetcher{response: &fetch.Response{
 		URL:        "https://img.example.test/cover.png",
-		Headers:    http.Header{"Content-Type": []string{"image/png"}},
+		Headers:    fetch.Headers{"Content-Type": []string{"image/png"}},
 		Body:       []byte{0x89, 'P', 'N', 'G'},
 		StatusCode: http.StatusOK,
 	}})
@@ -946,6 +946,64 @@ func TestCheckTaskHandlersCreateGetCancelAndEvents(t *testing.T) {
 		t.Fatalf("cancel status = %d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+// TestCheckTaskCreateUsesInjectedConcurrency 覆盖 R-026：校验任务的并发上限来自注入的配置值，
+// 未注入时回退到 checkapp.DefaultConcurrency，handler 内不再硬编码。
+func TestCheckTaskCreateUsesInjectedConcurrency(t *testing.T) {
+	tests := []struct {
+		name        string
+		injected    int
+		wantConcurr int
+	}{
+		{name: "configured value", injected: 7, wantConcurr: 7},
+		{name: "default without injection", injected: 0, wantConcurr: checkapp.DefaultConcurrency},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openHandlerTestDB(t)
+			sourceRepo := repositories.NewBookSourceRepository(db)
+			checkRepo := repositories.NewCheckRepository(db)
+			runner := &concurrencyRecordingRunner{repo: checkRepo}
+			handler := NewSourceHandler(sourceapp.NewManager(sourceRepo)).
+				WithCheck(checkapp.NewManager(checkRepo, sourceRepo, runner)).
+				WithCheckConcurrency(tt.injected)
+			r := chi.NewRouter()
+			generated.HandlerFromMuxWithBaseURL(handler, r, "/api/v1")
+			router := middleware.Trace(middleware.Auth("secret")(r))
+
+			src := handlerTestSource(t, "https://check-concurrency.example.test", "Concurrency")
+			src.SearchURL = src.BookSourceURL + "/search"
+			if err := sourceRepo.Save(context.Background(), src); err != nil {
+				t.Fatalf("save source: %v", err)
+			}
+
+			rec := authedRequest(router, http.MethodPost, "/api/v1/check/book-sources", `{"sourceIds":["`+src.SourceID+`"]}`)
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+			}
+			if runner.concurrency != tt.wantConcurr {
+				t.Fatalf("runner concurrency = %d, want %d", runner.concurrency, tt.wantConcurr)
+			}
+		})
+	}
+}
+
+// concurrencyRecordingRunner 记录 handler 传入的并发上限，不真正执行校验。
+type concurrencyRecordingRunner struct {
+	repo        task.CheckRepository
+	concurrency int
+}
+
+func (r *concurrencyRecordingRunner) Start(ctx context.Context, checkTask *task.CheckTask, sources []*domainsource.BookSource, _ checkapp.Options, concurrency int) error {
+	r.concurrency = concurrency
+	checkTask.Total = len(sources)
+	if checkTask.Status == "" {
+		checkTask.Status = task.CheckTaskPending
+	}
+	return r.repo.CreateTask(ctx, checkTask)
+}
+
+func (r *concurrencyRecordingRunner) Cancel(string) bool { return false }
 
 func TestCheckTaskCreateReturnsNotFoundForUnknownSource(t *testing.T) {
 	router, _, _ := newCheckHandlerTestRouter(t)

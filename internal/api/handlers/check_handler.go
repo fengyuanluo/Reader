@@ -37,7 +37,7 @@ func (h *SourceHandler) CreateBookSourceCheckTask(w http.ResponseWriter, r *http
 		TraceID:   middleware.TraceIDFromContext(r.Context()),
 		CreatedAt: time.Now().UTC(),
 	}
-	created, err := h.check.Start(r.Context(), checkTask, body.SourceIds, checkOptionsFromDTO(body.Options), 4)
+	created, err := h.check.Start(r.Context(), checkTask, body.SourceIds, checkOptionsFromDTO(body.Options), h.checkConcurrency)
 	if err != nil {
 		writeCheckCreateError(w, r, err)
 		return

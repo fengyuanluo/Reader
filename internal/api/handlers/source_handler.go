@@ -45,6 +45,8 @@ type SourceHandler struct {
 	check      *checkapp.Manager
 	bodyLimit  int64
 	importBody int64
+	// checkConcurrency 是校验任务同时校验的书源数上限，由装配方从配置注入（零值由 checkapp 回退到默认值）。
+	checkConcurrency int
 	// heartbeat 覆盖 SSE 心跳间隔，仅供测试缩短等待；零值使用 defaultSSEHeartbeatInterval。
 	heartbeat time.Duration
 }
@@ -125,6 +127,12 @@ func (h *SourceHandler) WithDebug(service *debugapp.Service, publisher *debugapp
 
 func (h *SourceHandler) WithCheck(check *checkapp.Manager) *SourceHandler {
 	h.check = check
+	return h
+}
+
+// WithCheckConcurrency 注入校验任务并发上限（来自配置）；零值表示使用 checkapp.DefaultConcurrency。
+func (h *SourceHandler) WithCheckConcurrency(concurrency int) *SourceHandler {
+	h.checkConcurrency = concurrency
 	return h
 }
 
