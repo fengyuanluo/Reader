@@ -27,13 +27,13 @@
 ## 3. 当前总体状态
 
 - 常规工程门禁已具备：OpenAPI、mock E2E、安全测试、CI、本地验证脚本均已落地。
-- 真实远程集合 release gate 已具备，且最新 100 候选快照已达到 `releaseAllowed = true`。
-- 最新真实报告摘要：
+- 真实远程集合 release gate 已具备，且仓库内最新 100 候选快照已达到 `releaseAllowed = true`。
+- 仓库内最新真实报告（`test/reports/real_source_collection_e2e_report.*`，报告时间 `2026-10-14T10:05:57Z`）摘要：
   - `Parsed count = 459`
   - `Attempted candidates = 100`
-  - `Full success count = 51`
+  - `Full success count = 39`
   - `Release allowed = true`
-- 结论：截至 `0.0.1` 版本，Reader 已经具备可发布的第一轮移植重构成果；本文后续历史快照仍保留 17/21/32/33/44 等阶段性数值，用于追溯演进过程，而不是作为当前状态判断。
+- 结论：截至 `0.0.1` 版本，Reader 已经具备可发布的第一轮移植重构成果；本文后续历史快照仍保留 51/44/33/32/21/17 等阶段性数值，用于追溯演进过程，而不是作为当前状态判断。
 - 最新真实样本口径下，Reader 已经从“基础规则链不通”推进到“主链路可发布、剩余主要是少量站点状态 / 反爬 / 源级请求差异”的阶段。后续工作应避免把外部 404/403/401 与 Reader 通用实现缺口混在一起。
 
 ## 4. 分项对照
