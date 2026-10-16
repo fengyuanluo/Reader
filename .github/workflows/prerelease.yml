@@ -53,6 +53,10 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      # release job 不 checkout，gh 需要显式仓库上下文（否则报
+      # "failed to run git: fatal: not a git repository"）。
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Download binaries
         uses: actions/download-artifact@v4
