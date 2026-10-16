@@ -46,10 +46,10 @@ func (r *BookRepository) Save(ctx context.Context, b *book.Book) error {
   origin_order = excluded.origin_order,
   variable = excluded.variable,
   updated_at = CURRENT_TIMESTAMP`,
-			bookIDFromURL(b.BookURL), b.BookURL, nullable(b.TocURL), nullable(b.Origin), nullable(b.OriginName), b.Name, b.Author, nullable(b.Kind), nullable(b.CoverURL), nullable(b.Intro), b.Type,
-			nullable(b.WordCount), nullable(b.LatestChapterTitle), nullable(b.InfoHTML), nullable(b.TocHTML), nullable(mustJSONString(b.DownloadURLs)), nullable(b.DurChapterTitle), b.DurChapterIndex, b.DurChapterPos,
-			b.DurChapterTime, b.OriginOrder, nullable(b.Variable),
-		)
+		bookIDFromURL(b.BookURL), b.BookURL, nullable(b.TocURL), nullable(b.Origin), nullable(b.OriginName), b.Name, b.Author, nullable(b.Kind), nullable(b.CoverURL), nullable(b.Intro), b.Type,
+		nullable(b.WordCount), nullable(b.LatestChapterTitle), nullable(b.InfoHTML), nullable(b.TocHTML), nullable(mustJSONString(b.DownloadURLs)), nullable(b.DurChapterTitle), b.DurChapterIndex, b.DurChapterPos,
+		b.DurChapterTime, b.OriginOrder, nullable(b.Variable),
+	)
 	return err
 }
 

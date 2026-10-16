@@ -5,6 +5,7 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 
 	bookapp "reader/internal/app/book"
 	checkapp "reader/internal/app/check"
@@ -77,6 +78,7 @@ func Open(cfg config.Config) (*Runtime, func(), error) {
 	sessionCookies := fetcher.NewSessionCookieStore()
 	cookieManager := fetcher.NewCookieManager(cookieRepo, sessionCookies)
 	scriptCache := script.NewNamespacedCache()
+	sourceVariables := repositories.NewSourceVariableRepository(db)
 	httpFetcher := fetcher.NewHTTPFetcher(
 		fetcher.WithTimeout(cfg.FetchTimeout),
 		fetcher.WithMaxBodyBytes(cfg.FetchMaxBodyBytes),
@@ -85,7 +87,15 @@ func Open(cfg config.Config) (*Runtime, func(), error) {
 		fetcher.WithDefaultUserAgent(cfg.DefaultUserAgent),
 		fetcher.WithCookieManager(cookieManager),
 	)
-	scriptRuntime := script.NewRuntime(script.Policy{Timeout: cfg.ScriptTimeout, Stage: "search", Fetcher: httpFetcher, Cookie: sessionCookies, Cache: scriptCache})
+	// 阶段由各调用点通过 script.WithStage 标注；书源级变量持久化到 source_variables，本地文件 API 限定在 <DataDir>/script-files。
+	scriptRuntime := script.NewRuntime(script.Policy{
+		Timeout:   cfg.ScriptTimeout,
+		Fetcher:   httpFetcher,
+		Cookie:    sessionCookies,
+		Cache:     scriptCache,
+		Variables: sourceVariables,
+		FileRoot:  filepath.Join(cfg.DataDir, "script-files"),
+	})
 	importer := sourceapp.NewImporterWithFetcher(repo, httpFetcher)
 	singleSearcher := searchapp.NewSingleSourceSearcher(httpFetcher, scriptRuntime)
 	multiSearcher := searchapp.NewMultiSourceSearcher(repo, singleSearcher)

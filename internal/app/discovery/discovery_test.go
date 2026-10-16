@@ -35,7 +35,8 @@ func TestCategoriesCachesJSExploreKinds(t *testing.T) {
 		ExploreURL:     `@js:(function(){ var n = parseInt(source.getVariable() || "0", 10) || 0; source.setVariable(String(n + 1)); return '[{"title":"玄幻","url":"/xuanhuan"}]'; })()`,
 		EnabledExplore: true,
 	}
-	service := NewService(&fakeSourceRepo{items: []*source.BookSource{src}}, fakeFetcher{}, script.NewRuntime(script.Policy{Timeout: time.Second, SourceKey: src.BookSourceURL}))
+	runtime := script.NewRuntime(script.Policy{Timeout: time.Second, SourceKey: src.BookSourceURL})
+	service := NewService(&fakeSourceRepo{items: []*source.BookSource{src}}, fakeFetcher{}, runtime)
 
 	first, err := service.Categories(context.Background(), "s1")
 	if err != nil {
@@ -48,7 +49,7 @@ func TestCategoriesCachesJSExploreKinds(t *testing.T) {
 	if len(first) != 1 || len(second) != 1 || first[0].Title != "玄幻" || second[0].URL != "/xuanhuan" {
 		t.Fatalf("first=%#v second=%#v", first, second)
 	}
-	got := script.SourceBindings(src)["getVariable"].(func(...any) string)()
+	got := runtime.SourceBindings(context.Background(), src)["getVariable"].(func(...any) string)()
 	if got != "1" {
 		t.Fatalf("script count = %#v", got)
 	}
@@ -56,13 +57,13 @@ func TestCategoriesCachesJSExploreKinds(t *testing.T) {
 
 func TestDiscoverUsesExploreRuleAndFetchesMockSource(t *testing.T) {
 	src := &source.BookSource{
-		SourceID:       "s1",
-		BookSourceURL:  "https://source.example.test/base/",
-		BookSourceName: "S1",
-		ExploreURL:     "玄幻::/list?page={page}",
-		EnabledExplore: true,
+		SourceID:         "s1",
+		BookSourceURL:    "https://source.example.test/base/",
+		BookSourceName:   "S1",
+		ExploreURL:       "玄幻::/list?page={page}",
+		EnabledExplore:   true,
 		EnabledCookieJar: true,
-		Header: `{"X-Token":"abc"}`,
+		Header:           `{"X-Token":"abc"}`,
 		RuleExplore: rule.Flexible[rule.ExploreRule]{Value: &rule.ExploreRule{
 			BookList: ".item",
 			Name:     ".name@text",

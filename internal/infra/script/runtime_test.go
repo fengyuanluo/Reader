@@ -74,7 +74,7 @@ java.put("token", "abc");
   java.getString("$.version"),
   source.getVariable().split(",").length
 ].join("|")
-`, Bindings{"result": map[string]any{"version": 1710000000}, "source": SourceBindings(src), "__source": src})
+`, Bindings{"result": map[string]any{"version": 1710000000}, "source": src})
 	if err != nil {
 		t.Fatalf("Eval() error = %v", err)
 	}
@@ -193,10 +193,10 @@ func TestRuntimeDerivesSourceKeyFromSourceBindingsWhenMissing(t *testing.T) {
 	r1 := NewRuntime(Policy{Cache: cache})
 	r2 := NewRuntime(Policy{Cache: cache})
 
-	if _, err := r1.EvalWithBindings(context.Background(), `java.put("tmpToken", "abc123")`, Bindings{"source": SourceBindings(src), "__source": src}); err != nil {
+	if _, err := r1.EvalWithBindings(context.Background(), `java.put("tmpToken", "abc123")`, Bindings{"source": src}); err != nil {
 		t.Fatalf("r1 EvalWithBindings() error = %v", err)
 	}
-	got, err := r2.EvalWithBindings(context.Background(), `java.get("tmpToken")`, Bindings{"source": SourceBindings(src), "__source": src})
+	got, err := r2.EvalWithBindings(context.Background(), `java.get("tmpToken")`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("r2 EvalWithBindings() error = %v", err)
 	}
@@ -211,18 +211,18 @@ func TestRuntimeSharedInstanceKeepsSourceNamespacesPerEval(t *testing.T) {
 	srcA := &source.BookSource{BookSourceURL: "https://source-a.example.test/root"}
 	srcB := &source.BookSource{BookSourceURL: "https://source-b.example.test/root"}
 
-	if _, err := runtime.EvalWithBindings(context.Background(), `java.put("tmpToken", "a123")`, Bindings{"source": SourceBindings(srcA), "__source": srcA}); err != nil {
+	if _, err := runtime.EvalWithBindings(context.Background(), `java.put("tmpToken", "a123")`, Bindings{"source": srcA}); err != nil {
 		t.Fatalf("EvalWithBindings(source-a) error = %v", err)
 	}
-	if _, err := runtime.EvalWithBindings(context.Background(), `java.put("tmpToken", "b456")`, Bindings{"source": SourceBindings(srcB), "__source": srcB}); err != nil {
+	if _, err := runtime.EvalWithBindings(context.Background(), `java.put("tmpToken", "b456")`, Bindings{"source": srcB}); err != nil {
 		t.Fatalf("EvalWithBindings(source-b) error = %v", err)
 	}
 
-	gotA, err := runtime.EvalWithBindings(context.Background(), `java.get("tmpToken")`, Bindings{"source": SourceBindings(srcA), "__source": srcA})
+	gotA, err := runtime.EvalWithBindings(context.Background(), `java.get("tmpToken")`, Bindings{"source": srcA})
 	if err != nil {
 		t.Fatalf("EvalWithBindings(get source-a) error = %v", err)
 	}
-	gotB, err := runtime.EvalWithBindings(context.Background(), `java.get("tmpToken")`, Bindings{"source": SourceBindings(srcB), "__source": srcB})
+	gotB, err := runtime.EvalWithBindings(context.Background(), `java.get("tmpToken")`, Bindings{"source": srcB})
 	if err != nil {
 		t.Fatalf("EvalWithBindings(get source-b) error = %v", err)
 	}
@@ -243,7 +243,7 @@ func TestRuntimeSourceBindingsExposeBookSourceCommentAndVariableComment(t *testi
 	}
 	got, err := runtime.EvalWithBindings(context.Background(), `
 [source.bookSourceName, source.bookSourceGroup, source.bookSourceType, source.bookSourceComment, source.variableComment].join("|")
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -304,7 +304,7 @@ source.putLoginInfo('{"手机号":"13800138000","手动登录Token":"sid"}');
   source.getLoginInfoMap().get("手机号"),
   source.getLoginInfoMap()["手动登录Token"]
 ].join("|")
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -317,7 +317,7 @@ source.putLoginInfo('{"手机号":"13800138000","手动登录Token":"sid"}');
 func TestRuntimeProvidesEmptyLoginInfoMapWhenUnset(t *testing.T) {
 	runtime := NewRuntime(Policy{})
 	src := &source.BookSource{BookSourceURL: "https://fanqie.example.test/empty"}
-	got, err := runtime.EvalWithBindings(context.Background(), `[source.getLoginInfoMap().get("token"), source.getLoginInfoMap()["token"], source.getLoginHeaderMap().get("Authorization")].join("|")`, Bindings{"source": SourceBindings(src), "__source": src})
+	got, err := runtime.EvalWithBindings(context.Background(), `[source.getLoginInfoMap().get("token"), source.getLoginInfoMap()["token"], source.getLoginHeaderMap().get("Authorization")].join("|")`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -507,7 +507,7 @@ javaImport.importPackage(
   Packages.cn.hutool.crypto.digest
 );
 DigestUtil.md5Hex("abc") + "|" + StrUtil.reverse("abc") + "|" + source.getLoginHeader()
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -524,9 +524,8 @@ func TestRuntimeLoadsSourceJSLibBeforeEval(t *testing.T) {
 	runtime := NewRuntime(Policy{SourceKey: "src"})
 
 	got, err := runtime.EvalWithBindings(context.Background(), `sign(key)`, Bindings{
-		"key":      "book",
-		"source":   SourceBindings(src),
-		"__source": src,
+		"key":    "book",
+		"source": src,
 	})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
@@ -556,8 +555,7 @@ func TestRuntimeRewritesRhinoLetConditionInSourceJSLib(t *testing.T) {
 	runtime := NewRuntime(Policy{SourceKey: "src"})
 
 	got, err := runtime.EvalWithBindings(context.Background(), `getBookId('{"data":{"data_list":[{"book_id_str":"7268620849496722495"}]}}', 0)[0]`, Bindings{
-		"source":   SourceBindings(src),
-		"__source": src,
+		"source": src,
 	})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
@@ -581,8 +579,7 @@ with(javaImport) {
 	runtime := NewRuntime(Policy{SourceKey: "src"})
 
 	got, err := runtime.EvalWithBindings(context.Background(), `xGorgon("abc")`, Bindings{
-		"source":   SourceBindings(src),
-		"__source": src,
+		"source": src,
 	})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
@@ -603,7 +600,7 @@ func TestRuntimeProvidesSourceCompatStateAndLoginURLFields(t *testing.T) {
 eval(String(source.loginUrl));
 login();
 [source.getVariable(), source.getLoginHeader()].join("|")
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -696,7 +693,7 @@ func TestRuntimeJavaConnectUsesSourceHeadersAndURLOptions(t *testing.T) {
 	got, err := runtime.EvalWithBindings(context.Background(), `
 var res = java.connect("/api,{\"method\":\"POST\",\"body\":\"q=book\",\"headers\":{\"X-Rule\":\"ok\"}}");
 res.body() + "|" + res.body + "|" + res.url() + "|" + res.url + "|" + java.ajax("/api")
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -728,7 +725,7 @@ func TestRuntimeLegadoResponseSupportsRawAndHeaderChains(t *testing.T) {
   java.connect(source.getKey()).header("X-Trace"),
   java.post("/search.html", "searchkey=book", {"X-Rule":"ok"}).header("Location")
 ].join("|")
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -756,7 +753,7 @@ func TestRuntimeJavaAjaxAppliesFormContentTypeForStringBody(t *testing.T) {
 
 	got, err := runtime.EvalWithBindings(context.Background(), `
 java.ajax("https://api.example.test/content,{\"method\":\"POST\",\"body\":\"chapter_id=1&bookId=218440\"}")
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -777,7 +774,7 @@ func TestRuntimeJavaAjaxEncodesQueryByDefault(t *testing.T) {
 
 	got, err := runtime.EvalWithBindings(context.Background(), `
 java.ajax("https://api.example.test/search?keyword=论语")
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -801,7 +798,7 @@ func TestRuntimeJavaAjaxAppliesHeaderJSFromSource(t *testing.T) {
 
 	got, err := runtime.EvalWithBindings(context.Background(), `
 java.ajax("https://api.example.test/search?keyword=论语")
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -819,7 +816,7 @@ func TestRuntimeJavaAjaxRejectsUnsupportedURLOption(t *testing.T) {
 
 	got, err := runtime.EvalWithBindings(context.Background(), `
 java.ajax("https://api.example.test/search,{\"webView\":true}")
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -840,7 +837,7 @@ func TestRuntimeJavaAjaxAppliesRetryOption(t *testing.T) {
 
 	got, err := runtime.EvalWithBindings(context.Background(), `
 java.ajax("https://api.example.test/search,{\"retry\":2}")
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -901,7 +898,7 @@ func TestRuntimeJavaAjaxExpandsInlineTemplatesInCustomURLBody(t *testing.T) {
 
 	got, err := runtime.EvalWithBindings(context.Background(), `
 java.ajax("https://api.example.test/content,{\"method\":\"POST\",\"body\":\"bookId={{java.get('id')}}&chapterId={{java.get('chapterId')}}\"}")
-`, Bindings{"source": SourceBindings(src), "__source": src, "book": b, "chapter": ch})
+`, Bindings{"source": src, "book": b, "chapter": ch})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -920,7 +917,7 @@ func TestRuntimeJavaAjaxAllReturnsResponseArray(t *testing.T) {
 	got, err := runtime.EvalWithBindings(context.Background(), `
 var res = java.ajaxAll(["/a", "/b"]);
 res[0].code() + "|" + res[0].body() + "|" + res[1].body()
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
@@ -943,9 +940,9 @@ func TestRuntimeLegadoResponseHeadersCallable(t *testing.T) {
 	runtime := NewRuntime(Policy{SourceKey: src.BookSourceURL, Fetcher: fetcher})
 
 	got, err := runtime.EvalWithBindings(context.Background(), `
-var res = java.get("https://source.example.test");
+var res = java.get("https://source.example.test", {});
 res.headers().get("Set-Cookie") + "|" + res.headers().get("x-trace")
-`, Bindings{"source": SourceBindings(src), "__source": src})
+`, Bindings{"source": src})
 	if err != nil {
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}

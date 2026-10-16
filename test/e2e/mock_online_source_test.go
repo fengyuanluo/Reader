@@ -175,7 +175,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		fetcher.WithDefaultUserAgent("Reader-E2E"),
 		fetcher.WithCookieManager(cookieManager),
 	)
-	scriptRuntime := script.NewRuntime(script.Policy{Timeout: 10 * time.Second, Stage: "e2e", Fetcher: httpFetcher, Cookie: sessionCookies, Cache: scriptCache})
+	scriptRuntime := script.NewRuntime(script.Policy{Timeout: 10 * time.Second, Fetcher: httpFetcher, Cookie: sessionCookies, Cache: scriptCache})
 	importer := sourceapp.NewImporterWithFetcher(sourceRepo, httpFetcher)
 	singleSearch := searchapp.NewSingleSourceSearcher(httpFetcher, scriptRuntime)
 	searcher := searchapp.NewMultiSourceSearcher(sourceRepo, singleSearch)

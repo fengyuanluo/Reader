@@ -372,7 +372,7 @@ func TestRealSourceSingleDebug(t *testing.T) {
 	}
 	t.Logf("source name=%s url=%s", src.BookSourceName, src.BookSourceURL)
 	searchCapture := &captureFetcher{base: httpFetcher}
-	debugSearchRuntime := script.NewRuntime(script.Policy{Timeout: 10 * time.Second, Stage: "e2e-search-capture", Fetcher: searchCapture, SourceKey: src.BookSourceURL, BaseURL: src.BookSourceURL, Source: src})
+	debugSearchRuntime := script.NewRuntime(script.Policy{Timeout: 10 * time.Second, Fetcher: searchCapture, SourceKey: src.BookSourceURL, BaseURL: src.BookSourceURL, Source: src})
 	debugSearcher := searchapp.NewSingleSourceSearcher(searchCapture, debugSearchRuntime)
 	if _, debugErr := debugSearcher.Search(ctx, searchapp.SearchInput{Source: src, Keyword: keyword, Page: 1}); debugErr != nil {
 		t.Logf("captured search error: %v", debugErr)
@@ -393,12 +393,11 @@ func TestRealSourceSingleDebug(t *testing.T) {
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(src.SearchURL)), "@js:") {
 		scriptText := strings.TrimSpace(src.SearchURL[4:])
-		debugRuntime := script.NewRuntime(script.Policy{Timeout: 10 * time.Second, Stage: "e2e-search-debug", Fetcher: httpFetcher, SourceKey: src.BookSourceURL, BaseURL: src.BookSourceURL, Source: src})
+		debugRuntime := script.NewRuntime(script.Policy{Timeout: 10 * time.Second, Fetcher: httpFetcher, SourceKey: src.BookSourceURL, BaseURL: src.BookSourceURL, Source: src})
 		rawURLValue, evalErr := debugRuntime.EvalWithBindings(ctx, scriptText, script.Bindings{
-			"key":      keyword,
-			"page":     1,
-			"source":   script.SourceBindings(src),
-			"__source": src,
+			"key":    keyword,
+			"page":   1,
+			"source": src,
 		})
 		if evalErr != nil {
 			t.Logf("raw searchUrl eval error: %v", evalErr)
@@ -642,14 +641,13 @@ func extractDownloadChapterURLFromContentRule(ctx context.Context, httpFetcher *
 		return "", nil
 	}
 	scriptText = strings.Replace(scriptText, target, "url", 1)
-	runtime := script.NewRuntime(script.Policy{Timeout: 10 * time.Second, Stage: "e2e-content-debug", Fetcher: httpFetcher})
+	runtime := script.NewRuntime(script.Policy{Timeout: 10 * time.Second, Fetcher: httpFetcher})
 	value, err := runtime.EvalWithBindings(ctx, scriptText, script.Bindings{
-		"result":   "",
-		"baseUrl":  baseURL,
-		"source":   script.SourceBindings(src),
-		"__source": src,
-		"book":     &b,
-		"chapter":  chapter,
+		"result":  "",
+		"baseUrl": baseURL,
+		"source":  src,
+		"book":    &b,
+		"chapter": chapter,
 	})
 	if err != nil {
 		return "", err

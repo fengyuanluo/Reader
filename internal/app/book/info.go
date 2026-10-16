@@ -33,6 +33,7 @@ func NewInfoService(books book.BookRepository, fetcher fetch.Fetcher, scriptRunt
 }
 
 func (s *InfoService) RefreshInfo(ctx context.Context, input InfoInput) (book.Book, error) {
+	ctx = script.WithStage(ctx, "info")
 	src := input.Source
 	if src == nil || src.RuleBookInfo.Value == nil {
 		return book.Book{}, ErrBookInfoRuleMissing
@@ -87,7 +88,7 @@ func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseUR
 		SourceURL:   src.BookSourceURL,
 		Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, book: b, src: body},
 		Book:        b,
-		Source:      script.SourceBindings(src),
+		Source:      scriptRuntime.SourceBindings(ctx, src),
 	})
 	analyzer.LoadVariables(b.Variable)
 	var content any = body
@@ -148,6 +149,7 @@ func parseInfo(ctx context.Context, src *source.BookSource, b *book.Book, baseUR
 }
 
 func PreviewSearchBookFromInfo(ctx context.Context, src *source.BookSource, redirectURL string, body string, seed book.SearchBook, scriptRuntime *script.Runtime) (book.SearchBook, error) {
+	ctx = script.WithStage(ctx, "info")
 	b := seed.ToBook()
 	if b.BookURL == "" {
 		b.BookURL = redirectURL
@@ -193,11 +195,10 @@ func (s scriptAdapter) Eval(ctx context.Context, scriptText string, input any) (
 		return nil, ruleinfra.ErrScriptUnavailable
 	}
 	return s.runtime.EvalWithBindings(ctx, scriptText, script.Bindings{
-		"result":   input,
-		"src":      s.src,
-		"baseUrl":  s.baseURL,
-		"source":   script.SourceBindings(s.source),
-		"__source": s.source,
-		"book":     s.book,
+		"result":  input,
+		"src":     s.src,
+		"baseUrl": s.baseURL,
+		"source":  s.source,
+		"book":    s.book,
 	})
 }

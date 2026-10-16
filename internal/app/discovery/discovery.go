@@ -61,6 +61,7 @@ func NewService(repo source.BookSourceRepository, fetcher fetch.Fetcher, scriptR
 }
 
 func (s *Service) Categories(ctx context.Context, sourceID string) ([]Category, error) {
+	ctx = script.WithStage(ctx, "discovery")
 	src, err := s.repo.FindByID(ctx, sourceID)
 	if err != nil {
 		return nil, err
@@ -69,6 +70,7 @@ func (s *Service) Categories(ctx context.Context, sourceID string) ([]Category, 
 }
 
 func (s *Service) Discover(ctx context.Context, input Input) (Result, error) {
+	ctx = script.WithStage(ctx, "discovery")
 	sources, err := s.resolveSources(ctx, input)
 	if err != nil {
 		return Result{}, err
@@ -177,7 +179,7 @@ func (s *Service) categoriesForSource(ctx context.Context, src *source.BookSourc
 		} else if end := strings.LastIndex(strings.ToLower(raw), "</js>"); end > 4 {
 			scriptText = raw[4:end]
 		}
-		value, err := s.script.EvalWithBindings(ctx, scriptText, script.Bindings{"source": script.SourceBindings(src), "__source": src})
+		value, err := s.script.EvalWithBindings(ctx, scriptText, script.Bindings{"source": src})
 		if err != nil {
 			return nil, err
 		}
@@ -190,31 +192,31 @@ func (s *Service) categoriesForSource(ctx context.Context, src *source.BookSourc
 		}
 		if err := json.Unmarshal([]byte(raw), &values); err != nil {
 			return nil, err
-			}
-			out := make([]Category, 0, len(values))
-			for _, value := range values {
-				if strings.TrimSpace(value.Title) == "" && strings.TrimSpace(value.URL) == "" {
-					continue
-			}
-					out = append(out, Category{Title: strings.TrimSpace(value.Title), URL: strings.TrimSpace(value.URL)})
-				}
-			s.storeCategoryCache(src, strings.TrimSpace(src.ExploreURL), out)
-			return out, nil
 		}
-		parts := splitExploreKinds(raw)
-		out := make([]Category, 0, len(parts))
+		out := make([]Category, 0, len(values))
+		for _, value := range values {
+			if strings.TrimSpace(value.Title) == "" && strings.TrimSpace(value.URL) == "" {
+				continue
+			}
+			out = append(out, Category{Title: strings.TrimSpace(value.Title), URL: strings.TrimSpace(value.URL)})
+		}
+		s.storeCategoryCache(src, strings.TrimSpace(src.ExploreURL), out)
+		return out, nil
+	}
+	parts := splitExploreKinds(raw)
+	out := make([]Category, 0, len(parts))
 	for _, part := range parts {
 		cfg := strings.SplitN(part, "::", 2)
 		category := Category{Title: strings.TrimSpace(cfg[0])}
 		if len(cfg) > 1 {
 			category.URL = strings.TrimSpace(cfg[1])
 		}
-			if category.Title != "" || category.URL != "" {
-				out = append(out, category)
-			}
+		if category.Title != "" || category.URL != "" {
+			out = append(out, category)
 		}
-		s.storeCategoryCache(src, strings.TrimSpace(src.ExploreURL), out)
-		return out, nil
+	}
+	s.storeCategoryCache(src, strings.TrimSpace(src.ExploreURL), out)
+	return out, nil
 }
 
 func listRuleForSource(src *source.BookSource) (rule.SearchRule, error) {
@@ -241,68 +243,68 @@ func listRuleForSource(src *source.BookSource) (rule.SearchRule, error) {
 
 func parseBookList(ctx context.Context, src *source.BookSource, listRule rule.SearchRule, redirectURL string, body string, scriptRuntime *script.Runtime) ([]book.SearchBook, error) {
 	ruleText, reverse := normalizeDiscoveryListRule(listRule.BookList)
-		analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
+	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
+		RedirectURL: redirectURL,
+		SourceURL:   src.BookSourceURL,
+		Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, src: body},
+		Source:      scriptRuntime.SourceBindings(ctx, src),
+	})
+	elements, err := analyzer.GetElements(ctx, ruleText, body)
+	if err != nil {
+		return nil, err
+	}
+	out := []book.SearchBook{}
+	seen := map[string]struct{}{}
+	baseVars := analyzer.Variables()
+	for _, element := range elements {
+		searchBook := book.SearchBook{
+			Origin:      src.BookSourceURL,
+			OriginName:  src.BookSourceName,
+			Type:        src.BookSourceType,
+			OriginOrder: src.CustomOrder,
+			Origins:     []string{src.BookSourceURL},
+			Variable:    encodeDiscoveryVariables(baseVars),
+		}
+		itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
 			RedirectURL: redirectURL,
 			SourceURL:   src.BookSourceURL,
-			Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, src: body},
-			Source:      script.SourceBindings(src),
+			Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, src: body, book: &searchBook},
+			Book:        &searchBook,
+			Source:      scriptRuntime.SourceBindings(ctx, src),
 		})
-		elements, err := analyzer.GetElements(ctx, ruleText, body)
-		if err != nil {
-			return nil, err
+		itemAnalyzer.SetVariables(baseVars)
+		name, _ := itemAnalyzer.GetString(ctx, listRule.Name, element)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
 		}
-		out := []book.SearchBook{}
-		seen := map[string]struct{}{}
-		baseVars := analyzer.Variables()
-		for _, element := range elements {
-			searchBook := book.SearchBook{
-				Origin:      src.BookSourceURL,
-				OriginName:  src.BookSourceName,
-				Type:        src.BookSourceType,
-				OriginOrder: src.CustomOrder,
-				Origins:     []string{src.BookSourceURL},
-				Variable:    encodeDiscoveryVariables(baseVars),
-			}
-			itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
-				RedirectURL: redirectURL,
-				SourceURL:   src.BookSourceURL,
-				Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, src: body, book: &searchBook},
-				Book:        &searchBook,
-				Source:      script.SourceBindings(src),
-			})
-			itemAnalyzer.SetVariables(baseVars)
-			name, _ := itemAnalyzer.GetString(ctx, listRule.Name, element)
-			name = strings.TrimSpace(name)
-			if name == "" {
-				continue
-			}
-			author, _ := itemAnalyzer.GetString(ctx, listRule.Author, element)
-			bookURL, _ := itemAnalyzer.GetURL(ctx, listRule.BookURL, element)
-			if bookURL == "" {
-				bookURL = redirectURL
-			}
-			if _, ok := seen[bookURL]; ok {
-				continue
-			}
-			seen[bookURL] = struct{}{}
-			kind, _ := itemAnalyzer.GetString(ctx, listRule.Kind, element)
-			intro, _ := itemAnalyzer.GetString(ctx, listRule.Intro, element)
-			cover, _ := itemAnalyzer.GetURL(ctx, listRule.CoverURL, element)
-			wordCount, _ := itemAnalyzer.GetString(ctx, listRule.WordCount, element)
-			lastChapter, _ := itemAnalyzer.GetString(ctx, listRule.LastChapter, element)
-			searchBook.BookURL = bookURL
-			searchBook.Name = name
-			searchBook.Author = strings.TrimSpace(author)
-			searchBook.Kind = strings.TrimSpace(kind)
-			searchBook.CoverURL = cover
-			searchBook.Intro = strings.TrimSpace(intro)
-			searchBook.WordCount = strings.TrimSpace(wordCount)
-			searchBook.LatestChapterTitle = strings.TrimSpace(lastChapter)
-			if variable := itemAnalyzer.VariablesJSON(); variable != "" {
-				searchBook.Variable = variable
-			}
-			out = append(out, searchBook)
+		author, _ := itemAnalyzer.GetString(ctx, listRule.Author, element)
+		bookURL, _ := itemAnalyzer.GetURL(ctx, listRule.BookURL, element)
+		if bookURL == "" {
+			bookURL = redirectURL
 		}
+		if _, ok := seen[bookURL]; ok {
+			continue
+		}
+		seen[bookURL] = struct{}{}
+		kind, _ := itemAnalyzer.GetString(ctx, listRule.Kind, element)
+		intro, _ := itemAnalyzer.GetString(ctx, listRule.Intro, element)
+		cover, _ := itemAnalyzer.GetURL(ctx, listRule.CoverURL, element)
+		wordCount, _ := itemAnalyzer.GetString(ctx, listRule.WordCount, element)
+		lastChapter, _ := itemAnalyzer.GetString(ctx, listRule.LastChapter, element)
+		searchBook.BookURL = bookURL
+		searchBook.Name = name
+		searchBook.Author = strings.TrimSpace(author)
+		searchBook.Kind = strings.TrimSpace(kind)
+		searchBook.CoverURL = cover
+		searchBook.Intro = strings.TrimSpace(intro)
+		searchBook.WordCount = strings.TrimSpace(wordCount)
+		searchBook.LatestChapterTitle = strings.TrimSpace(lastChapter)
+		if variable := itemAnalyzer.VariablesJSON(); variable != "" {
+			searchBook.Variable = variable
+		}
+		out = append(out, searchBook)
+	}
 	if reverse {
 		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 			out[i], out[j] = out[j], out[i]
@@ -423,12 +425,11 @@ func (s scriptAdapter) Eval(ctx context.Context, scriptText string, input any) (
 		return nil, ruleinfra.ErrScriptUnavailable
 	}
 	return s.runtime.EvalWithBindings(ctx, scriptText, script.Bindings{
-		"result":   input,
-		"src":      s.src,
-		"baseUrl":  s.baseURL,
-		"source":   script.SourceBindings(s.source),
-		"__source": s.source,
-		"book":     s.book,
+		"result":  input,
+		"src":     s.src,
+		"baseUrl": s.baseURL,
+		"source":  s.source,
+		"book":    s.book,
 	})
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,7 +42,7 @@ func TestScriptIntegrationMergesLoginHeaderCompatState(t *testing.T) {
 		BookSourceURL: "https://source.example.test/root",
 		Header:        `{"User-Agent":"Reader"}`,
 	}
-	if _, err := runtime.EvalWithBindings(context.Background(), `source.putLoginHeader('{"Authorization":"Bearer ok","Cookie":"sid=1"}')`, script.Bindings{"source": script.SourceBindings(src), "__source": src}); err != nil {
+	if _, err := runtime.EvalWithBindings(context.Background(), `source.putLoginHeader('{"Authorization":"Bearer ok","Cookie":"sid=1"}')`, script.Bindings{"source": src}); err != nil {
 		t.Fatalf("seed login header error = %v", err)
 	}
 	integration := NewScriptIntegration(runtime)
@@ -55,7 +56,7 @@ func TestScriptIntegrationMergesLoginHeaderCompatState(t *testing.T) {
 }
 
 func TestScriptIntegrationLoginCheckModifiesBody(t *testing.T) {
-	integration := NewScriptIntegration(script.NewRuntime(script.Policy{Timeout: time.Second, Stage: "login_check_js"}))
+	integration := NewScriptIntegration(script.NewRuntime(script.Policy{Timeout: time.Second}))
 	src := &domainsource.BookSource{LoginCheckJS: `result.replace("old", "new")`}
 	resp := &fetch.Response{StatusCode: 200, Body: []byte("old body")}
 
@@ -69,7 +70,7 @@ func TestScriptIntegrationLoginCheckModifiesBody(t *testing.T) {
 }
 
 func TestScriptIntegrationLoginCheckReturnsError(t *testing.T) {
-	integration := NewScriptIntegration(script.NewRuntime(script.Policy{Timeout: time.Second, Stage: "login_check_js"}))
+	integration := NewScriptIntegration(script.NewRuntime(script.Policy{Timeout: time.Second}))
 	src := &domainsource.BookSource{LoginCheckJS: `({error:"need login"})`}
 	resp := &fetch.Response{StatusCode: 200, Body: []byte("body")}
 
@@ -80,12 +81,15 @@ func TestScriptIntegrationLoginCheckReturnsError(t *testing.T) {
 }
 
 func TestScriptIntegrationLoginCheckTimeout(t *testing.T) {
-	integration := NewScriptIntegration(script.NewRuntime(script.Policy{Timeout: 10 * time.Millisecond, Stage: "login_check_js"}))
-	src := &domainsource.BookSource{LoginCheckJS: `while (true) {}`}
+	integration := NewScriptIntegration(script.NewRuntime(script.Policy{Timeout: 10 * time.Millisecond}))
+	src := &domainsource.BookSource{SourceID: "src-login", LoginCheckJS: `while (true) {}`}
 	resp := &fetch.Response{StatusCode: 200, Body: []byte("body")}
 
-	_, err := integration.LoginCheck(context.Background(), src, resp)
+	_, err := integration.LoginCheck(script.WithStage(context.Background(), "search"), src, resp)
 	if !errors.Is(err, script.ErrScriptTimeout) {
 		t.Fatalf("error = %v, want ErrScriptTimeout", err)
+	}
+	if !strings.Contains(err.Error(), "stage=search.login_check_js") || !strings.Contains(err.Error(), "source=src-login") {
+		t.Fatalf("error = %v, want caller stage and source id", err)
 	}
 }

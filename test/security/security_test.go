@@ -96,7 +96,7 @@ func TestFetcherIgnoresEnvironmentProxy(t *testing.T) {
 }
 
 func TestScriptInfiniteLoopTimesOut(t *testing.T) {
-	runtime := script.NewRuntime(script.Policy{Timeout: 10 * time.Millisecond, Stage: "security"})
+	runtime := script.NewRuntime(script.Policy{Timeout: 10 * time.Millisecond})
 
 	_, err := runtime.Eval(context.Background(), `while (true) {}`, nil)
 	if !errors.Is(err, script.ErrScriptTimeout) {

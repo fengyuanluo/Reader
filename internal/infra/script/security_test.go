@@ -9,8 +9,8 @@ import (
 )
 
 func TestRuntimeInterruptsInfiniteLoop(t *testing.T) {
-	runtime := NewRuntime(Policy{Timeout: 10 * time.Millisecond, Stage: "rule_js"})
-	_, err := runtime.Eval(context.Background(), `while (true) {}`, nil)
+	runtime := NewRuntime(Policy{Timeout: 10 * time.Millisecond})
+	_, err := runtime.Eval(WithStage(context.Background(), "rule_js"), `while (true) {}`, nil)
 	if !errors.Is(err, ErrScriptTimeout) {
 		t.Fatalf("error = %v, want ErrScriptTimeout", err)
 	}
@@ -54,8 +54,8 @@ func TestRuntimeSafeBindingsLogWithoutLeakingSecrets(t *testing.T) {
 }
 
 func TestRuntimeErrorIsRedacted(t *testing.T) {
-	runtime := NewRuntime(Policy{Stage: "login_check_js"})
-	_, err := runtime.Eval(context.Background(), `throw new Error("Set-Cookie: sid=secret")`, nil)
+	runtime := NewRuntime(Policy{})
+	_, err := runtime.Eval(WithStage(context.Background(), "login_check_js"), `throw new Error("Set-Cookie: sid=secret")`, nil)
 	if !errors.Is(err, ErrScriptFailed) {
 		t.Fatalf("error = %v, want ErrScriptFailed", err)
 	}

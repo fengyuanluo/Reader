@@ -67,12 +67,12 @@ func (b SearchBook) ToBook() Book {
 		Intro:              b.Intro,
 		Type:               b.Type,
 		WordCount:          b.WordCount,
-			LatestChapterTitle: b.LatestChapterTitle,
-			OriginOrder:        b.OriginOrder,
-			Variable:           b.Variable,
-			InfoHTML:           b.InfoHTML,
-			TocHTML:            b.TocHTML,
-		}
+		LatestChapterTitle: b.LatestChapterTitle,
+		OriginOrder:        b.OriginOrder,
+		Variable:           b.Variable,
+		InfoHTML:           b.InfoHTML,
+		TocHTML:            b.TocHTML,
+	}
 }
 
 type BookChapter struct {

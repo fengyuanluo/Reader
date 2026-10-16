@@ -235,7 +235,9 @@ func (r *fakeImageSourceRepo) UpdateEnabled(ctx context.Context, id string, enab
 func (r *fakeImageSourceRepo) UpdateExploreEnabled(ctx context.Context, id string, enabled bool) error {
 	return nil
 }
-func (r *fakeImageSourceRepo) Reorder(ctx context.Context, orders []source.SourceOrder) error { return nil }
+func (r *fakeImageSourceRepo) Reorder(ctx context.Context, orders []source.SourceOrder) error {
+	return nil
+}
 
 type fakeImageBookRepo struct {
 	byID map[string]*book.Book

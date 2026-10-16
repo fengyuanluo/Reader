@@ -28,10 +28,11 @@ func (s *ScriptIntegration) HeaderMap(ctx context.Context, src *domainsource.Boo
 }
 
 func (s *ScriptIntegration) HeaderMapWithBindings(ctx context.Context, src *domainsource.BookSource, extra script.Bindings) (map[string]string, error) {
+	ctx = script.WithSubStage(ctx, "header_js")
 	header := strings.TrimSpace(src.Header)
 	loginHeaders := map[string]string{}
 	if src != nil {
-		if raw, ok := script.SourceBindings(src)["getLoginHeader"].(func() string); ok {
+		if raw, ok := s.runtime.SourceBindings(ctx, src)["getLoginHeader"].(func() string); ok {
 			if parsed, err := parseHeaderJSON(raw()); err == nil {
 				loginHeaders = parsed
 			}
@@ -52,16 +53,16 @@ func (s *ScriptIntegration) HeaderMapWithBindings(ctx context.Context, src *doma
 		if err != nil {
 			return nil, err
 		}
-			headers, err := parseHeaderJSON(value)
-			if err != nil {
-				return nil, err
-			}
-			for key, value := range loginHeaders {
-				headers[key] = value
-			}
-			return headers, nil
+		headers, err := parseHeaderJSON(value)
+		if err != nil {
+			return nil, err
 		}
-		if strings.HasPrefix(strings.ToLower(header), "<js>") && strings.HasSuffix(strings.ToLower(header), "</js>") {
+		for key, value := range loginHeaders {
+			headers[key] = value
+		}
+		return headers, nil
+	}
+	if strings.HasPrefix(strings.ToLower(header), "<js>") && strings.HasSuffix(strings.ToLower(header), "</js>") {
 		if s.runtime == nil {
 			return map[string]string{}, nil
 		}
@@ -69,15 +70,15 @@ func (s *ScriptIntegration) HeaderMapWithBindings(ctx context.Context, src *doma
 		if err != nil {
 			return nil, err
 		}
-			headers, err := parseHeaderJSON(value)
-			if err != nil {
-				return nil, err
-			}
-			for key, value := range loginHeaders {
-				headers[key] = value
-			}
-			return headers, nil
+		headers, err := parseHeaderJSON(value)
+		if err != nil {
+			return nil, err
 		}
+		for key, value := range loginHeaders {
+			headers[key] = value
+		}
+		return headers, nil
+	}
 	headers, err := parseHeaderJSON(header)
 	if err != nil {
 		return nil, err
@@ -89,14 +90,14 @@ func (s *ScriptIntegration) HeaderMapWithBindings(ctx context.Context, src *doma
 }
 
 func (s *ScriptIntegration) LoginCheck(ctx context.Context, src *domainsource.BookSource, resp *fetch.Response) (*fetch.Response, error) {
+	ctx = script.WithSubStage(ctx, "login_check_js")
 	checkJS := strings.TrimSpace(src.LoginCheckJS)
 	if checkJS == "" {
 		return resp, nil
 	}
 	value, err := s.runtime.EvalWithBindings(ctx, checkJS, script.Bindings{
-		"source":   script.SourceBindings(src),
-		"__source": src,
-		"result":   string(resp.Body),
+		"source": src,
+		"result": string(resp.Body),
 		"response": map[string]any{
 			"statusCode": resp.StatusCode,
 			"body":       string(resp.Body),
@@ -126,9 +127,8 @@ func (s *ScriptIntegration) LoginCheck(ctx context.Context, src *domainsource.Bo
 
 func sourceScriptBindings(src *domainsource.BookSource) script.Bindings {
 	return script.Bindings{
-		"source":   script.SourceBindings(src),
-		"__source": src,
-		"baseUrl":  sourceBaseURL(src),
+		"source":  src,
+		"baseUrl": sourceBaseURL(src),
 	}
 }
 
