@@ -1,0 +1,77 @@
+name: Prerelease (rolling)
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: prerelease
+  RELEASE_TITLE: Prerelease (rolling)
+
+concurrency:
+  group: prerelease-rolling
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            asset: reader-linux-amd64
+          - goarch: arm64
+            asset: reader-linux-arm64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build ${{ matrix.asset }}
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.asset }} ./cmd/reader
+      - name: Upload ${{ matrix.asset }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Refresh rolling pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -f dist/reader-linux-amd64
+          test -f dist/reader-linux-arm64
+          gh release delete "$RELEASE_TAG" --yes --cleanup-tag || true
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$RELEASE_TAG" || true
+          gh release create "$RELEASE_TAG" \
+            --prerelease \
+            --title "$RELEASE_TITLE" \
+            --target "$GITHUB_SHA" \
+            --notes "滚动预发布：由 master $GITHUB_SHA 构建。资产为 linux/amd64 与 linux/arm64 静态二进制（CGO_ENABLED=0）。每次推送刷新，仅保留这一份。" \
+            dist/reader-linux-amd64 \
+            dist/reader-linux-arm64
