@@ -92,6 +92,12 @@ func (s *BookSource) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*s = BookSource(decoded)
+	return s.ApplyLegadoDefaults(data)
+}
+
+// ApplyLegadoDefaults 为 JSON 中缺省的字段套用 Legado 默认值。
+// HTTP 层从 OpenAPI DTO 逐字段构造书源时同样需要它：只有 JSON 原文才知道字段是否缺省。
+func (s *BookSource) ApplyLegadoDefaults(data []byte) error {
 	present := map[string]json.RawMessage{}
 	if err := json.Unmarshal(data, &present); err != nil {
 		return err

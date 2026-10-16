@@ -61,6 +61,11 @@ func bookSourceFromDTO(dto generated.BookSource, raw json.RawMessage) (*source.B
 	}
 	// 保留请求体原文（含 spec 未声明的 Legado 扩展字段），GET/PATCH 回写时以它为底（R-020）。
 	src.RawJSON = append(json.RawMessage(nil), raw...)
+	// DTO 无法区分“未提供”与“显式 false”，缺省的 enabled/enabledExplore/enabledCookieJar/respondTime
+	// 按 Legado BookSource 默认值补齐，与导入路径保持一致。
+	if err := src.ApplyLegadoDefaults(raw); err != nil {
+		return nil, err
+	}
 	if err := src.Normalize(); err != nil {
 		return nil, err
 	}
