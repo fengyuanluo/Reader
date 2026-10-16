@@ -1,6 +1,7 @@
 package sourceapp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,26 @@ const (
 	ImportStatusSkipped ImportStatus = "skipped"
 	ImportStatusFailed  ImportStatus = "failed"
 )
+
+// 导入更新策略，取值与 OpenAPI ImportOptions.updatePolicy 枚举一致；空串等同 lastUpdateTime。
+const (
+	UpdatePolicyLastUpdateTime = "lastUpdateTime"
+	UpdatePolicyAlways         = "always"
+	UpdatePolicySkipExisting   = "skipExisting"
+)
+
+// ValidUpdatePolicy 判断更新策略是否合法（空串视为默认 lastUpdateTime）。
+func ValidUpdatePolicy(policy string) bool {
+	switch policy {
+	case "", UpdatePolicyLastUpdateTime, UpdatePolicyAlways, UpdatePolicySkipExisting:
+		return true
+	default:
+		return false
+	}
+}
+
+// utf8BOM 是 Windows 工具导出 JSON 时常带的 UTF-8 字节序标记。
+var utf8BOM = []byte("\xef\xbb\xbf")
 
 type ImportInput struct {
 	Payload   []byte
@@ -74,7 +95,8 @@ func (i *Importer) Import(ctx context.Context, input ImportInput) (*ImportResult
 		return i.importSourceURLs(ctx, []string{input.RemoteURL}, input.Options)
 	}
 	var raw json.RawMessage
-	if err := json.Unmarshal(input.Payload, &raw); err != nil {
+	// 与 Legado 导入一致容忍开头 BOM；远程拉取的内容递归进入本函数，同样覆盖。
+	if err := json.Unmarshal(bytes.TrimPrefix(input.Payload, utf8BOM), &raw); err != nil {
 		return nil, err
 	}
 	if len(raw) == 0 {
@@ -212,9 +234,9 @@ func (i *Importer) importOne(ctx context.Context, result *ImportResult, src *sou
 
 func shouldSkip(existing, incoming *source.BookSource, policy string) bool {
 	switch policy {
-	case "always":
+	case UpdatePolicyAlways:
 		return false
-	case "skipExisting":
+	case UpdatePolicySkipExisting:
 		return true
 	default:
 		return existing.LastUpdateTime >= incoming.LastUpdateTime

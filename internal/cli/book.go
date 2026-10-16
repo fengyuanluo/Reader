@@ -1,59 +1,76 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"strconv"
 
-	"reader/internal/bootstrap"
 	"reader/internal/domain/book"
 )
 
+const bookUsageText = `usage: reader book <subcommand> [args]
+
+subcommands:
+  add --source <sourceId> --url <bookUrl> [--name <n>] [--author <a>] [--no-refresh] [--json]
+  list [--page 1] [--page-size 50] [--json]
+  info <bookId> [--json]
+  refresh <bookId> [--json]
+  rm <bookId> [--json]
+
+run "reader book <subcommand> --help" to list subcommand flags.
+`
+
 // runBook 实现 `reader book add|list|info|refresh|rm`。
-func runBook(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runBook(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "error: book requires a subcommand: add|list|info|refresh|rm")
+		fmt.Fprint(stderr, "error: book requires a subcommand\n\n"+bookUsageText)
 		return 1
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "add":
-		return runBookAdd(rt, rest, stdout, stderr)
+		return runBookAdd(env, rest, stdout, stderr)
 	case "list":
-		return runBookList(rt, rest, stdout, stderr)
+		return runBookList(env, rest, stdout, stderr)
 	case "info":
-		return runBookInfo(rt, rest, stdout, stderr)
+		return runBookInfo(env, rest, stdout, stderr)
 	case "refresh":
-		return runBookRefresh(rt, rest, stdout, stderr)
+		return runBookRefresh(env, rest, stdout, stderr)
 	case "rm":
-		return runBookRemove(rt, rest, stdout, stderr)
+		return runBookRemove(env, rest, stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "error: unknown book subcommand %q\n", sub)
+		if isHelpArg(sub) {
+			fmt.Fprint(stdout, bookUsageText)
+			return 0
+		}
+		fmt.Fprintf(stderr, "error: unknown book subcommand %q\n\n%s", sub, bookUsageText)
 		return 1
 	}
 }
 
-func runBookAdd(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runBookAdd(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("book add", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	sourceID := fs.String("source", "", "book source id (from search or source list)")
 	bookURL := fs.String("url", "", "book url (bookUrl from search)")
 	name := fs.String("name", "", "book name (refreshed later by default)")
 	author := fs.String("author", "", "book author")
 	noRefresh := fs.Bool("no-refresh", false, "skip info refresh after adding")
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "book add --source <sourceId> --url <bookUrl> [flags]", args, stdout, stderr); done {
+		return code
 	}
 	if *sourceID == "" || *bookURL == "" {
 		fmt.Fprintln(stderr, "error: book add requires --source <sourceId> and --url <bookUrl>")
 		return 1
 	}
 
-	ctx := context.Background()
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
+	ctx := env.ctx
 	src, err := rt.SourceRepo.FindByID(ctx, *sourceID)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: source %s: %v\n", *sourceID, err)
@@ -85,10 +102,10 @@ func runBookAdd(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) 
 	}
 	if *asJSON {
 		data, err := json.MarshalIndent(struct {
-			BookID       string `json:"bookId"`
-			Name         string `json:"name"`
-			Author       string `json:"author"`
-			OriginName   string `json:"originName"`
+			BookID        string `json:"bookId"`
+			Name          string `json:"name"`
+			Author        string `json:"author"`
+			OriginName    string `json:"originName"`
 			LatestChapter string `json:"latestChapterTitle"`
 		}{BookID: bookID, Name: saved.Name, Author: saved.Author, OriginName: saved.OriginName, LatestChapter: saved.LatestChapterTitle}, "", "  ")
 		if err != nil {
@@ -102,16 +119,19 @@ func runBookAdd(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) 
 	return 0
 }
 
-func runBookList(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runBookList(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("book list", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	page := fs.Int("page", 1, "page number (1-based)")
 	pageSize := fs.Int("page-size", 50, "items per page")
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "book list [flags]", args, stdout, stderr); done {
+		return code
 	}
-	books, _, err := rt.Books.List(context.Background(), book.BookFilter{Page: *page, PageSize: *pageSize})
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
+	books, _, err := rt.Books.List(env.ctx, book.BookFilter{Page: *page, PageSize: *pageSize})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
@@ -155,18 +175,21 @@ func runBookList(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer)
 	return 0
 }
 
-func runBookInfo(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runBookInfo(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("book info", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "book info <bookId> [flags]", args, stdout, stderr); done {
+		return code
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(stderr, "error: book info requires exactly one <bookId> argument")
 		return 1
 	}
-	b, err := rt.Books.Get(context.Background(), fs.Arg(0))
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
+	b, err := rt.Books.Get(env.ctx, fs.Arg(0))
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
@@ -190,18 +213,21 @@ func runBookInfo(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer)
 	return 0
 }
 
-func runBookRefresh(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runBookRefresh(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("book refresh", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "book refresh <bookId> [flags]", args, stdout, stderr); done {
+		return code
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(stderr, "error: book refresh requires exactly one <bookId> argument")
 		return 1
 	}
-	ctx := context.Background()
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
+	ctx := env.ctx
 	id := fs.Arg(0)
 	refreshed, err := rt.Books.RefreshInfo(ctx, id)
 	if err != nil {
@@ -215,10 +241,10 @@ func runBookRefresh(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writ
 	}
 	if *asJSON {
 		data, err := json.MarshalIndent(struct {
-			BookID       string `json:"bookId"`
-			Name         string `json:"name"`
+			BookID        string `json:"bookId"`
+			Name          string `json:"name"`
 			LatestChapter string `json:"latestChapterTitle"`
-			Chapters     int    `json:"chapters"`
+			Chapters      int    `json:"chapters"`
 		}{BookID: id, Name: refreshed.Name, LatestChapter: refreshed.LatestChapterTitle, Chapters: len(chapters)}, "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "error: encode json: %v\n", err)
@@ -231,19 +257,22 @@ func runBookRefresh(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writ
 	return 0
 }
 
-func runBookRemove(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runBookRemove(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("book rm", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "book rm <bookId> [flags]", args, stdout, stderr); done {
+		return code
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(stderr, "error: book rm requires exactly one <bookId> argument")
 		return 1
 	}
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
 	id := fs.Arg(0)
-	if err := rt.Books.Delete(context.Background(), id); err != nil {
+	if err := rt.Books.Delete(env.ctx, id); err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
 	}
@@ -264,18 +293,21 @@ func runBookRemove(rt *bootstrap.Runtime, args []string, stdout, stderr io.Write
 }
 
 // runToc 实现 `reader toc <bookId>`。
-func runToc(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runToc(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("toc", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "toc <bookId> [flags]", args, stdout, stderr); done {
+		return code
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(stderr, "error: toc requires exactly one <bookId> argument")
 		return 1
 	}
-	ctx := context.Background()
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
+	ctx := env.ctx
 	id := fs.Arg(0)
 	chapters, b, err := rt.Books.ListChapters(ctx, id)
 	if err != nil {
@@ -321,12 +353,11 @@ func runToc(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int 
 }
 
 // runContent 实现 `reader content <bookId> <index>`；文本模式 stdout 只输出正文原文。
-func runContent(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runContent(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("content", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "content <bookId> <index> [flags]", args, stdout, stderr); done {
+		return code
 	}
 	if fs.NArg() != 2 {
 		fmt.Fprintln(stderr, "error: content requires <bookId> <index>")
@@ -337,7 +368,11 @@ func runContent(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) 
 		fmt.Fprintf(stderr, "error: chapter index must be a non-negative integer, got %q\n", fs.Arg(1))
 		return 1
 	}
-	ctx := context.Background()
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
+	ctx := env.ctx
 	id := fs.Arg(0)
 	result, _, err := rt.Content.GetChapterContent(ctx, id, index)
 	if err != nil {

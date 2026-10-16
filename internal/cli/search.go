@@ -1,33 +1,34 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"strings"
 
-	"reader/internal/bootstrap"
 	searchapp "reader/internal/app/search"
 )
 
 // runSearch 实现 `reader search <keyword>`；bookUrl + sourceId 是 book add 的稳定输入。
-func runSearch(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runSearch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	sourceIDs := fs.String("source", "", "comma-separated sourceIds (allows searching disabled sources)")
 	group := fs.String("group", "", "search sources in this group")
 	page := fs.Int("page", 1, "page number (1-based)")
-	limit := fs.Int("limit", 20, "max results printed")
+	limit := fs.Int("limit", 20, "max results printed (>= 1)")
 	precision := fs.Bool("precision", false, "only keep exact keyword matches")
 	concurrency := fs.Int("concurrency", 0, "per-source search concurrency (0 = searcher default)")
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "search <keyword> [flags]", args, stdout, stderr); done {
+		return code
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(stderr, "error: search requires exactly one <keyword> argument")
+		return 1
+	}
+	if *limit < 1 {
+		fmt.Fprintf(stderr, "error: --limit must be >= 1, got %d\n", *limit)
 		return 1
 	}
 	var ids []string
@@ -38,7 +39,11 @@ func runSearch(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) i
 			}
 		}
 	}
-	result, err := rt.Searcher.Search(context.Background(), searchapp.MultiSearchInput{
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
+	result, err := rt.Searcher.Search(env.ctx, searchapp.MultiSearchInput{
 		Keyword:     fs.Arg(0),
 		Page:        *page,
 		SourceIDs:   ids,
@@ -53,7 +58,7 @@ func runSearch(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) i
 	}
 
 	items := result.Items
-	if *limit >= 0 && len(items) > *limit {
+	if len(items) > *limit {
 		items = items[:*limit]
 	}
 
@@ -76,7 +81,7 @@ func runSearch(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) i
 		origin := sb.Origin
 		if _, ok := sourceIDByOrigin[origin]; !ok {
 			sourceIDByOrigin[origin] = ""
-			if src, err := rt.SourceRepo.FindByURL(context.Background(), origin); err == nil && src != nil {
+			if src, err := rt.SourceRepo.FindByURL(env.ctx, origin); err == nil && src != nil {
 				sourceIDByOrigin[origin] = src.SourceID
 			}
 		}

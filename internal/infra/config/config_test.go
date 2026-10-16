@@ -13,8 +13,8 @@ func TestLoadUsesSafeDefaultsInTestEnvironment(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if cfg.Addr != ":8080" {
-		t.Fatalf("Addr = %q, want :8080", cfg.Addr)
+	if cfg.Addr != "127.0.0.1:8080" {
+		t.Fatalf("Addr = %q, want 127.0.0.1:8080", cfg.Addr)
 	}
 	if cfg.Token == "" {
 		t.Fatal("Token is empty in test environment")
@@ -24,9 +24,6 @@ func TestLoadUsesSafeDefaultsInTestEnvironment(t *testing.T) {
 	}
 	if cfg.FetchMaxBodyBytes != 10*1024*1024 {
 		t.Fatalf("FetchMaxBodyBytes = %d, want 10485760", cfg.FetchMaxBodyBytes)
-	}
-	if cfg.RealE2EEnabled {
-		t.Fatal("RealE2EEnabled default = true, want false")
 	}
 }
 
@@ -57,9 +54,6 @@ func TestLoadAcceptsProductionWithTokenAndOverrides(t *testing.T) {
 		"READER_DEBUG_BODY_LIMIT":               "4096",
 		"READER_CONTENT_RESEGMENT":              "true",
 		"READER_CONTENT_CHINESE_CONVERTER_TYPE": "2",
-		"READER_REAL_E2E_ENABLED":               "true",
-		"READER_REAL_E2E_KEYWORD":               "测试",
-		"READER_REAL_E2E_MAX_CANDIDATES":        "5",
 	}))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -85,9 +79,6 @@ func TestLoadAcceptsProductionWithTokenAndOverrides(t *testing.T) {
 	}
 	if !cfg.AllowPrivateNetwork {
 		t.Fatal("AllowPrivateNetwork = false, want true")
-	}
-	if cfg.RealE2EKeyword != "测试" {
-		t.Fatalf("RealE2EKeyword = %q, want 测试", cfg.RealE2EKeyword)
 	}
 	if !cfg.ContentReSegment {
 		t.Fatal("ContentReSegment = false, want true")
@@ -134,5 +125,48 @@ func TestRedactedDoesNotExposeToken(t *testing.T) {
 	}
 	if _, ok := redacted["contentChineseConverterType"]; !ok {
 		t.Fatal("redacted config missing contentChineseConverterType")
+	}
+}
+
+func TestLoadDefaultAddrIsLoopback(t *testing.T) {
+	cfg, err := Load(FromMap(map[string]string{}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Addr != "127.0.0.1:8080" || cfg.Token != "" {
+		t.Fatalf("defaults addr=%q token=%q, want 127.0.0.1:8080 and empty token", cfg.Addr, cfg.Token)
+	}
+	if err := RequireTokenForAddr(cfg.Addr, cfg.Token); err != nil {
+		t.Fatalf("default config must be startable without token: %v", err)
+	}
+}
+
+func TestRequireTokenForAddr(t *testing.T) {
+	tests := []struct {
+		addr    string
+		token   string
+		wantErr bool
+	}{
+		{addr: "127.0.0.1:8080"},
+		{addr: "127.1.2.3:8080"},
+		{addr: "[::1]:8080"},
+		{addr: "localhost:8080"},
+		{addr: "LOCALHOST:1"},
+		{addr: ":8080", wantErr: true},
+		{addr: "0.0.0.0:8080", wantErr: true},
+		{addr: "[::]:8080", wantErr: true},
+		{addr: "192.168.1.2:8080", wantErr: true},
+		{addr: "reader.example:8080", wantErr: true},
+		{addr: "127.0.0.1", wantErr: true},
+		{addr: ":8080", token: "secret"},
+		{addr: "0.0.0.0:8080", token: "secret"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.addr+"/"+tt.token, func(t *testing.T) {
+			err := RequireTokenForAddr(tt.addr, tt.token)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("RequireTokenForAddr(%q, %q) error = %v, wantErr %v", tt.addr, tt.token, err, tt.wantErr)
+			}
+		})
 	}
 }

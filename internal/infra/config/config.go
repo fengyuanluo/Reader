@@ -3,8 +3,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -34,10 +36,6 @@ type Config struct {
 	DebugBodyLimit              int64
 	ContentReSegment            bool
 	ContentChineseConverterType int
-	RealE2EEnabled              bool
-	RealE2ESourceCollection     string
-	RealE2EKeyword              string
-	RealE2EMaxCandidates        int
 }
 
 type Source interface {
@@ -63,7 +61,7 @@ func FromMap(values map[string]string) Source {
 
 func Load(source Source) (Config, error) {
 	cfg := Config{
-		Addr:                        ":8080",
+		Addr:                        "127.0.0.1:8080",
 		DataDir:                     "data",
 		SQLiteDSN:                   "data/reader.db",
 		Env:                         EnvDevelopment,
@@ -79,10 +77,6 @@ func Load(source Source) (Config, error) {
 		DebugBodyLimit:              32 * 1024,
 		ContentReSegment:            false,
 		ContentChineseConverterType: 0,
-		RealE2EEnabled:              false,
-		RealE2ESourceCollection:     "https://shuyuan-api.yiove.com/import/book-source-collection/a8adf570-e115-4b99-87e3-ccaf298ae361",
-		RealE2EKeyword:              "斗破苍穹",
-		RealE2EMaxCandidates:        10,
 	}
 
 	var err error
@@ -136,16 +130,6 @@ func Load(source Source) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.RealE2EEnabled, err = boolValue(source, "READER_REAL_E2E_ENABLED", cfg.RealE2EEnabled)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.RealE2ESourceCollection = stringValue(source, "READER_REAL_E2E_SOURCE_COLLECTION_URL", cfg.RealE2ESourceCollection)
-	cfg.RealE2EKeyword = stringValue(source, "READER_REAL_E2E_KEYWORD", cfg.RealE2EKeyword)
-	cfg.RealE2EMaxCandidates, err = intValue(source, "READER_REAL_E2E_MAX_CANDIDATES", cfg.RealE2EMaxCandidates, 1)
-	if err != nil {
-		return Config{}, err
-	}
 
 	if cfg.Env == EnvTest && cfg.Token == "" {
 		cfg.Token = defaultTokenForTest
@@ -179,11 +163,28 @@ func (cfg Config) Redacted() map[string]any {
 		"debugBodyLimit":              cfg.DebugBodyLimit,
 		"contentReSegment":            cfg.ContentReSegment,
 		"contentChineseConverterType": cfg.ContentChineseConverterType,
-		"realE2EEnabled":              cfg.RealE2EEnabled,
-		"realE2ESourceCollection":     cfg.RealE2ESourceCollection,
-		"realE2EKeyword":              cfg.RealE2EKeyword,
-		"realE2EMaxCandidates":        cfg.RealE2EMaxCandidates,
 	}
+}
+
+// RequireTokenForAddr 校验监听地址与 token 的组合：token 为空时只允许监听回环地址
+// （127.0.0.0/8、::1、localhost），否则拒绝启动。适用于所有环境。
+func RequireTokenForAddr(addr, token string) error {
+	if token != "" {
+		return nil
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil && isLoopbackHost(host) {
+		return nil
+	}
+	return fmt.Errorf("READER_TOKEN is required when listening on non-loopback address %q (listen on 127.0.0.1 or set READER_TOKEN)", addr)
+}
+
+// isLoopbackHost 判断监听 host 是否仅绑定回环；空 host 与 0.0.0.0/:: 绑定全部网卡，不算回环。
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func stringValue(source Source, key string, fallback string) string {

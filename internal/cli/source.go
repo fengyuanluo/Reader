@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,35 +8,48 @@ import (
 	"strconv"
 	"strings"
 
-	"reader/internal/bootstrap"
 	"reader/internal/domain/source"
 )
 
+const sourceUsageText = `usage: reader source <subcommand> [args]
+
+subcommands:
+  list [--keyword <kw>] [--group <g>] [--enabled true|false] [--explore-enabled true|false] [--page 1] [--page-size 50] [--json]
+  show <sourceId> [--json]
+  enable <sourceId> [--json]
+  disable <sourceId> [--json]
+
+run "reader source <subcommand> --help" to list subcommand flags.
+`
+
 // runSource 实现 `reader source list|show|enable|disable`。
-func runSource(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runSource(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "error: source requires a subcommand: list|show|enable|disable")
+		fmt.Fprint(stderr, "error: source requires a subcommand\n\n"+sourceUsageText)
 		return 1
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "list":
-		return runSourceList(rt, rest, stdout, stderr)
+		return runSourceList(env, rest, stdout, stderr)
 	case "show":
-		return runSourceShow(rt, rest, stdout, stderr)
+		return runSourceShow(env, rest, stdout, stderr)
 	case "enable":
-		return runSourceSetEnabled(rt, rest, true, stdout, stderr)
+		return runSourceSetEnabled(env, rest, true, stdout, stderr)
 	case "disable":
-		return runSourceSetEnabled(rt, rest, false, stdout, stderr)
+		return runSourceSetEnabled(env, rest, false, stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "error: unknown source subcommand %q\n", sub)
+		if isHelpArg(sub) {
+			fmt.Fprint(stdout, sourceUsageText)
+			return 0
+		}
+		fmt.Fprintf(stderr, "error: unknown source subcommand %q\n\n%s", sub, sourceUsageText)
 		return 1
 	}
 }
 
-func runSourceList(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runSourceList(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("source list", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	keyword := fs.String("keyword", "", "filter by keyword in id/name/url/group")
 	group := fs.String("group", "", "filter by group")
 	enabled := fs.String("enabled", "", "filter by enabled: true|false")
@@ -45,8 +57,8 @@ func runSourceList(rt *bootstrap.Runtime, args []string, stdout, stderr io.Write
 	page := fs.Int("page", 1, "page number (1-based)")
 	pageSize := fs.Int("page-size", 50, "items per page")
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "source list [flags]", args, stdout, stderr); done {
+		return code
 	}
 	filter := source.BookSourceFilter{
 		Keyword:  *keyword,
@@ -65,20 +77,24 @@ func runSourceList(rt *bootstrap.Runtime, args []string, stdout, stderr io.Write
 	}
 	filter.EnabledExplore = explorePtr
 
-	result, err := rt.Sources.List(context.Background(), filter)
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
+	result, err := rt.Sources.List(env.ctx, filter)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
 	}
 
 	type itemJSON struct {
-		Index         int    `json:"index"`
-		SourceID      string `json:"sourceId"`
-		Name          string `json:"name"`
-		Group         string `json:"group"`
-		Enabled       bool   `json:"enabled"`
-		EnabledExplore bool  `json:"enabledExplore"`
-		HasSearchURL  bool   `json:"hasSearchUrl"`
+		Index          int    `json:"index"`
+		SourceID       string `json:"sourceId"`
+		Name           string `json:"name"`
+		Group          string `json:"group"`
+		Enabled        bool   `json:"enabled"`
+		EnabledExplore bool   `json:"enabledExplore"`
+		HasSearchURL   bool   `json:"hasSearchUrl"`
 	}
 	out := struct {
 		Total int        `json:"total"`
@@ -112,18 +128,21 @@ func runSourceList(rt *bootstrap.Runtime, args []string, stdout, stderr io.Write
 	return 0
 }
 
-func runSourceShow(rt *bootstrap.Runtime, args []string, stdout, stderr io.Writer) int {
+func runSourceShow(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("source show", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "source show <sourceId> [flags]", args, stdout, stderr); done {
+		return code
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(stderr, "error: source show requires exactly one <sourceId> argument")
 		return 1
 	}
-	src, err := rt.Sources.Get(context.Background(), fs.Arg(0))
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
+	src, err := rt.Sources.Get(env.ctx, fs.Arg(0))
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
@@ -147,19 +166,22 @@ func runSourceShow(rt *bootstrap.Runtime, args []string, stdout, stderr io.Write
 	return 0
 }
 
-func runSourceSetEnabled(rt *bootstrap.Runtime, args []string, enabled bool, stdout, stderr io.Writer) int {
+func runSourceSetEnabled(env *cmdEnv, args []string, enabled bool, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("source enable|disable", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "output JSON")
-	if err := ParseArgs(fs, args); err != nil {
-		return 1
+	if code, done := ParseFlags(fs, "source enable|disable <sourceId> [flags]", args, stdout, stderr); done {
+		return code
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(stderr, "error: source enable|disable requires exactly one <sourceId> argument")
 		return 1
 	}
+	rt, code := env.runtime(stderr)
+	if code != 0 {
+		return code
+	}
 	id := fs.Arg(0)
-	src, err := rt.Sources.UpdateEnabled(context.Background(), id, enabled)
+	src, err := rt.Sources.UpdateEnabled(env.ctx, id, enabled)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2

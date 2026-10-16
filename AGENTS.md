@@ -109,8 +109,12 @@ git status --porcelain=v2 --branch
   - `openapi.yaml` 是接口唯一真相源。
   - `oapi-codegen.yaml` 定义生成配置。
   - `examples/` 存放契约示例。
-- `cmd/server/`
-  - 服务装配、配置加载、HTTP server 启动。
+- `cmd/reader/`
+  - 单二进制入口：`serve` 子命令的 HTTP 路由装配、监听与 token 校验、优雅关闭。
+- `internal/cli/`
+  - 非交互 CLI 子命令（import/source/search/book/toc/content/download），直连服务层与 SQLite。
+- `internal/bootstrap/`
+  - 由配置装配运行时（SQLite、迁移、仓储、服务），serve 与 CLI 共用。
 - `internal/api/`
   - `generated/`：生成代码，禁止手改。
   - `handlers/`：HTTP handler、DTO 映射。
@@ -274,7 +278,7 @@ rg --files cmd internal scripts test api docs
 
 ```bash
 go generate ./...
-go test ./...
+go test -race -count=1 ./...
 go vet ./...
 ```
 
