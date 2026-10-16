@@ -7,7 +7,10 @@ type BookFilter struct {
 	PageSize int
 }
 
+// BookProgress 是阅读进度；name/author 是 Legado 用来校验进度所属书籍身份的字段。
 type BookProgress struct {
+	Name            string
+	Author          string
 	DurChapterTitle string
 	DurChapterIndex int
 	DurChapterPos   int

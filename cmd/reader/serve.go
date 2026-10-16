@@ -13,6 +13,7 @@ import (
 	"reader/internal/api/generated"
 	"reader/internal/api/handlers"
 	"reader/internal/api/middleware"
+	sourceapp "reader/internal/app/source"
 	"reader/internal/bootstrap"
 	"reader/internal/cli"
 	"reader/internal/infra/config"
@@ -98,7 +99,7 @@ func newRuntimeServer(cfg config.Config) (*http.Server, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	apiHandler := handlers.NewSourceHandler(rt.Sources).WithImporter(rt.Importer).WithSearcher(rt.Searcher).WithDiscovery(rt.Discovery).WithBooks(rt.Books, rt.Content).WithImages(rt.ImageProxy).WithReplace(rt.Replace).WithDebug(rt.Debug, rt.DebugPublisher).WithCheck(rt.Check)
+	apiHandler := handlers.NewSourceHandler(rt.Sources).WithImporter(rt.Importer).WithLogin(sourceapp.NewLoginService(rt.SourceRepo, sourceapp.NewScriptIntegration(rt.ScriptRuntime))).WithSearcher(rt.Searcher).WithDiscovery(rt.Discovery).WithBooks(rt.Books, rt.Content).WithImages(rt.ImageProxy).WithReplace(rt.Replace).WithDebug(rt.Debug, rt.DebugPublisher).WithCheck(rt.Check)
 	router := chi.NewRouter()
 	generated.HandlerFromMuxWithBaseURL(apiHandler, router, "/api/v1")
 	handler := middleware.Trace(middleware.Auth(cfg.Token)(router))

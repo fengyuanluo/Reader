@@ -94,7 +94,7 @@ func TestMockOnlineSourceFullFlow(t *testing.T) {
 		t.Fatalf("content cache miss: before=%d after=%d", firstContentRequests, mock.contentRequests)
 	}
 
-	progressed, err := env.books.SaveProgress(ctx, bookID, book.BookProgress{DurChapterIndex: 0, DurChapterPos: 12, DurChapterTitle: "第一章", DurChapterTime: 123})
+	progressed, err := env.books.SaveProgress(ctx, bookID, book.BookProgress{Name: saved.Name, Author: saved.Author, DurChapterIndex: 0, DurChapterPos: 12, DurChapterTitle: "第一章", DurChapterTime: 123})
 	if err != nil {
 		t.Fatalf("save progress: %v", err)
 	}

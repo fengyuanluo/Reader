@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"reader/internal/domain/fetch"
@@ -39,6 +40,13 @@ func ValidUpdatePolicy(policy string) bool {
 
 // utf8BOM 是 Windows 工具导出 JSON 时常带的 UTF-8 字节序标记。
 var utf8BOM = []byte("\xef\xbb\xbf")
+
+var (
+	// ErrInvalidImportPayload 标记请求体本身不合法（非 JSON、空 payload、格式不支持），由 handler 映射为 400。
+	ErrInvalidImportPayload = errors.New("invalid import payload")
+	// ErrImportFetcherUnavailable 标记导入链路缺少抓取器（服务装配不完整）。
+	ErrImportFetcherUnavailable = errors.New("fetcher is required for sourceUrls import")
+)
 
 type ImportInput struct {
 	Payload   []byte
@@ -97,10 +105,10 @@ func (i *Importer) Import(ctx context.Context, input ImportInput) (*ImportResult
 	var raw json.RawMessage
 	// 与 Legado 导入一致容忍开头 BOM；远程拉取的内容递归进入本函数，同样覆盖。
 	if err := json.Unmarshal(bytes.TrimPrefix(input.Payload, utf8BOM), &raw); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrInvalidImportPayload, err)
 	}
 	if len(raw) == 0 {
-		return nil, errors.New("empty import payload")
+		return nil, fmt.Errorf("%w: empty payload", ErrInvalidImportPayload)
 	}
 	switch raw[0] {
 	case '{':
@@ -111,13 +119,13 @@ func (i *Importer) Import(ctx context.Context, input ImportInput) (*ImportResult
 	case '[':
 		return i.importArray(ctx, raw, input.Options)
 	default:
-		return nil, errors.New("unsupported import payload")
+		return nil, fmt.Errorf("%w: only BookSource object/array or sourceUrls document are supported", ErrInvalidImportPayload)
 	}
 }
 
 func (i *Importer) importSourceURLs(ctx context.Context, urls []string, options ImportOptions) (*ImportResult, error) {
 	if i.fetcher == nil {
-		return nil, errors.New("fetcher is required for sourceUrls import")
+		return nil, ErrImportFetcherUnavailable
 	}
 	result := &ImportResult{}
 	for _, remoteURL := range urls {

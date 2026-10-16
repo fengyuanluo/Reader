@@ -2,10 +2,16 @@ package bookapp
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"reader/internal/domain/book"
 	"reader/internal/domain/source"
 )
+
+// ErrProgressBookIdentity 表示请求体里的 name/author 与目标书籍不一致（或缺失），
+// 由 handler 映射为 400；spec 把二者标为必填，服务端据此校验进度归属。
+var ErrProgressBookIdentity = errors.New("progress name/author does not match the book")
 
 type Service struct {
 	Books    book.BookRepository
@@ -39,6 +45,16 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 }
 
 func (s *Service) SaveProgress(ctx context.Context, id string, progress book.BookProgress) (*book.Book, error) {
+	b, err := s.Books.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if progress.Name == "" || progress.Author == "" {
+		return nil, fmt.Errorf("%w: name and author are required", ErrProgressBookIdentity)
+	}
+	if progress.Name != b.Name || progress.Author != b.Author {
+		return nil, fmt.Errorf("%w: book is %q/%q", ErrProgressBookIdentity, b.Name, b.Author)
+	}
 	if err := s.Books.SaveProgress(ctx, id, progress); err != nil {
 		return nil, err
 	}

@@ -8,6 +8,8 @@ import (
 
 var ErrInvalidChapterIndex = errors.New("chapter index must be >= 0")
 
+// Book 对齐 Legado Book.kt 的书籍元数据；用户自定义字段（customTag/customCoverUrl/customIntro）与
+// 本地书籍 charset、书架 group/order/canUpdate、检查与同步时间戳都需要能往返 API。
 type Book struct {
 	BookURL            string `json:"bookUrl"`
 	TocURL             string `json:"tocUrl,omitempty"`
@@ -16,13 +18,25 @@ type Book struct {
 	Name               string `json:"name"`
 	Author             string `json:"author"`
 	Kind               string `json:"kind,omitempty"`
+	CustomTag          string `json:"customTag,omitempty"`
 	CoverURL           string `json:"coverUrl,omitempty"`
+	CustomCoverURL     string `json:"customCoverUrl,omitempty"`
 	Intro              string `json:"intro,omitempty"`
+	CustomIntro        string `json:"customIntro,omitempty"`
+	Charset            string `json:"charset,omitempty"`
 	Type               int    `json:"type"`
+	Group              int64  `json:"group"`
 	WordCount          string `json:"wordCount,omitempty"`
 	LatestChapterTitle string `json:"latestChapterTitle,omitempty"`
+	LatestChapterTime  int64  `json:"latestChapterTime,omitempty"`
+	LastCheckTime      int64  `json:"lastCheckTime,omitempty"`
+	LastCheckCount     int    `json:"lastCheckCount,omitempty"`
+	TotalChapterNum    int    `json:"totalChapterNum,omitempty"`
+	CanUpdate          bool   `json:"canUpdate"`
+	Order              int    `json:"order,omitempty"`
 	OriginOrder        int    `json:"originOrder"`
 	Variable           string `json:"variable,omitempty"`
+	SyncTime           int64  `json:"syncTime,omitempty"`
 	DurChapterTitle    string `json:"durChapterTitle,omitempty"`
 	DurChapterIndex    int    `json:"durChapterIndex"`
 	DurChapterPos      int    `json:"durChapterPos"`
@@ -70,8 +84,10 @@ func (b SearchBook) ToBook() Book {
 		LatestChapterTitle: b.LatestChapterTitle,
 		OriginOrder:        b.OriginOrder,
 		Variable:           b.Variable,
-		InfoHTML:           b.InfoHTML,
-		TocHTML:            b.TocHTML,
+		// Legado Book.canUpdate 默认 true（刷新书架时更新书籍信息）。
+		CanUpdate: true,
+		InfoHTML:  b.InfoHTML,
+		TocHTML:   b.TocHTML,
 	}
 }
 

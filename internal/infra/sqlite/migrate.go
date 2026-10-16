@@ -19,6 +19,7 @@ var migrations = []migration{
 	{version: 2, name: "check_task_items.failure_class", apply: addCheckItemFailureClass},
 	{version: 3, name: "drop unused search_books", apply: execSQL(`DROP TABLE IF EXISTS search_books`)},
 	{version: 4, name: "debug_events session index", apply: execSQL(`CREATE INDEX IF NOT EXISTS idx_debug_events_session ON debug_events(session_id, event_id)`)},
+	{version: 5, name: "books legado metadata columns", apply: addBookLegadoColumns},
 }
 
 // Migrate 把数据库升级到最新版本。连接级 PRAGMA（外键、busy_timeout、WAL）由 Open 通过 DSN 设置。
@@ -81,6 +82,38 @@ func addCheckItemFailureClass(ctx context.Context, tx *sql.Tx) error {
 	}
 	_, err := tx.ExecContext(ctx, `ALTER TABLE check_task_items ADD COLUMN failure_class TEXT`)
 	return err
+}
+
+// addBookLegadoColumns 补齐 Legado Book.kt 中需要经 API 往返的书籍字段。
+// latest_chapter_time/total_chapter_num/sync_time 在初始 schema 已存在，这里只补列。
+func addBookLegadoColumns(ctx context.Context, tx *sql.Tx) error {
+	columns := []struct {
+		name string
+		ddl  string
+	}{
+		{"custom_tag", `ALTER TABLE books ADD COLUMN custom_tag TEXT`},
+		{"custom_cover_url", `ALTER TABLE books ADD COLUMN custom_cover_url TEXT`},
+		{"custom_intro", `ALTER TABLE books ADD COLUMN custom_intro TEXT`},
+		{"charset", `ALTER TABLE books ADD COLUMN charset TEXT`},
+		{"book_group", `ALTER TABLE books ADD COLUMN book_group INTEGER NOT NULL DEFAULT 0`},
+		{"last_check_time", `ALTER TABLE books ADD COLUMN last_check_time INTEGER NOT NULL DEFAULT 0`},
+		{"last_check_count", `ALTER TABLE books ADD COLUMN last_check_count INTEGER NOT NULL DEFAULT 0`},
+		{"can_update", `ALTER TABLE books ADD COLUMN can_update INTEGER NOT NULL DEFAULT 1`},
+		{"book_order", `ALTER TABLE books ADD COLUMN book_order INTEGER NOT NULL DEFAULT 0`},
+	}
+	for _, column := range columns {
+		var exists int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('books') WHERE name = ?`, column.name).Scan(&exists); err != nil {
+			return err
+		}
+		if exists > 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, column.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // initialSchema 是版本 1 的建表语句，已发布后不再修改；新结构变更只追加迁移版本。

@@ -3,8 +3,12 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
+	"reflect"
+	"strings"
 
 	"reader/internal/api/generated"
+	"reader/internal/api/middleware"
 	discoveryapp "reader/internal/app/discovery"
 	searchapp "reader/internal/app/search"
 	sourceapp "reader/internal/app/source"
@@ -13,7 +17,7 @@ import (
 	"reader/internal/domain/source"
 )
 
-func bookSourceFromDTO(dto generated.BookSource) (*source.BookSource, error) {
+func bookSourceFromDTO(dto generated.BookSource, raw json.RawMessage) (*source.BookSource, error) {
 	src := &source.BookSource{
 		SourceID:         dto.SourceId,
 		BookSourceURL:    dto.BookSourceUrl,
@@ -51,15 +55,70 @@ func bookSourceFromDTO(dto generated.BookSource) (*source.BookSource, error) {
 		src.Weight = *dto.Weight
 	}
 	if dto.RuleReview != nil {
-		raw, _ := dto.RuleReview.MarshalJSON()
-		src.RuleReview = raw
+		review := dto.RuleReview
+		encoded, _ := review.MarshalJSON()
+		src.RuleReview = encoded
 	}
-	raw, _ := json.Marshal(dto)
-	src.RawJSON = raw
+	// 保留请求体原文（含 spec 未声明的 Legado 扩展字段），GET/PATCH 回写时以它为底（R-020）。
+	src.RawJSON = append(json.RawMessage(nil), raw...)
 	if err := src.Normalize(); err != nil {
 		return nil, err
 	}
 	return src, nil
+}
+
+// writeBookSourceJSON 输出书源 JSON：以持久化的 raw_json 为底叠加当前字段，
+// 让 spec 未声明但 Legado 使用的字段在读取时不被丢弃（R-020）。
+func writeBookSourceJSON(w http.ResponseWriter, r *http.Request, status int, src *source.BookSource) {
+	raw, err := marshalBookSource(src)
+	if err != nil {
+		middleware.WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal error", nil)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(raw)
+}
+
+func marshalBookSource(src *source.BookSource) ([]byte, error) {
+	current, err := json.Marshal(mapBookSource(src))
+	if err != nil {
+		return nil, err
+	}
+	if len(src.RawJSON) == 0 {
+		return current, nil
+	}
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(src.RawJSON, &merged); err != nil {
+		return current, nil
+	}
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(current, &present); err != nil {
+		return current, nil
+	}
+	// 先删掉所有 spec 已声明的键，再写入当前值，避免 raw_json 里的旧值覆盖新状态。
+	for _, name := range bookSourcePropertyNames {
+		delete(merged, name)
+	}
+	for name, value := range present {
+		merged[name] = value
+	}
+	return json.Marshal(merged)
+}
+
+// bookSourcePropertyNames 是 generated.BookSource 的 JSON 字段名集合。
+var bookSourcePropertyNames = bookSourceFieldNames()
+
+func bookSourceFieldNames() []string {
+	typ := reflect.TypeOf(generated.BookSource{})
+	names := make([]string, 0, typ.NumField())
+	for i := range typ.NumField() {
+		name, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func mapBookSource(src *source.BookSource) generated.BookSource {
@@ -229,7 +288,7 @@ func mapSearchBooks(items []book.SearchBook) []generated.SearchBook {
 	return out
 }
 
-func mapSourceWarnings(warnings []searchapp.SourceWarning) []generated.SourceWarning {
+func mapSourceWarnings(warnings []searchapp.SourceWarning, traceID string) []generated.SourceWarning {
 	out := make([]generated.SourceWarning, 0, len(warnings))
 	for _, warning := range warnings {
 		out = append(out, generated.SourceWarning{
@@ -238,12 +297,13 @@ func mapSourceWarnings(warnings []searchapp.SourceWarning) []generated.SourceWar
 			BookSourceName: stringPtr(warning.BookSourceName),
 			Code:           warning.Code,
 			Message:        warning.Message,
+			TraceId:        stringPtr(traceID),
 		})
 	}
 	return out
 }
 
-func mapDiscoveryWarnings(warnings []discoveryapp.Warning) []generated.SourceWarning {
+func mapDiscoveryWarnings(warnings []discoveryapp.Warning, traceID string) []generated.SourceWarning {
 	out := make([]generated.SourceWarning, 0, len(warnings))
 	for _, warning := range warnings {
 		out = append(out, generated.SourceWarning{
@@ -252,6 +312,7 @@ func mapDiscoveryWarnings(warnings []discoveryapp.Warning) []generated.SourceWar
 			BookSourceName: stringPtr(warning.BookSourceName),
 			Code:           warning.Code,
 			Message:        warning.Message,
+			TraceId:        stringPtr(traceID),
 		})
 	}
 	return out
