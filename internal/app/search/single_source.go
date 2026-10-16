@@ -16,6 +16,7 @@ import (
 	domainrule "reader/internal/domain/rule"
 	"reader/internal/domain/source"
 	ruleinfra "reader/internal/infra/rule"
+	ruleregex "reader/internal/infra/rule/regex"
 	urlrule "reader/internal/infra/rule/url"
 	"reader/internal/infra/script"
 )
@@ -61,7 +62,7 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 		}
 	}
 	if src.BookURLPattern != "" {
-		if ok, _ := regexp.MatchString(src.BookURLPattern, resp.URL); ok {
+		if ok, _ := ruleregex.MatchString(src.BookURLPattern, resp.URL); ok {
 			preview, err := bookapp.PreviewSearchBookFromInfo(ctx, src, resp.URL, string(resp.Body), book.SearchBook{
 				BookURL:     resp.URL,
 				Origin:      src.BookSourceURL,
@@ -121,11 +122,9 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 			continue
 		}
 		author, _ := itemAnalyzer.GetString(ctx, rule.Author, item)
-		bookURL := firstNonEmpty(itemAnalyzer.GetStringList(ctx, rule.BookURL, item))
+		bookURL, _ := itemAnalyzer.GetURL(ctx, rule.BookURL, item)
 		if bookURL == "" {
 			bookURL = resp.URL
-		} else if absoluteBookURL := urlrule.Absolute(resp.URL, bookURL); absoluteBookURL != "" {
-			bookURL = absoluteBookURL
 		}
 		if _, ok := seen[bookURL]; ok {
 			continue
@@ -133,7 +132,7 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 		seen[bookURL] = struct{}{}
 		kind, _ := itemAnalyzer.GetString(ctx, rule.Kind, item)
 		intro, _ := itemAnalyzer.GetString(ctx, rule.Intro, item)
-		cover := firstNonEmpty(itemAnalyzer.GetStringList(ctx, rule.CoverURL, item))
+		cover, _ := itemAnalyzer.GetURL(ctx, rule.CoverURL, item)
 		wordCount, _ := itemAnalyzer.GetString(ctx, rule.WordCount, item)
 		lastChapter, _ := itemAnalyzer.GetString(ctx, rule.LastChapter, item)
 		searchBook.BookURL = bookURL
@@ -165,19 +164,6 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 		}
 	}
 	return results, nil
-}
-
-func firstNonEmpty(values []string, err error) string {
-	if err != nil {
-		return ""
-	}
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func buildSearchURL(template string, keyword string, page int) string {

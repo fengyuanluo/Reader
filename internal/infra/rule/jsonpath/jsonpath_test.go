@@ -108,3 +108,53 @@ func TestAdapterReturnsRuleParseFailedForInvalidJSONPath(t *testing.T) {
 		t.Fatalf("error = %v, want ErrRuleParse", err)
 	}
 }
+
+// R-011：在数值/布尔/字符串标量上继续取子路径时容错返回空，而不是 rule_parse_failed。
+func TestAdapterScalarTraversalReturnsEmpty(t *testing.T) {
+	adapter, err := New(`{"x":1,"b":true,"s":"text","n":null}`)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	for _, rule := range []string{"$.x.a", "$.b.a", "$.s.a"} {
+		t.Run(rule, func(t *testing.T) {
+			got, err := adapter.Strings(rule)
+			if err != nil {
+				t.Fatalf("Strings(%q) error = %v", rule, err)
+			}
+			if len(got) != 0 {
+				t.Fatalf("Strings(%q) = %#v, want empty", rule, got)
+			}
+		})
+	}
+}
+
+// R-012：过滤表达式支持比较与逻辑运算符。
+func TestAdapterSupportsFilterOperators(t *testing.T) {
+	adapter, err := New(`{"list":[{"n":1,"t":"a","title":"一"},{"n":2,"t":"b","title":"二"},{"n":3,"t":"c","title":"三"}]}`)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	tests := []struct {
+		rule string
+		want []string
+	}{
+		{rule: `$.list[?(@.n>1)].title`, want: []string{"二", "三"}},
+		{rule: `$.list[?(@.n<2)].title`, want: []string{"一"}},
+		{rule: `$.list[?(@.n>=2)].title`, want: []string{"二", "三"}},
+		{rule: `$.list[?(@.n<=2)].title`, want: []string{"一", "二"}},
+		{rule: `$.list[?(@.n==1 || @.t=="c")].title`, want: []string{"一", "三"}},
+		{rule: `$.list[?(@.n>1 && @.t!="c")].title`, want: []string{"二"}},
+		{rule: `$.list[?(@.t=="b")].title`, want: []string{"二"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.rule, func(t *testing.T) {
+			got, err := adapter.Strings(tt.rule)
+			if err != nil {
+				t.Fatalf("Strings() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Strings() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}

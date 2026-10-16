@@ -277,7 +277,7 @@ func parseBookList(ctx context.Context, src *source.BookSource, listRule rule.Se
 				continue
 			}
 			author, _ := itemAnalyzer.GetString(ctx, listRule.Author, element)
-			bookURL, _ := itemAnalyzer.GetString(ctx, listRule.BookURL, element)
+			bookURL, _ := itemAnalyzer.GetURL(ctx, listRule.BookURL, element)
 			if bookURL == "" {
 				bookURL = redirectURL
 			}
@@ -287,7 +287,7 @@ func parseBookList(ctx context.Context, src *source.BookSource, listRule rule.Se
 			seen[bookURL] = struct{}{}
 			kind, _ := itemAnalyzer.GetString(ctx, listRule.Kind, element)
 			intro, _ := itemAnalyzer.GetString(ctx, listRule.Intro, element)
-			cover, _ := itemAnalyzer.GetString(ctx, listRule.CoverURL, element)
+			cover, _ := itemAnalyzer.GetURL(ctx, listRule.CoverURL, element)
 			wordCount, _ := itemAnalyzer.GetString(ctx, listRule.WordCount, element)
 			lastChapter, _ := itemAnalyzer.GetString(ctx, listRule.LastChapter, element)
 			searchBook.BookURL = bookURL

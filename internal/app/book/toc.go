@@ -179,13 +179,12 @@ func parseTocPage(ctx context.Context, src *source.BookSource, b *book.Book, bas
 	}
 	nextURLs := []string{}
 	if getNextURL && strings.TrimSpace(tocRule.NextTocURL) != "" {
-		values, err := analyzer.GetStringList(ctx, tocRule.NextTocURL, body)
+		values, err := analyzer.GetURLList(ctx, tocRule.NextTocURL, body)
 		if err != nil {
 			return nil, nil, err
 		}
 		for _, value := range values {
-			value = strings.TrimSpace(urlrule.Absolute(redirectURL, value))
-			if value != "" && value != redirectURL {
+			if value != redirectURL {
 				nextURLs = append(nextURLs, value)
 			}
 		}

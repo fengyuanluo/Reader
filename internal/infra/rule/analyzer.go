@@ -57,7 +57,17 @@ func NewAnalyzer(ctx Context) *Analyzer {
 	return &Analyzer{ctx: ctx, vars: map[string]string{}}
 }
 
+// GetString 求值规则并返回合并后的文本；结果含 & 时反转义 HTML 实体（对齐 Legado getString 默认 unescape=true）。
 func (a *Analyzer) GetString(ctx context.Context, rule string, input any) (string, error) {
+	text, err := a.GetStringRaw(ctx, rule, input)
+	if err != nil {
+		return "", err
+	}
+	return unescapeHTMLEntities(text), nil
+}
+
+// GetStringRaw 与 GetString 相同但不做 HTML 实体反转义（对应 Legado getString(rule, unescape=false)，用于正文）。
+func (a *Analyzer) GetStringRaw(ctx context.Context, rule string, input any) (string, error) {
 	if strings.TrimSpace(rule) == "" {
 		return "", nil
 	}
@@ -67,33 +77,57 @@ func (a *Analyzer) GetString(ctx context.Context, rule string, input any) (strin
 	if strings.Contains(rule, "{$.") && !strings.Contains(rule, "{{") {
 		return a.renderJSONPathTemplate(ctx, rule, input)
 	}
-	steps := splitSourceRules(rule, false)
-	var current any = input
-	for _, step := range steps {
-		value, err := a.evalStep(ctx, step, current, false)
-		if err != nil {
-			return "", err
-		}
-		current = collapseScalarResult(value)
-	}
-	values := toStringList(current)
-	if a.ctx.RedirectURL != "" {
-		for i, value := range values {
-			if shouldNormalizeURL(value) {
-				values[i] = urlrule.Absolute(a.ctx.RedirectURL, value)
-			}
-		}
-	}
-	if len(values) == 0 {
-		return "", nil
+	values, err := a.evalStringSteps(ctx, rule, input)
+	if err != nil || len(values) == 0 {
+		return "", err
 	}
 	return strings.Join(values, "\n"), nil
+}
+
+// GetURL 求值 URL 类规则（对应 Legado getString(rule, isUrl=true)）：取首个非空结果，
+// 反转义实体后按 RedirectURL 绝对化；无结果返回空串，由调用方决定回退值。
+func (a *Analyzer) GetURL(ctx context.Context, rule string, input any) (string, error) {
+	values, err := a.GetStringList(ctx, rule, input)
+	if err != nil {
+		return "", err
+	}
+	for _, value := range values {
+		value = strings.TrimSpace(unescapeHTMLEntities(value))
+		if value != "" {
+			return strings.TrimSpace(urlrule.Absolute(a.ctx.RedirectURL, value)), nil
+		}
+	}
+	return "", nil
+}
+
+// GetURLList 求值 URL 列表规则（对应 Legado getStringList(rule, isUrl=true)）：
+// 每项按 RedirectURL 绝对化，丢弃空值并去重，保持首次出现顺序。
+func (a *Analyzer) GetURLList(ctx context.Context, rule string, input any) ([]string, error) {
+	values, err := a.GetStringList(ctx, rule, input)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		absolute := strings.TrimSpace(urlrule.Absolute(a.ctx.RedirectURL, value))
+		if absolute == "" {
+			continue
+		}
+		if _, ok := seen[absolute]; ok {
+			continue
+		}
+		seen[absolute] = struct{}{}
+		out = append(out, absolute)
+	}
+	return out, nil
 }
 
 func (a *Analyzer) ExpandString(ctx context.Context, text string, input any) (string, error) {
 	return a.expandRawString(ctx, text, input)
 }
 
+// GetStringList 求值规则并返回结果列表；与 Legado getStringList 一致，不做实体反转义与 URL 绝对化。
 func (a *Analyzer) GetStringList(ctx context.Context, rule string, input any) ([]string, error) {
 	if strings.TrimSpace(rule) == "" {
 		return nil, nil
@@ -118,6 +152,10 @@ func (a *Analyzer) GetStringList(ctx context.Context, rule string, input any) ([
 		}
 		return toStringList(value), nil
 	}
+	return a.evalStringSteps(ctx, rule, input)
+}
+
+func (a *Analyzer) evalStringSteps(ctx context.Context, rule string, input any) ([]string, error) {
 	steps := splitSourceRules(rule, false)
 	var current any = input
 	for _, step := range steps {
@@ -127,15 +165,18 @@ func (a *Analyzer) GetStringList(ctx context.Context, rule string, input any) ([
 		}
 		current = collapseScalarResult(value)
 	}
-	values := toStringList(current)
-	if a.ctx.RedirectURL != "" {
-		for i, value := range values {
-			if shouldNormalizeURL(value) {
-				values[i] = urlrule.Absolute(a.ctx.RedirectURL, value)
-			}
-		}
+	return toStringList(current), nil
+}
+
+// htmlEntityPattern 仅匹配以分号结尾的命名/数字实体，与 Legado StringEscapeUtils.unescapeHtml4 一致，
+// 避免把 URL 查询串中的 "&para=" 等无分号片段误解码。
+var htmlEntityPattern = regexp.MustCompile(`&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);`)
+
+func unescapeHTMLEntities(text string) string {
+	if !strings.Contains(text, "&") {
+		return text
 	}
-	return values, nil
+	return htmlEntityPattern.ReplaceAllStringFunc(text, html.UnescapeString)
 }
 
 func (a *Analyzer) GetElements(ctx context.Context, rule string, input any) ([]any, error) {
@@ -500,14 +541,19 @@ type sourceRule struct {
 	replacement  string
 	replaceFirst bool
 	putMap       map[string]string
-	literal      bool
+	// raw 为去掉 @put 后、按 ## 拆分前的完整规则；含 @get/{{}} 时在求值前整体展开再拆分（对齐 Legado makeUpRule）。
+	raw     string
+	hasEval bool
+	// literal 表示主规则（首个 ## 之前）含 @get/{{}}，按 Legado 视为文本模板而非选择器。
+	literal bool
 }
 
 var (
-	putRulePattern = regexp.MustCompile(`(?i)@put:(\{[^}]+?\})`)
-	getRulePattern = regexp.MustCompile(`(?i)@get:\{([^}]+?)\}`)
-	jsRulePattern  = regexp.MustCompile(`(?is)\{\{([\w\W]*?)\}\}`)
-	jsonTplPattern = regexp.MustCompile(`(?s)\{\$(\.[^{}]+?)\}`)
+	putRulePattern  = regexp.MustCompile(`(?i)@put:(\{[^}]+?\})`)
+	getRulePattern  = regexp.MustCompile(`(?i)@get:\{([^}]+?)\}`)
+	jsRulePattern   = regexp.MustCompile(`(?is)\{\{([\w\W]*?)\}\}`)
+	evalRulePattern = regexp.MustCompile(`(?is)@get:\{[^}]+?\}|\{\{[\w\W]*?\}\}`)
+	jsonTplPattern  = regexp.MustCompile(`(?s)\{\$(\.[^{}]+?)\}`)
 )
 
 func splitSourceRules(rule string, allInOne bool) []sourceRule {
@@ -552,23 +598,30 @@ func parseSourceRule(raw string, mode Mode) sourceRule {
 	}
 	putMap := parsePutRules(rule)
 	rule = putRulePattern.ReplaceAllString(rule, "")
-	parts := strings.Split(rule, "##")
-	step := sourceRule{
-		rule:    strings.TrimSpace(parts[0]),
-		mode:    mode,
-		putMap:  putMap,
-		literal: getRulePattern.MatchString(rule) || jsRulePattern.MatchString(rule),
+	step := sourceRule{mode: mode, putMap: putMap, raw: rule}
+	if loc := evalRulePattern.FindStringIndex(rule); loc != nil {
+		step.hasEval = true
+		// 对齐 AnalyzeRule.SourceRule init：首个 @get/{{}} 位于 ## 之前时整条规则按模板处理。
+		step.literal = loc[0] == 0 || !strings.Contains(rule[:loc[0]], "##")
 	}
+	step.splitReplace(rule)
+	return step
+}
+
+// splitReplace 按 ## 拆分出主规则、替换正则、替换文本与 replaceFirst 标记（对齐 makeUpRule 尾部逻辑）。
+func (s *sourceRule) splitReplace(rule string) {
+	parts := strings.Split(rule, "##")
+	s.rule = strings.TrimSpace(parts[0])
+	s.replaceRegex, s.replacement, s.replaceFirst = "", "", false
 	if len(parts) > 1 {
-		step.replaceRegex = parts[1]
+		s.replaceRegex = parts[1]
 	}
 	if len(parts) > 2 {
-		step.replacement = parts[2]
+		s.replacement = parts[2]
 	}
 	if len(parts) > 3 {
-		step.replaceFirst = true
+		s.replaceFirst = true
 	}
-	return step
 }
 
 func splitEmbeddedJSRules(rule string, mode Mode) []sourceRule {
@@ -756,27 +809,21 @@ func (a *Analyzer) evalPutRule(ctx context.Context, rule string, input any) (str
 	return value, nil
 }
 
+// makeUpStep 对齐 Legado SourceRule.makeUpRule：在完整规则（含 ## 替换段）上一次性展开 @get:{}/{{}}，
+// 再重新按 ## 拆分主规则与替换段。
 func (a *Analyzer) makeUpStep(ctx context.Context, step sourceRule, input any) (sourceRule, error) {
+	if !step.hasEval {
+		return step, nil
+	}
 	var err error
-	step.rule = getRulePattern.ReplaceAllStringFunc(step.rule, func(token string) string {
+	expanded := evalRulePattern.ReplaceAllStringFunc(step.raw, func(token string) string {
 		if err != nil {
 			return ""
 		}
-		match := getRulePattern.FindStringSubmatch(token)
-		if len(match) != 2 {
-			return ""
+		if match := getRulePattern.FindStringSubmatch(token); len(match) == 2 && match[0] == token {
+			return a.lookupVariable(input, strings.TrimSpace(match[1]))
 		}
-		return a.lookupVariable(input, strings.TrimSpace(match[1]))
-	})
-	step.rule = jsRulePattern.ReplaceAllStringFunc(step.rule, func(token string) string {
-		if err != nil {
-			return ""
-		}
-		match := jsRulePattern.FindStringSubmatch(token)
-		if len(match) != 2 {
-			return ""
-		}
-		expr := strings.TrimSpace(match[1])
+		expr := strings.TrimSpace(token[2 : len(token)-2])
 		if isRuleExpression(expr) {
 			var value string
 			value, err = a.GetString(ctx, expr, input)
@@ -793,6 +840,7 @@ func (a *Analyzer) makeUpStep(ctx context.Context, step sourceRule, input any) (
 	if err != nil {
 		return step, err
 	}
+	step.splitReplace(expanded)
 	return step, nil
 }
 
@@ -897,7 +945,7 @@ func toStringList(input any) []string {
 		}
 		return out
 	default:
-		return []string{html.UnescapeString(asString(value))}
+		return []string{asString(value)}
 	}
 }
 
@@ -918,6 +966,17 @@ func lookupInputField(input any, key string) (string, bool) {
 }
 
 func (a *Analyzer) lookupVariable(input any, key string) string {
+	// 对齐 Legado AnalyzeRule.get：bookName/title 优先取当前书籍名与章节标题。
+	switch key {
+	case "bookName":
+		if value, ok := carrierStringField(a.ctx.Book, "Name", "name"); ok {
+			return value
+		}
+	case "title":
+		if value, ok := carrierStringField(a.ctx.Chapter, "Title", "title"); ok {
+			return value
+		}
+	}
 	if value, ok := lookupInputField(input, key); ok && value != "" {
 		return value
 	}
@@ -928,6 +987,40 @@ func (a *Analyzer) lookupVariable(input any, key string) string {
 		return value
 	}
 	return a.vars[key]
+}
+
+// carrierStringField 从书籍/章节载体读取字符串字段：结构体（或指针）取 field，map 取 mapKey；仅返回非空值。
+func carrierStringField(carrier any, field string, mapKey string) (string, bool) {
+	var value string
+	switch typed := carrier.(type) {
+	case nil:
+		return "", false
+	case map[string]any:
+		raw, ok := typed[mapKey]
+		if !ok || raw == nil {
+			return "", false
+		}
+		value = asString(raw)
+	case map[string]string:
+		value = typed[mapKey]
+	default:
+		rv := reflect.ValueOf(carrier)
+		if rv.Kind() == reflect.Pointer {
+			if rv.IsNil() {
+				return "", false
+			}
+			rv = rv.Elem()
+		}
+		if rv.Kind() != reflect.Struct {
+			return "", false
+		}
+		fv := rv.FieldByName(field)
+		if !fv.IsValid() || fv.Kind() != reflect.String {
+			return "", false
+		}
+		value = fv.String()
+	}
+	return value, value != ""
 }
 
 func lookupVariableFromContext(input any, key string, ctx ...*Context) (string, bool) {
@@ -1143,20 +1236,4 @@ func selectionToAny(selection *goquery.Selection) []any {
 		out = append(out, item)
 	})
 	return out
-}
-
-func shouldNormalizeURL(value string) bool {
-	value = strings.TrimSpace(value)
-	lower := strings.ToLower(value)
-	if value == "" || strings.ContainsAny(value, " \t\r\n<>") {
-		return false
-	}
-	return strings.HasPrefix(lower, "http://") ||
-		strings.HasPrefix(lower, "https://") ||
-		strings.HasPrefix(lower, "data:") ||
-		strings.HasPrefix(lower, "javascript") ||
-		strings.HasPrefix(value, "/") ||
-		strings.HasPrefix(value, "./") ||
-		strings.HasPrefix(value, "../") ||
-		strings.Contains(value, ".")
 }
