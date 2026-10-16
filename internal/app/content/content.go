@@ -69,6 +69,7 @@ func (s *Service) WithProcessor(processor *replaceapp.Processor) *Service {
 }
 
 func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
+	ctx = script.WithStage(ctx, "content")
 	src := input.Source
 	if src == nil || src.RuleContent.Value == nil {
 		return Result{}, ErrContentRuleMissing
@@ -124,7 +125,7 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 		Script:      scriptAdapter{runtime: s.script, baseURL: chapter.BaseURL, source: src, book: &bookValue, chapter: &chapter},
 		Chapter:     &chapter,
 		Book:        &bookValue,
-		Source:      script.SourceBindings(src),
+		Source:      s.script.SourceBindings(ctx, src),
 	})
 	expander.LoadVariables(bookValue.Variable)
 	expander.LoadVariables(chapter.Variable)
@@ -275,8 +276,7 @@ func (s *Service) applyContentWebJS(ctx context.Context, src *source.BookSource,
 		"result":         string(resp.Body),
 		"src":            string(resp.Body),
 		"baseUrl":        resp.URL,
-		"source":         script.SourceBindings(src),
-		"__source":       src,
+		"source":         src,
 		"book":           b,
 		"chapter":        chapter,
 		"nextChapterUrl": nextChapterURL,
@@ -446,7 +446,7 @@ func (s *Service) parsePage(ctx context.Context, src *source.BookSource, b *book
 		Script:      scriptAdapter{runtime: s.script, baseURL: baseURL, source: src, book: b, chapter: chapter, src: body, nextChapterURL: nextChapterURL},
 		Chapter:     chapter,
 		Book:        b,
-		Source:      script.SourceBindings(src),
+		Source:      s.script.SourceBindings(ctx, src),
 	})
 	analyzer.LoadVariables(b.Variable)
 	analyzer.LoadVariables(chapter.Variable)
@@ -558,8 +558,7 @@ func (s scriptAdapter) Eval(ctx context.Context, scriptText string, input any) (
 		"result":         input,
 		"src":            s.src,
 		"baseUrl":        s.baseURL,
-		"source":         script.SourceBindings(s.source),
-		"__source":       s.source,
+		"source":         s.source,
 		"book":           s.book,
 		"chapter":        s.chapter,
 		"nextChapterUrl": s.nextChapterURL,

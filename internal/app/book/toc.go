@@ -37,13 +37,14 @@ func NewTocService(chapters book.ChapterRepository, fetcher fetch.Fetcher, scrip
 }
 
 func (s *TocService) RefreshToc(ctx context.Context, input TocInput) ([]*book.BookChapter, error) {
+	ctx = script.WithStage(ctx, "toc")
 	src := input.Source
 	if src == nil || src.RuleToc.Value == nil {
 		return nil, ErrTocRuleMissing
 	}
 	b := input.Book
 	if strings.TrimSpace(src.RuleToc.Value.PreUpdateJS) != "" && s.script != nil {
-		if _, err := s.script.EvalWithBindings(ctx, src.RuleToc.Value.PreUpdateJS, script.Bindings{"source": script.SourceBindings(src), "__source": src, "book": &b}); err != nil {
+		if _, err := s.script.EvalWithBindings(script.WithSubStage(ctx, "pre_update_js"), src.RuleToc.Value.PreUpdateJS, script.Bindings{"source": src, "book": &b}); err != nil {
 			return nil, err
 		}
 	}
@@ -170,7 +171,7 @@ func parseTocPage(ctx context.Context, src *source.BookSource, b *book.Book, bas
 		SourceURL:   src.BookSourceURL,
 		Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, book: b, src: body},
 		Book:        b,
-		Source:      script.SourceBindings(src),
+		Source:      scriptRuntime.SourceBindings(ctx, src),
 	})
 	analyzer.LoadVariables(b.Variable)
 	elements, err := analyzer.GetElements(ctx, listRule, body)
@@ -203,7 +204,7 @@ func parseTocPage(ctx context.Context, src *source.BookSource, b *book.Book, bas
 			Script:      scriptAdapter{runtime: scriptRuntime, baseURL: redirectURL, source: src, book: b, src: body},
 			Chapter:     chapter,
 			Book:        b,
-			Source:      script.SourceBindings(src),
+			Source:      scriptRuntime.SourceBindings(ctx, src),
 		})
 		itemAnalyzer.SetVariables(baseVars)
 		title, _ := itemAnalyzer.GetString(ctx, tocRule.ChapterName, element)
@@ -252,6 +253,7 @@ func firstNonEmptyChapterURL(ctx context.Context, analyzer *ruleinfra.Analyzer, 
 }
 
 func (s *TocService) formatChapters(ctx context.Context, src *source.BookSource, chapters []*book.BookChapter) error {
+	ctx = script.WithSubStage(ctx, "format_js")
 	formatJS := strings.TrimSpace(src.RuleToc.Value.FormatJS)
 	if formatJS == "" || s.script == nil {
 		return nil

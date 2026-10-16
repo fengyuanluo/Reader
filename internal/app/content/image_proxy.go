@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	ErrImageURLRequired = errors.New("image url is required")
-	ErrInvalidImageType = errors.New("image response content type is not allowed")
+	ErrImageURLRequired    = errors.New("image url is required")
+	ErrInvalidImageType    = errors.New("image response content type is not allowed")
 	ErrImageSourceRequired = errors.New("image source id is required when decode mode is set")
 	ErrImageSourceNotFound = errors.New("image source not found")
 	ErrImageDecodeFailed   = errors.New("image decode failed")
@@ -107,6 +107,7 @@ func (p *ImageProxy) Fetch(ctx context.Context, input ImageProxyInput) (ImagePro
 }
 
 func (p *ImageProxy) decodeImage(ctx context.Context, input ImageProxyInput, imageURL string, body []byte) ([]byte, error) {
+	ctx = script.WithStage(ctx, "image_decode")
 	if p.sources == nil || p.script == nil {
 		return nil, fmt.Errorf("%w: image decode runtime is not configured", ErrImageDecodeFailed)
 	}
@@ -136,11 +137,10 @@ func (p *ImageProxy) decodeImage(ctx context.Context, input ImageProxyInput, ima
 		}
 	}
 	value, err := p.script.EvalWithBindings(ctx, scriptText, script.Bindings{
-		"result":   body,
-		"src":      imageURL,
-		"source":   script.SourceBindings(src),
-		"__source": src,
-		"book":     bookValue,
+		"result": body,
+		"src":    imageURL,
+		"source": src,
+		"book":   bookValue,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrImageDecodeFailed, err)

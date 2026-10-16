@@ -42,6 +42,7 @@ func NewSingleSourceSearcher(fetcher fetch.Fetcher, scriptRuntime *script.Runtim
 }
 
 func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([]book.SearchBook, error) {
+	ctx = script.WithStage(ctx, "search")
 	src := input.Source
 	if src == nil || strings.TrimSpace(src.SearchURL) == "" {
 		return nil, ErrEmptySearchURL
@@ -90,7 +91,7 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 		RedirectURL: resp.URL,
 		SourceURL:   src.BookSourceURL,
 		Script:      scriptAdapter{runtime: s.script, baseURL: resp.URL, source: src, src: string(resp.Body)},
-		Source:      script.SourceBindings(src),
+		Source:      s.script.SourceBindings(ctx, src),
 	})
 	items, err := analyzer.GetElements(ctx, listRule, string(resp.Body))
 	if err != nil {
@@ -112,7 +113,7 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 			SourceURL:   src.BookSourceURL,
 			Script:      scriptAdapter{runtime: s.script, baseURL: resp.URL, source: src, src: string(resp.Body), book: &searchBook},
 			Book:        &searchBook,
-			Source:      script.SourceBindings(src),
+			Source:      s.script.SourceBindings(ctx, src),
 		})
 		itemAnalyzer.SetVariables(baseVars)
 		name, _ := itemAnalyzer.GetString(ctx, rule.Name, item)
@@ -407,11 +408,10 @@ func isSpace(value byte) bool {
 
 func searchURLBindings(src *source.BookSource, keyword string, page int) script.Bindings {
 	return script.Bindings{
-		"key":      keyword,
-		"page":     page,
-		"source":   script.SourceBindings(src),
-		"__source": src,
-		"baseUrl":  sourceRequestBase(src.BookSourceURL),
+		"key":     keyword,
+		"page":    page,
+		"source":  src,
+		"baseUrl": sourceRequestBase(src.BookSourceURL),
 	}
 }
 
@@ -660,12 +660,11 @@ func (s scriptAdapter) Eval(ctx context.Context, scriptText string, input any) (
 		return nil, ruleinfra.ErrScriptUnavailable
 	}
 	return s.runtime.EvalWithBindings(ctx, scriptText, script.Bindings{
-		"result":   input,
-		"src":      s.src,
-		"baseUrl":  s.baseURL,
-		"source":   script.SourceBindings(s.source),
-		"__source": s.source,
-		"book":     s.book,
+		"result":  input,
+		"src":     s.src,
+		"baseUrl": s.baseURL,
+		"source":  s.source,
+		"book":    s.book,
 	})
 }
 

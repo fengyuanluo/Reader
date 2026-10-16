@@ -31,12 +31,14 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/dop251/goja"
-	"github.com/longbridgeapp/opencc"
+	"github.com/dop251/goja/ast"
+	"github.com/dop251/goja/parser"
 	"golang.org/x/net/publicsuffix"
 
 	domainbook "reader/internal/domain/book"
 	"reader/internal/domain/fetch"
 	domainsource "reader/internal/domain/source"
+	"reader/internal/infra/chinese"
 	fetcherinfra "reader/internal/infra/fetcher"
 	"reader/internal/infra/logging"
 	ruleinfra "reader/internal/infra/rule"
@@ -47,91 +49,181 @@ var (
 	ErrScriptFailed  = errors.New("script_failed")
 	ErrScriptTimeout = errors.New("script_timeout")
 	ErrUnsafeGlobal  = errors.New("unsafe global access")
+	// ErrScriptUnsupported 表示服务端无法提供的 Legado 能力（WebView、人工交互、7z/rar 等）。
+	ErrScriptUnsupported = errors.New("script_unsupported")
 )
 
 const defaultWebViewUserAgent = "Mozilla/5.0 (Linux; Android 10; K; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/122.0.0.0 Mobile Safari/537.36"
 
-var (
-	openccT2SOnce sync.Once
-	openccT2S     *opencc.OpenCC
-	openccT2SErr  error
-	openccS2TOnce sync.Once
-	openccS2T     *opencc.OpenCC
-	openccS2TErr  error
-)
+// defaultScriptTimeout 是 Policy.Timeout<=0 时的执行上限，保证脚本与其网络请求总有截止时间。
+var defaultScriptTimeout = 30 * time.Second
 
 type Bindings map[string]any
 
 type Policy struct {
 	AllowLog  bool
 	Timeout   time.Duration
-	Stage     string
 	SourceKey string
 	BaseURL   string
 	Fetcher   fetch.Fetcher
 	Source    *domainsource.BookSource
 	Cookie    *fetcherinfra.SessionCookieStore
 	Cache     *NamespacedCache
+	// Variables 持久化书源级状态（variable/loginHeader/loginInfo/source.put）；为空时使用 Runtime 私有内存实现。
+	Variables domainsource.VariableRepository
+	// FileRoot 是 java.readFile/downloadFile 等本地文件 API 的沙箱根目录；为空时这些 API 返回 ErrScriptUnsupported。
+	FileRoot string
 }
 
+// Runtime 可被多个服务并发共享：所有可变状态在 NewRuntime 中一次性初始化，并各自带锁。
 type Runtime struct {
-	policy Policy
-	cache  *NamespacedCache
-	cookie *MemoryCookieStore
-	logs   []string
-	mu     sync.Mutex
+	policy    Policy
+	timeout   time.Duration
+	cache     *NamespacedCache
+	cookie    *MemoryCookieStore
+	variables domainsource.VariableRepository
+	files     *fileSandbox
+	programs  *programCache
+	logs      *logBuffer
 }
 
+// evalContext 是单次 Eval 的只读上下文，不写回共享 Runtime。
 type evalContext struct {
+	ctx       context.Context
+	stage     string
 	sourceKey string
+	sourceID  string
+	src       *domainsource.BookSource
 }
 
 func NewRuntime(policy Policy) *Runtime {
-	return &Runtime{policy: policy, cache: policy.Cache}
+	timeout := policy.Timeout
+	if timeout <= 0 {
+		timeout = defaultScriptTimeout
+	}
+	cache := policy.Cache
+	if cache == nil {
+		cache = NewNamespacedCache()
+	}
+	variables := policy.Variables
+	if variables == nil {
+		variables = newMemoryVariableRepository()
+	}
+	return &Runtime{
+		policy:    policy,
+		timeout:   timeout,
+		cache:     cache,
+		cookie:    NewMemoryCookieStore(policy.Cookie),
+		variables: variables,
+		files:     newFileSandbox(policy.FileRoot),
+		programs:  newProgramCache(defaultProgramCacheSize),
+		logs:      newLogBuffer(defaultLogMaxEntries, defaultLogMaxBytes),
+	}
+}
+
+type stageContextKey struct{}
+
+// WithStage 为后续脚本执行标注阶段（search、toc.format_js 等），用于错误信息与调试事件。
+func WithStage(ctx context.Context, stage string) context.Context {
+	return context.WithValue(ctx, stageContextKey{}, stage)
+}
+
+// WithSubStage 在已有阶段后追加子阶段，例如 search → search.header_js。
+func WithSubStage(ctx context.Context, sub string) context.Context {
+	if parent := StageFromContext(ctx); parent != "" {
+		return WithStage(ctx, parent+"."+sub)
+	}
+	return WithStage(ctx, sub)
+}
+
+// StageFromContext 返回 WithStage 设置的阶段；未设置时为空。
+func StageFromContext(ctx context.Context) string {
+	stage, _ := ctx.Value(stageContextKey{}).(string)
+	return stage
 }
 
 func (r *Runtime) Eval(ctx context.Context, script string, input any) (out any, err error) {
 	return r.EvalWithBindings(ctx, script, Bindings{"result": input})
 }
 
+// EvalWithBindings 每次新建独立 goja VM 执行脚本。bindings["source"] 可传 *BookSource，
+// 运行时会把它转换为白名单 source 绑定，原始指针不会暴露给脚本。
 func (r *Runtime) EvalWithBindings(ctx context.Context, script string, bindings Bindings) (out any, err error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
 	vm := goja.New()
+	// 一次 Eval 只注册一个中断回调：ctx 结束（超时或上层取消）即中断 VM，jsLib 与主脚本共用。
+	stopInterrupt := context.AfterFunc(ctx, func() { vm.Interrupt(ErrScriptTimeout) })
+	defer stopInterrupt()
 	src := sourceFromBindings(r.policy.Source, bindings)
-	runCtx := evalContext{sourceKey: r.sourceKeyForBindings(src, bindings)}
-	if err := r.installSafeGlobals(vm, src, runCtx); err != nil {
-		return nil, err
+	runCtx := r.newEvalContext(ctx, src, bindings)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if recoveredErr, ok := recovered.(error); ok && errors.Is(recoveredErr, ErrScriptTimeout) {
+				err = runCtx.wrap(ErrScriptTimeout, recovered)
+			} else {
+				err = runCtx.wrap(ErrScriptFailed, recovered)
+			}
+			out = nil
+		}
+	}()
+	// 安装全局对象也会执行 JS，可能被超时中断，需与主脚本一样区分超时。
+	if err := r.installSafeGlobals(vm, runCtx); err != nil {
+		return nil, runCtx.wrapRunError(err)
 	}
 	for key, value := range bindings {
 		if isForbiddenBinding(key) {
 			return nil, fmt.Errorf("%w: %s", ErrUnsafeGlobal, key)
 		}
-		if err := vm.Set(key, prepareBindingValue(vm, key, value)); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrScriptFailed, err)
+		if err := vm.Set(key, r.prepareBindingValue(runCtx, key, value)); err != nil {
+			return nil, runCtx.wrap(ErrScriptFailed, err)
 		}
 	}
-	if err := r.loadSourceJSLib(ctx, vm, src); err != nil {
+	if err := r.loadSourceJSLib(vm, runCtx); err != nil {
 		return nil, err
 	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if errors.Is(fmt.Errorf("%v", recovered), ErrScriptTimeout) {
-				err = r.wrapError(ErrScriptTimeout, recovered)
-			} else {
-				err = r.wrapError(ErrScriptFailed, recovered)
-			}
-			out = nil
-		}
-	}()
-	cancelInterrupt := r.installInterrupt(ctx, vm)
-	defer cancelInterrupt()
 	value, err := vm.RunString(rewriteJavaCompatScript(script))
 	if err != nil {
-		if strings.Contains(err.Error(), ErrScriptTimeout.Error()) {
-			return nil, r.wrapError(ErrScriptTimeout, err)
-		}
-		return nil, r.wrapError(ErrScriptFailed, err)
+		return nil, runCtx.wrapRunError(err)
+	}
+	// goja 只在跳转处检查中断：脚本在网络请求被取消后可能直接跑完，此时结果基于失败的请求，按超时/取消报错。
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, runCtx.wrap(ErrScriptTimeout, ctxErr)
 	}
 	return value.Export(), nil
+}
+
+func (r *Runtime) newEvalContext(ctx context.Context, src *domainsource.BookSource, bindings Bindings) evalContext {
+	runCtx := evalContext{ctx: ctx, stage: StageFromContext(ctx), sourceKey: r.sourceKeyForBindings(src, bindings), src: src}
+	if src != nil {
+		runCtx.sourceID = src.SourceID
+	}
+	if runCtx.sourceID == "" {
+		runCtx.sourceID = runCtx.sourceKey
+	}
+	return runCtx
+}
+
+// wrapRunError 区分超时中断与普通脚本错误。
+func (c evalContext) wrapRunError(err error) error {
+	var interrupted *goja.InterruptedError
+	if errors.As(err, &interrupted) || strings.Contains(err.Error(), ErrScriptTimeout.Error()) {
+		return c.wrap(ErrScriptTimeout, err)
+	}
+	return c.wrap(ErrScriptFailed, err)
+}
+
+// wrap 生成 "<kind>: stage=<stage> source=<sourceId>: <message>"，保留 kind 前缀供诊断分类。
+func (c evalContext) wrap(kind error, err any) error {
+	message := logging.RedactString(fmt.Sprint(err))
+	stage := c.stage
+	if stage == "" {
+		stage = "unknown"
+	}
+	if c.sourceID != "" {
+		return fmt.Errorf("%w: stage=%s source=%s: %s", kind, stage, c.sourceID, message)
+	}
+	return fmt.Errorf("%w: stage=%s: %s", kind, stage, message)
 }
 
 func (r *Runtime) sourceKeyForBindings(src *domainsource.BookSource, bindings Bindings) string {
@@ -142,25 +234,22 @@ func (r *Runtime) sourceKeyForBindings(src *domainsource.BookSource, bindings Bi
 }
 
 func sourceFromBindings(fallback *domainsource.BookSource, bindings Bindings) *domainsource.BookSource {
-	src := fallback
-	if src == nil {
-		if raw, ok := bindings["__source"].(*domainsource.BookSource); ok {
-			src = raw
-		}
+	if fallback != nil {
+		return fallback
 	}
-	if src == nil {
-		if raw, ok := bindings["source"].(*domainsource.BookSource); ok {
-			src = raw
-		}
-	}
+	src, _ := bindings["source"].(*domainsource.BookSource)
 	return src
 }
 
-func prepareBindingValue(vm *goja.Runtime, key string, value any) any {
+func (r *Runtime) prepareBindingValue(runCtx evalContext, key string, value any) any {
 	if sel, ok := value.(*goquery.Selection); ok && sel != nil {
 		return newSelectionBinding(sel)
 	}
 	switch key {
+	case "source":
+		if src, ok := value.(*domainsource.BookSource); ok {
+			return r.SourceBindings(runCtx.ctx, src)
+		}
 	case "book":
 		if b, ok := value.(*domainbook.Book); ok && b != nil {
 			return map[string]any{
@@ -240,19 +329,23 @@ func sourceKeyFromBindings(src *domainsource.BookSource, bindings Bindings) stri
 	return ""
 }
 
-func (r *Runtime) loadSourceJSLib(ctx context.Context, vm *goja.Runtime, src *domainsource.BookSource) error {
+// loadSourceJSLib 在当前 VM 中执行书源 jsLib。编译结果按内容哈希缓存，VM 仍每次独立，状态不跨 Eval 共享。
+func (r *Runtime) loadSourceJSLib(vm *goja.Runtime, runCtx evalContext) error {
+	src := runCtx.src
 	if src == nil || strings.TrimSpace(src.JSLib) == "" {
 		return nil
 	}
-	cancelInterrupt := r.installInterrupt(ctx, vm)
-	defer cancelInterrupt()
-	if _, err := vm.RunString(rewriteJavaCompatScript(src.JSLib)); err != nil {
-		return r.wrapError(ErrScriptFailed, err)
+	program, err := r.programs.compile(src.JSLib)
+	if err != nil {
+		return runCtx.wrap(ErrScriptFailed, err)
+	}
+	if _, err := vm.RunProgram(program); err != nil {
+		return runCtx.wrapRunError(err)
 	}
 	return nil
 }
 
-func (r *Runtime) installSafeGlobals(vm *goja.Runtime, src *domainsource.BookSource, runCtx evalContext) error {
+func (r *Runtime) installSafeGlobals(vm *goja.Runtime, runCtx evalContext) error {
 	blocked := []string{"require", "process", "global", "globalThis", "window", "document", "XMLHttpRequest", "fetch"}
 	for _, name := range blocked {
 		if err := vm.Set(name, goja.Undefined()); err != nil {
@@ -261,28 +354,15 @@ func (r *Runtime) installSafeGlobals(vm *goja.Runtime, src *domainsource.BookSou
 	}
 	if r.policy.AllowLog {
 		if err := vm.Set("log", func(args ...any) {
-			r.mu.Lock()
-			defer r.mu.Unlock()
-			text := fmt.Sprint(args...)
-			r.logs = append(r.logs, logging.RedactString(text))
+			r.log(fmt.Sprint(args...))
 		}); err != nil {
 			return err
 		}
 	}
-	if r.cache == nil {
-		r.cache = NewNamespacedCache()
-	}
-	if err := vm.Set("cache", map[string]any{
-		"get": func(key string) any {
-			return r.cache.Get(runCtx.sourceKey, key)
-		},
-		"put": func(key string, value any) {
-			r.cache.Put(runCtx.sourceKey, key, value)
-		},
-	}); err != nil {
+	if err := vm.Set("cache", r.cacheBindings(runCtx)); err != nil {
 		return err
 	}
-	if err := vm.Set("java", r.javaBindings(vm, src, runCtx)); err != nil {
+	if err := vm.Set("java", r.javaBindings(vm, runCtx)); err != nil {
 		return err
 	}
 	if _, err := vm.RunString(`
@@ -298,39 +378,127 @@ if (!java.ajaxAll) {
 	if err := installJavaImporterCompat(vm); err != nil {
 		return err
 	}
-	if r.cookie == nil {
-		r.cookie = NewMemoryCookieStore(r.policy.Cookie)
-	}
-	if err := vm.Set("cookie", r.cookie.Bindings()); err != nil {
-		return err
-	}
-	return nil
+	return vm.Set("cookie", r.cookie.Bindings())
 }
 
-func (r *Runtime) javaBindings(vm *goja.Runtime, src *domainsource.BookSource, runCtx evalContext) map[string]any {
+// log 在 AllowLog 开启时写入有界日志缓冲（已脱敏）。
+func (r *Runtime) log(message string) {
+	if r.policy.AllowLog {
+		r.logs.Append(message)
+	}
+}
+
+// cacheBindings 对齐 Legado CacheManager（put 的第三个参数为保存秒数），按书源 key 隔离且有界。
+func (r *Runtime) cacheBindings(runCtx evalContext) map[string]any {
+	put := func(key string, value any, saveTime ...int64) {
+		var ttl time.Duration
+		if len(saveTime) > 0 && saveTime[0] > 0 {
+			ttl = time.Duration(saveTime[0]) * time.Second
+		}
+		r.cache.PutTTL(runCtx.sourceKey, key, cacheValueString(value), ttl)
+	}
+	get := func(key string) any {
+		value, ok := r.cache.Get(runCtx.sourceKey, key)
+		if !ok {
+			return nil
+		}
+		return value
+	}
+	remove := func(key string) {
+		r.cache.Delete(runCtx.sourceKey, key)
+	}
 	return map[string]any{
-		"base64Encode": func(value any) string {
-			return base64.StdEncoding.EncodeToString([]byte(fmt.Sprint(value)))
+		"get":           get,
+		"put":           put,
+		"delete":        remove,
+		"getFromMemory": get,
+		"putMemory":     func(key string, value any) { put(key, value) },
+		"deleteMemory":  remove,
+	}
+}
+
+// throwJS 以脚本可 try/catch 的异常形式抛出 Go 错误。
+func throwJS(vm *goja.Runtime, err error) {
+	panic(vm.NewGoError(err))
+}
+
+func unsupportedAPI(vm *goja.Runtime, name string) func(goja.FunctionCall) goja.Value {
+	return func(goja.FunctionCall) goja.Value {
+		throwJS(vm, fmt.Errorf("%w: java.%s requires an interactive browser or device", ErrScriptUnsupported, name))
+		return goja.Undefined()
+	}
+}
+
+func optionalString(call goja.FunctionCall, index int) string {
+	if len(call.Arguments) <= index {
+		return ""
+	}
+	value := call.Argument(index)
+	if goja.IsUndefined(value) || goja.IsNull(value) {
+		return ""
+	}
+	return value.String()
+}
+
+func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]any {
+	src := runCtx.src
+	fetchResponse := func(method string) func(goja.FunctionCall) goja.Value {
+		return func(call goja.FunctionCall) goja.Value {
+			resp, err := r.fetchScriptCall(runCtx, vm, method, call)
+			return newScriptHTTPResponse(vm, resp, err)
+		}
+	}
+	bindings := map[string]any{
+		"getSource": func() any {
+			if src == nil {
+				return nil
+			}
+			return r.SourceBindings(runCtx.ctx, src)
+		},
+		"base64Encode": func(call goja.FunctionCall) goja.Value {
+			flags := base64FlagNoWrap
+			if len(call.Arguments) > 1 {
+				flags = int(call.Argument(1).ToInteger())
+			}
+			return vm.ToValue(base64EncodeFlags([]byte(call.Argument(0).String()), flags))
 		},
 		"getWebViewUA": func() string {
 			return defaultWebViewUserAgent
 		},
 		"t2s": func(value any) string {
-			return convertChinese("t2s", fmt.Sprint(value))
+			return chinese.T2S(fmt.Sprint(value))
 		},
 		"s2t": func(value any) string {
-			return convertChinese("s2t", fmt.Sprint(value))
+			return chinese.S2T(fmt.Sprint(value))
 		},
-		"base64Decode": func(value any) string {
-			decoded, err := base64.StdEncoding.DecodeString(fmt.Sprint(value))
-			if err != nil {
-				return ""
+		// base64Decode(str[, charset|flags])：第二参数为字符串时按字符集解码，为数字时是 Android flags（解码已兼容各变体）。
+		"base64Decode": func(call goja.FunctionCall) goja.Value {
+			decoded := base64DecodeLenient(optionalString(call, 0))
+			charsetName := ""
+			if len(call.Arguments) > 1 {
+				if text, ok := call.Argument(1).Export().(string); ok {
+					charsetName = text
+				}
 			}
-			return string(decoded)
+			text, err := decodeCharset(decoded, charsetName)
+			if err != nil {
+				throwJS(vm, err)
+			}
+			return vm.ToValue(text)
+		},
+		"base64DecodeToByteArray": func(call goja.FunctionCall) goja.Value {
+			text := optionalString(call, 0)
+			if strings.TrimSpace(text) == "" {
+				return goja.Null()
+			}
+			return vm.ToValue(base64DecodeLenient(text))
 		},
 		"md5Encode": func(value any) string {
 			sum := md5.Sum([]byte(fmt.Sprint(value)))
 			return hex.EncodeToString(sum[:])
+		},
+		"md5Encode16": func(value any) string {
+			return md5Encode16(fmt.Sprint(value))
 		},
 		"HMacHex": func(data any, algorithm any, key any) string {
 			return hmacHex(fmt.Sprint(data), fmt.Sprint(algorithm), fmt.Sprint(key))
@@ -342,8 +510,29 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, src *domainsource.BookSource, r
 			}
 			return string(decoded)
 		},
+		"hexDecodeToByteArray": func(value any) goja.Value {
+			decoded, err := hex.DecodeString(fmt.Sprint(value))
+			if err != nil {
+				return goja.Null()
+			}
+			return vm.ToValue(decoded)
+		},
 		"hexEncodeToString": func(value any) string {
 			return hex.EncodeToString([]byte(fmt.Sprint(value)))
+		},
+		"strToBytes": func(call goja.FunctionCall) goja.Value {
+			encoded, err := encodeCharset(call.Argument(0).String(), optionalString(call, 1))
+			if err != nil {
+				throwJS(vm, err)
+			}
+			return vm.ToValue(encoded)
+		},
+		"bytesToStr": func(call goja.FunctionCall) goja.Value {
+			text, err := decodeCharset(bytesFromJS(call.Argument(0)), optionalString(call, 1))
+			if err != nil {
+				throwJS(vm, err)
+			}
+			return vm.ToValue(text)
 		},
 		"createSymmetricCrypto": func(transformation any, key any, iv ...any) map[string]any {
 			var ivValue any
@@ -376,6 +565,9 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, src *domainsource.BookSource, r
 		"randomUUID": func() *goja.Object {
 			return javaStringCompat(vm, randomUUIDString())
 		},
+		"androidId": func() string {
+			return readerAndroidID
+		},
 		"timeFormatUTC": func(value any, pattern any, offsetHours any) string {
 			t, ok := coerceTimeValue(value)
 			if !ok {
@@ -396,69 +588,141 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, src *domainsource.BookSource, r
 			loc := time.FixedZone("UTCOffset", offset*3600)
 			return t.In(loc).Format(javaTimeLayout(fmt.Sprint(pattern)))
 		},
-		"toast":     func(args ...any) {},
-		"longToast": func(args ...any) {},
-		"put": func(key string, value any) any {
-			if r.cache == nil {
-				r.cache = NewNamespacedCache()
+		"timeFormat": func(value any) string {
+			return timeFormat(value)
+		},
+		"htmlFormat": func(value any) string {
+			return htmlFormatKeepImg(fmt.Sprint(value))
+		},
+		"toNumChapter": func(value goja.Value) goja.Value {
+			if goja.IsUndefined(value) || goja.IsNull(value) {
+				return goja.Null()
 			}
-			r.cache.Put(runCtx.sourceKey, key, value)
+			return vm.ToValue(toNumChapter(value.String()))
+		},
+		"toURL": func(call goja.FunctionCall) goja.Value {
+			parsed, err := newJSURL(call.Argument(0).String(), optionalString(call, 1))
+			if err != nil {
+				throwJS(vm, err)
+			}
+			return vm.ToValue(parsed)
+		},
+		"toast":     func(msg any) { r.log(fmt.Sprint(msg)) },
+		"longToast": func(msg any) { r.log(fmt.Sprint(msg)) },
+		"put": func(key string, value any) any {
+			r.cache.Put(runCtx.sourceKey, key, cacheValueString(value))
 			return value
 		},
+		// get(key) 只读规则变量与缓存（BaseSource.kt:232）；get(url, headers) 才发起请求（JsExtensions.kt:378）。
 		"get": func(call goja.FunctionCall) goja.Value {
 			if len(call.Arguments) == 0 {
 				return goja.Undefined()
 			}
-			if len(call.Arguments) == 1 && !looksLikeURL(call.Argument(0).String()) {
-				if value, ok := getRuntimeVariable(vm, call.Argument(0).String()); ok {
+			if len(call.Arguments) == 1 {
+				key := call.Argument(0).String()
+				if value, ok := getRuntimeVariable(vm, key); ok {
 					return vm.ToValue(value)
 				}
-				if r.cache == nil {
-					return vm.ToValue("")
+				if value, ok := r.cache.Get(runCtx.sourceKey, key); ok {
+					return vm.ToValue(value)
 				}
-				value := r.cache.Get(runCtx.sourceKey, call.Argument(0).String())
-				if value == nil {
-					return vm.ToValue("")
-				}
-				return vm.ToValue(value)
+				return vm.ToValue("")
 			}
-			resp, err := r.fetchScriptCall(context.Background(), vm, src, "GET", call)
-			return newScriptHTTPResponse(vm, resp, err)
+			return fetchResponse("GET")(call)
 		},
+		"head":    fetchResponse("HEAD"),
+		"post":    fetchResponse("POST"),
+		"connect": fetchResponse("GET"),
 		"getString": func(rule any) string {
 			var fallback any
 			if srcValue := vm.Get("src"); srcValue != nil && !goja.IsUndefined(srcValue) && !goja.IsNull(srcValue) {
 				fallback = srcValue.Export()
 			}
-			return scriptGetString(vm, vm.Get("result").Export(), fallback, fmt.Sprint(rule))
+			return scriptGetString(runCtx.ctx, vm, vm.Get("result").Export(), fallback, fmt.Sprint(rule))
 		},
 		"getElements": func(rule any) []any {
-			return scriptGetElements(vm, vm.Get("result").Export(), fmt.Sprint(rule))
+			return scriptGetElements(runCtx.ctx, vm, vm.Get("result").Export(), fmt.Sprint(rule))
 		},
-		"post": func(call goja.FunctionCall) goja.Value {
-			resp, err := r.fetchScriptCall(context.Background(), vm, src, "POST", call)
-			return newScriptHTTPResponse(vm, resp, err)
-		},
-		"ajax": func(raw any) string {
-			resp, err := r.fetchScriptURL(context.Background(), vm, src, raw, nil)
+		// ajax 失败时返回错误文本，与 Legado JsExtensions.kt:93-111 的 getOrElse { stackTraceStr } 一致。
+		"ajax": func(raw goja.Value) string {
+			target := raw.Export()
+			if list, ok := target.([]any); ok {
+				target = ""
+				if len(list) > 0 {
+					target = list[0]
+				}
+			}
+			resp, err := r.fetchScriptURL(runCtx, vm, fmt.Sprint(target), nil)
 			if err != nil {
 				return err.Error()
 			}
 			return string(resp.Body)
 		},
-		"connect": func(call goja.FunctionCall) goja.Value {
-			resp, err := r.fetchScriptCall(context.Background(), vm, src, "GET", call)
-			return newScriptHTTPResponse(vm, resp, err)
+		"getCookie": func(call goja.FunctionCall) goja.Value {
+			if key := optionalString(call, 1); key != "" {
+				return vm.ToValue(r.cookie.GetKey(call.Argument(0).String(), key))
+			}
+			return vm.ToValue(r.cookie.GetCookie(call.Argument(0).String()))
 		},
-		"log": func(args ...any) {
-			if !r.policy.AllowLog {
+		"cacheFile": func(call goja.FunctionCall) goja.Value {
+			var saveTime int64
+			if len(call.Arguments) > 1 {
+				saveTime = call.Argument(1).ToInteger()
+			}
+			text, err := r.cacheFile(runCtx, vm, call.Argument(0).String(), saveTime)
+			if err != nil {
+				throwJS(vm, err)
+			}
+			return vm.ToValue(text)
+		},
+		// importScript 对齐 JsExtensions.kt:264：http 开头走 cacheFile，否则读沙箱内文本文件。
+		"importScript": func(path string) string {
+			var (
+				text string
+				err  error
+			)
+			if strings.HasPrefix(path, "http") {
+				text, err = r.cacheFile(runCtx, vm, path, 0)
+			} else {
+				text, err = r.files.readText(path, "")
+			}
+			if err != nil {
+				throwJS(vm, err)
+			}
+			if strings.TrimSpace(text) == "" {
+				throwJS(vm, fmt.Errorf("%w: %s 内容获取失败或者为空", ErrScriptFailed, path))
+			}
+			return text
+		},
+		"log": func(msg any) any {
+			r.log(fmt.Sprint(msg))
+			return msg
+		},
+		"logType": func(value goja.Value) {
+			if goja.IsUndefined(value) || goja.IsNull(value) {
+				r.log("null")
 				return
 			}
-			r.mu.Lock()
-			defer r.mu.Unlock()
-			r.logs = append(r.logs, logging.RedactString(fmt.Sprint(args...)))
+			r.log(fmt.Sprintf("%T", value.Export()))
+		},
+		"queryTTF": func(call goja.FunctionCall) goja.Value {
+			return r.queryTTFValue(runCtx, vm, call.Argument(0))
+		},
+		"queryBase64TTF": func(call goja.FunctionCall) goja.Value {
+			return r.queryTTFValue(runCtx, vm, call.Argument(0))
+		},
+		"replaceFont": func(call goja.FunctionCall) goja.Value {
+			filter := len(call.Arguments) > 3 && call.Argument(3).ToBoolean()
+			return vm.ToValue(replaceFont(call.Argument(0).String(), exportedTTF(call.Argument(1)), exportedTTF(call.Argument(2)), filter))
 		},
 	}
+	for _, name := range []string{"webView", "webViewGetSource", "webViewGetOverrideUrl", "startBrowser", "startBrowserAwait", "getVerificationCode", "openUrl"} {
+		bindings[name] = unsupportedAPI(vm, name)
+	}
+	for name, fn := range r.fileBindings(runCtx, vm) {
+		bindings[name] = fn
+	}
+	return bindings
 }
 
 func installJavaImporterCompat(vm *goja.Runtime) error {
@@ -732,15 +996,68 @@ GZIPInputStream = function(value){ return __ReaderGZIPInputStream(value); };
 	return nil
 }
 
-var javaImporterFunctionPattern = regexp.MustCompile(`function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(`)
 var rhinoLetConditionPattern = regexp.MustCompile(`\blet\s*\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([^)]*?)\s*\)\s*([^)\r\n]+)`)
 
+// rewriteJavaCompatScript 兼容 Rhino 语法差异。Rhino 会把 with(JavaImporter) 块内的函数声明提升到外层，
+// goja 按块级作用域处理；因此只把顶层 with 块中直接声明的函数改写为赋值，其余代码（含注释、字符串）原样保留。
 func rewriteJavaCompatScript(script string) string {
 	script = rhinoLetConditionPattern.ReplaceAllString(script, `($1 = $2, $3)`)
-	if !strings.Contains(script, "JavaImporter") {
+	if !strings.Contains(script, "with") {
 		return script
 	}
-	return javaImporterFunctionPattern.ReplaceAllString(script, `$1 = function(`)
+	program, err := parser.ParseFile(nil, "", script, 0)
+	if err != nil {
+		// 解析失败时不做猜测性改写，交给 goja 报出真实语法错误。
+		return script
+	}
+	type span struct {
+		start, nameEnd, bodyEnd int
+		name                    string
+	}
+	var spans []span
+	for _, stmt := range program.Body {
+		with, ok := stmt.(*ast.WithStatement)
+		if !ok {
+			continue
+		}
+		block, ok := with.Body.(*ast.BlockStatement)
+		if !ok {
+			continue
+		}
+		for _, inner := range block.List {
+			decl, ok := inner.(*ast.FunctionDeclaration)
+			if !ok || decl.Function == nil || decl.Function.Name == nil {
+				continue
+			}
+			// file.Idx 从 1 开始，转换为字节偏移。
+			spans = append(spans, span{
+				start:   int(decl.Function.Function) - 1,
+				nameEnd: int(decl.Function.Name.Idx1()) - 1,
+				bodyEnd: int(decl.Function.Idx1()) - 1,
+				name:    string(decl.Function.Name.Name),
+			})
+		}
+	}
+	if len(spans) == 0 {
+		return script
+	}
+	var b strings.Builder
+	b.Grow(len(script) + len(spans)*9)
+	last := 0
+	for _, s := range spans {
+		if s.start < last || s.start >= s.nameEnd || s.nameEnd > s.bodyEnd || s.bodyEnd > len(script) {
+			return script
+		}
+		b.WriteString(script[last:s.start])
+		b.WriteString(s.name)
+		b.WriteString(" = function")
+		// 赋值表达式需要显式结束，避免同一行相邻的两个声明拼接成语法错误。
+		b.WriteString(script[s.nameEnd:s.bodyEnd])
+		b.WriteString(";")
+		last = s.bodyEnd
+	}
+	b.WriteString(script[last:])
+	return b.String()
 }
 
 type javaCipherCompat struct {
@@ -1032,18 +1349,19 @@ func defaultModeForAlgorithm(algorithm string) string {
 	return "ECB"
 }
 
-func (r *Runtime) fetchScriptURL(ctx context.Context, vm *goja.Runtime, src *domainsource.BookSource, raw any, extraHeaders map[string]string) (*fetch.Response, error) {
+// fetchScriptURL 发起脚本侧请求；ctx 取自本次 Eval，受 Policy.Timeout 与上层取消控制。
+func (r *Runtime) fetchScriptURL(runCtx evalContext, vm *goja.Runtime, raw string, extraHeaders map[string]string) (*fetch.Response, error) {
 	if r.policy.Fetcher == nil {
-		return nil, ErrScriptFailed
+		return nil, runCtx.wrap(ErrScriptFailed, "fetcher is not configured")
 	}
-	req, err := r.buildScriptRequest(vm, src, fmt.Sprint(raw), extraHeaders)
+	req, err := r.buildScriptRequest(runCtx, vm, raw, extraHeaders)
 	if err != nil {
 		return nil, err
 	}
-	return r.policy.Fetcher.Fetch(ctx, req)
+	return r.policy.Fetcher.Fetch(runCtx.ctx, req)
 }
 
-func scriptGetString(vm *goja.Runtime, input any, fallback any, rule string) string {
+func scriptGetString(ctx context.Context, vm *goja.Runtime, input any, fallback any, rule string) string {
 	rule = strings.TrimSpace(rule)
 	if rule == "" {
 		return ""
@@ -1052,18 +1370,18 @@ func scriptGetString(vm *goja.Runtime, input any, fallback any, rule string) str
 		RedirectURL: scriptAnalyzerBaseURL(vm),
 		SourceURL:   scriptAnalyzerSourceURL(vm),
 	})
-	if value, err := analyzer.GetString(context.Background(), rule, input); err == nil && value != "" {
+	if value, err := analyzer.GetString(ctx, rule, input); err == nil && value != "" {
 		return value
 	}
 	if fallback != nil {
-		if value, err := analyzer.GetString(context.Background(), rule, fallback); err == nil {
+		if value, err := analyzer.GetString(ctx, rule, fallback); err == nil {
 			return value
 		}
 	}
 	return ""
 }
 
-func scriptGetElements(vm *goja.Runtime, input any, rule string) []any {
+func scriptGetElements(ctx context.Context, vm *goja.Runtime, input any, rule string) []any {
 	rule = strings.TrimSpace(rule)
 	if rule == "" {
 		return nil
@@ -1072,7 +1390,7 @@ func scriptGetElements(vm *goja.Runtime, input any, rule string) []any {
 		RedirectURL: scriptAnalyzerBaseURL(vm),
 		SourceURL:   scriptAnalyzerSourceURL(vm),
 	})
-	elements, err := analyzer.GetElements(context.Background(), rule, input)
+	elements, err := analyzer.GetElements(ctx, rule, input)
 	if err != nil {
 		return nil
 	}
@@ -1142,23 +1460,6 @@ func newSelectionBinding(sel *goquery.Selection) map[string]any {
 	}
 }
 
-func scriptInputString(input any) string {
-	switch value := input.(type) {
-	case nil:
-		return ""
-	case string:
-		return value
-	case []byte:
-		return string(value)
-	default:
-		raw, err := json.Marshal(value)
-		if err == nil {
-			return string(raw)
-		}
-		return fmt.Sprint(value)
-	}
-}
-
 func getRuntimeVariable(vm *goja.Runtime, key string) (any, bool) {
 	if value, ok := getVariableFromJSObject(vm, vm.Get("__variables"), key); ok {
 		return value, true
@@ -1187,28 +1488,19 @@ func getVariableFromMap(value any, key string) (any, bool) {
 	if !ok {
 		return nil, false
 	}
+	// book/chapter 绑定的 getVariable 读取实时值，避免 putVariable 之后读到绑定创建时的 variable 快照。
+	if getter, ok := raw["getVariable"].(func(string) string); ok {
+		if value := getter(key); value != "" {
+			return value, true
+		}
+		return nil, false
+	}
 	variableRaw, ok := raw["variable"].(string)
-	if !ok || strings.TrimSpace(variableRaw) == "" {
+	if !ok {
 		return nil, false
 	}
-	vars := map[string]any{}
-	if err := json.Unmarshal([]byte(variableRaw), &vars); err != nil {
-		return nil, false
-	}
-	value, ok = vars[key]
+	value, ok = decodeVariableMap(variableRaw)[key]
 	return value, ok
-}
-
-func putRuntimeVariable(vm *goja.Runtime, key string, value any) {
-	vars := vm.Get("__variables")
-	if goja.IsUndefined(vars) || goja.IsNull(vars) {
-		obj := vm.NewObject()
-		_ = vm.Set("__variables", obj)
-		vars = obj
-	}
-	if obj := vars.ToObject(vm); obj != nil {
-		_ = obj.Set(key, value)
-	}
 }
 
 func getVariableFromJSObject(vm *goja.Runtime, value goja.Value, key string) (any, bool) {
@@ -1247,38 +1539,60 @@ func getVariableFromStruct(value any, key string) (any, bool) {
 	if !field.IsValid() || field.Kind() != reflect.String {
 		return nil, false
 	}
-	vars := map[string]any{}
-	if err := json.Unmarshal([]byte(field.String()), &vars); err != nil {
-		return nil, false
-	}
-	value, ok := vars[key]
+	value, ok := decodeVariableMap(field.String())[key]
 	return value, ok
 }
 
-func compatGetVariable(raw *string, key string) string {
-	if raw == nil || strings.TrimSpace(*raw) == "" {
-		return ""
-	}
+// decodeVariableMap 对齐 Legado RuleData.variableMap（Book.kt:137-139）：非 JSON 或空字符串视为空表。
+func decodeVariableMap(raw string) map[string]any {
 	vars := map[string]any{}
-	if err := json.Unmarshal([]byte(*raw), &vars); err != nil {
-		return ""
+	if strings.TrimSpace(raw) == "" {
+		return vars
 	}
-	return fmt.Sprint(vars[key])
+	if err := json.Unmarshal([]byte(raw), &vars); err != nil || vars == nil {
+		return map[string]any{}
+	}
+	return vars
 }
 
+// compatGetVariable 对齐 RuleData.getVariable(key)：缺键返回空串；非字符串值按 JSON 返回。
+func compatGetVariable(raw *string, key string) string {
+	if raw == nil {
+		return ""
+	}
+	return variableValueString(decodeVariableMap(*raw)[key])
+}
+
+func variableValueString(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprint(typed)
+		}
+		return string(encoded)
+	}
+}
+
+// compatPutVariable 对齐 RuleData.putVariable(key, value)：value 为 null/undefined 时删除该键。
 func compatPutVariable(raw *string, key string, value any) string {
 	if raw == nil {
-		return fmt.Sprint(value)
+		return variableValueString(value)
 	}
-	vars := map[string]any{}
-	if strings.TrimSpace(*raw) != "" {
-		_ = json.Unmarshal([]byte(*raw), &vars)
+	vars := decodeVariableMap(*raw)
+	if value == nil {
+		delete(vars, key)
+	} else {
+		vars[key] = variableValueString(value)
 	}
-	vars[key] = value
 	if encoded, err := json.Marshal(vars); err == nil {
 		*raw = string(encoded)
 	}
-	return fmt.Sprint(value)
+	return variableValueString(value)
 }
 
 func bytesFromJS(value any) []byte {
@@ -1353,30 +1667,48 @@ func writeBytesToJSArray(target goja.Value, data []byte) {
 	}
 }
 
-func (r *Runtime) fetchScriptCall(ctx context.Context, vm *goja.Runtime, src *domainsource.BookSource, method string, call goja.FunctionCall) (*fetch.Response, error) {
+// fetchScriptCall 实现 java.get/post/head/connect(url[, body][, headers])；post 的对象 body 序列化为 JSON。
+func (r *Runtime) fetchScriptCall(runCtx evalContext, vm *goja.Runtime, method string, call goja.FunctionCall) (*fetch.Response, error) {
 	if r.policy.Fetcher == nil {
-		return nil, ErrScriptFailed
+		return nil, runCtx.wrap(ErrScriptFailed, "fetcher is not configured")
 	}
-	raw := call.Argument(0).String()
-	req, err := r.buildScriptRequest(vm, src, raw, nil)
+	req, err := r.buildScriptRequest(runCtx, vm, call.Argument(0).String(), nil)
 	if err != nil {
 		return nil, err
 	}
-	switch method {
-	case "POST":
-		req.Method = "POST"
-		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Argument(1)) && !goja.IsNull(call.Argument(1)) {
-			req.Body = []byte(call.Argument(1).String())
-		}
-		if len(call.Arguments) > 2 && !goja.IsUndefined(call.Argument(2)) && !goja.IsNull(call.Argument(2)) {
-			mergeHeaders(req.Headers, normalizeScriptOptions(call.Argument(2).Export()))
-		}
-	default:
-		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Argument(1)) && !goja.IsNull(call.Argument(1)) {
-			mergeHeaders(req.Headers, normalizeScriptOptions(call.Argument(1).Export()))
+	present := func(index int) bool {
+		return len(call.Arguments) > index && !goja.IsUndefined(call.Argument(index)) && !goja.IsNull(call.Argument(index))
+	}
+	headerIndex := 1
+	if method != "GET" {
+		req.Method = method
+	}
+	if method == "POST" {
+		headerIndex = 2
+		if present(1) {
+			switch body := call.Argument(1).Export().(type) {
+			case map[string]any, []any:
+				encoded, err := json.Marshal(body)
+				if err != nil {
+					return nil, runCtx.wrap(ErrScriptFailed, err)
+				}
+				req.Body = encoded
+				if req.Headers["Content-Type"] == "" {
+					req.Headers["Content-Type"] = "application/json"
+				}
+			default:
+				req.Body = []byte(call.Argument(1).String())
+			}
 		}
 	}
-	return r.policy.Fetcher.Fetch(ctx, req)
+	if present(headerIndex) {
+		mergeHeaders(req.Headers, normalizeScriptOptions(call.Argument(headerIndex).Export()))
+		if proxy, ok := req.Headers["proxy"]; ok {
+			delete(req.Headers, "proxy")
+			req.Proxy = strings.TrimSpace(proxy)
+		}
+	}
+	return r.policy.Fetcher.Fetch(runCtx.ctx, req)
 }
 
 type scriptHTTPRequest struct {
@@ -1497,15 +1829,15 @@ func callableHeaders(vm *goja.Runtime, headers http.Header) *goja.Object {
 	return obj
 }
 
-func (r *Runtime) buildScriptRequest(vm *goja.Runtime, src *domainsource.BookSource, raw string, extraHeaders map[string]string) (fetch.Request, error) {
-	expanded, err := r.expandScriptTemplates(vm, raw)
+func (r *Runtime) buildScriptRequest(runCtx evalContext, vm *goja.Runtime, raw string, extraHeaders map[string]string) (fetch.Request, error) {
+	src := runCtx.src
+	expanded, err := expandScriptTemplates(runCtx, vm, raw)
 	if err != nil {
 		return fetch.Request{}, err
 	}
-	raw = expanded
-	custom := parseCustomURL(raw)
-	if err := validateRuntimeSupportedURLOptions(custom.Attribute, "method", "body", "headers", "type", "charset", "origin", "retry"); err != nil {
-		return fetch.Request{}, r.wrapError(ErrScriptFailed, err)
+	custom := parseCustomURL(expanded)
+	if err := validateRuntimeSupportedURLOptions(custom.Attribute, scriptSupportedURLOptions...); err != nil {
+		return fetch.Request{}, runCtx.wrap(ErrScriptFailed, err)
 	}
 	baseURL := r.policy.BaseURL
 	if baseURL == "" && src != nil {
@@ -1517,9 +1849,9 @@ func (r *Runtime) buildScriptRequest(vm *goja.Runtime, src *domainsource.BookSou
 	}
 	req := fetch.Request{URL: targetURL, Method: "GET", Headers: map[string]string{}, UseCookieJar: src != nil && src.EnabledCookieJar}
 	if src != nil {
-		headers, err := runtimeHeaderMap(vm, src)
+		headers, err := r.runtimeHeaderMap(runCtx, vm)
 		if err != nil {
-			return fetch.Request{}, r.wrapError(ErrScriptFailed, err)
+			return fetch.Request{}, runCtx.wrap(ErrScriptFailed, err)
 		}
 		for key, value := range headers {
 			req.Headers[key] = value
@@ -1532,10 +1864,11 @@ func (r *Runtime) buildScriptRequest(vm *goja.Runtime, src *domainsource.BookSou
 	return req, nil
 }
 
-func runtimeHeaderMap(vm *goja.Runtime, src *domainsource.BookSource) (map[string]string, error) {
-	if src == nil {
-		return map[string]string{}, nil
-	}
+// scriptSupportedURLOptions 是脚本网络请求可识别的 URL 选项；serverID 仅用于 Legado WebDav，接受后忽略。
+var scriptSupportedURLOptions = []string{"method", "body", "headers", "type", "charset", "origin", "retry", "proxy", "dnsIp", "serverID"}
+
+func (r *Runtime) runtimeHeaderMap(runCtx evalContext, vm *goja.Runtime) (map[string]string, error) {
+	src := runCtx.src
 	header := strings.TrimSpace(src.Header)
 	headers := map[string]string{}
 	switch {
@@ -1561,13 +1894,17 @@ func runtimeHeaderMap(vm *goja.Runtime, src *domainsource.BookSource) (map[strin
 			headers[key] = value
 		}
 	}
-	for key, value := range parseHeaderJSONString(loadSourceCompatState(stripSourceSuffix(src.BookSourceURL)).LoginHeader) {
+	loginHeader, _, err := r.variables.GetVariable(runCtx.ctx, src.BookSourceURL, domainsource.VariableNameLoginHeader)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range parseHeaderJSONString(loginHeader) {
 		headers[key] = value
 	}
 	return headers, nil
 }
 
-func (r *Runtime) expandScriptTemplates(vm *goja.Runtime, raw string) (string, error) {
+func expandScriptTemplates(runCtx evalContext, vm *goja.Runtime, raw string) (string, error) {
 	if !strings.Contains(raw, "{{") || !strings.Contains(raw, "}}") {
 		return raw, nil
 	}
@@ -1590,16 +1927,11 @@ func (r *Runtime) expandScriptTemplates(vm *goja.Runtime, raw string) (string, e
 		expr := strings.TrimSpace(rest[:end])
 		value, err := vm.RunString(rewriteJavaCompatScript(expr))
 		if err != nil {
-			return "", r.wrapError(ErrScriptFailed, err)
+			return "", runCtx.wrapRunError(err)
 		}
 		b.WriteString(fmt.Sprint(value.Export()))
 		rest = rest[end+2:]
 	}
-}
-
-func looksLikeURL(value string) bool {
-	value = strings.TrimSpace(value)
-	return strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "/") || strings.Contains(value, "://")
 }
 
 type customURL struct {
@@ -1637,6 +1969,8 @@ func parseHeaderJSONString(raw string) map[string]string {
 	return out
 }
 
+// applyURLOptions 对齐 AnalyzeUrl.UrlOption：body 可为字符串或对象/数组（序列化为 JSON），
+// type 非空时响应按 hex 返回，origin 写入 Origin/Referer；proxy/dnsIp 交给 fetcher 处理。
 func applyURLOptions(req *fetch.Request, opts map[string]any) {
 	var (
 		charsetName string
@@ -1649,22 +1983,49 @@ func applyURLOptions(req *fetch.Request, opts map[string]any) {
 				req.Method = strings.ToUpper(strings.TrimSpace(method))
 			}
 		case "body":
-			if body, ok := value.(string); ok {
+			switch body := value.(type) {
+			case string:
 				rawFormBody = body
 				if looksLikeFormBody(body) {
 					req.Body = []byte(urlrule.EncodeFormString(body, ""))
+					if req.Headers["Content-Type"] == "" {
+						req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
+					}
 				} else {
 					req.Body = []byte(body)
 				}
-				if req.Headers["Content-Type"] == "" && looksLikeFormBody(body) {
-					req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
+			case map[string]any, []any:
+				if encoded, err := json.Marshal(body); err == nil {
+					req.Body = encoded
+					if req.Headers["Content-Type"] == "" {
+						req.Headers["Content-Type"] = "application/json"
+					}
 				}
 			}
 		case "headers":
 			mergeHeaders(req.Headers, value)
+		case "type":
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				req.EncodeBodyAsHex = true
+			}
+		case "origin":
+			if origin, ok := value.(string); ok && strings.TrimSpace(origin) != "" {
+				req.Headers["Origin"] = strings.TrimSpace(origin)
+				if req.Headers["Referer"] == "" {
+					req.Headers["Referer"] = strings.TrimSpace(origin)
+				}
+			}
 		case "charset":
 			if text, ok := value.(string); ok {
 				charsetName = strings.TrimSpace(text)
+			}
+		case "proxy":
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				req.Proxy = strings.TrimSpace(text)
+			}
+		case "dnsip":
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				req.DNSIP = strings.TrimSpace(text)
 			}
 		case "retry":
 			switch typed := value.(type) {
@@ -1685,6 +2046,13 @@ func applyURLOptions(req *fetch.Request, opts map[string]any) {
 					req.Retry = parsed
 				}
 			}
+		}
+	}
+	// 书源 header 中的 proxy 键是代理配置而非 HTTP 头（AnalyzeUrl.kt:128-131）；URL 选项 proxy 优先。
+	if proxy, ok := req.Headers["proxy"]; ok {
+		delete(req.Headers, "proxy")
+		if req.Proxy == "" {
+			req.Proxy = strings.TrimSpace(proxy)
 		}
 	}
 	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
@@ -1745,120 +2113,6 @@ func normalizeScriptOptions(value any) map[string]any {
 		}
 	}
 	return map[string]any{}
-}
-
-var sourceCompatState sync.Map
-
-type sourceCompatSnapshot struct {
-	Variable    string
-	LoginHeader string
-	LoginInfo   string
-}
-
-func loadSourceCompatState(key string) sourceCompatSnapshot {
-	if key == "" {
-		return sourceCompatSnapshot{}
-	}
-	if value, ok := sourceCompatState.Load(key); ok {
-		if state, ok := value.(sourceCompatSnapshot); ok {
-			return state
-		}
-	}
-	return sourceCompatSnapshot{}
-}
-
-func storeSourceCompatState(key string, state sourceCompatSnapshot) {
-	if key == "" {
-		return
-	}
-	sourceCompatState.Store(key, state)
-}
-
-func SourceBindings(src *domainsource.BookSource) map[string]any {
-	if src == nil {
-		return map[string]any{}
-	}
-	key := stripSourceSuffix(src.BookSourceURL)
-	state := loadSourceCompatState(key)
-	return map[string]any{
-		"key":               key,
-		"bookSourceUrl":     src.BookSourceURL,
-		"bookSourceName":    src.BookSourceName,
-		"bookSourceGroup":   src.BookSourceGroup,
-		"bookSourceType":    src.BookSourceType,
-		"bookSourceComment": src.BookSourceComment,
-		"variableComment":   src.VariableComment,
-		"loginUrl":          src.LoginURL,
-		"header":            src.Header,
-		"jsLib":             src.JSLib,
-		"getKey": func() string {
-			return key
-		},
-		"getLoginHeader": func() string {
-			return loadSourceCompatState(key).LoginHeader
-		},
-		"getLoginHeaderMap": func() any {
-			return compatLookupMap(loadSourceCompatState(key).LoginHeader)
-		},
-		"putLoginHeader": func(header string) bool {
-			state := loadSourceCompatState(key)
-			state.LoginHeader = header
-			storeSourceCompatState(key, state)
-			return true
-		},
-		"removeLoginHeader": func() bool {
-			state := loadSourceCompatState(key)
-			state.LoginHeader = ""
-			storeSourceCompatState(key, state)
-			return true
-		},
-		"getLoginInfo": func() any {
-			info := loadSourceCompatState(key).LoginInfo
-			if strings.TrimSpace(info) == "" {
-				return nil
-			}
-			return info
-		},
-		"getLoginInfoMap": func() any {
-			return compatLookupMap(loadSourceCompatState(key).LoginInfo)
-		},
-		"putLoginInfo": func(info string) bool {
-			state := loadSourceCompatState(key)
-			state.LoginInfo = info
-			storeSourceCompatState(key, state)
-			return true
-		},
-		"removeLoginInfo": func() bool {
-			state := loadSourceCompatState(key)
-			state.LoginInfo = ""
-			storeSourceCompatState(key, state)
-			return true
-		},
-		"getVariable": func(args ...any) string {
-			return loadSourceCompatState(key).Variable
-		},
-		"setVariable": func(value string) bool {
-			state := loadSourceCompatState(key)
-			state.Variable = value
-			storeSourceCompatState(key, state)
-			return true
-		},
-		"putVariable": func(args ...any) bool {
-			if len(args) == 1 {
-				state := loadSourceCompatState(key)
-				state.Variable = fmt.Sprint(args[0])
-				storeSourceCompatState(key, state)
-			}
-			return true
-		},
-		"removeVariable": func() bool {
-			state := loadSourceCompatState(key)
-			state.Variable = ""
-			storeSourceCompatState(key, state)
-			return true
-		},
-		"variable": state.Variable,
-	}
 }
 
 func compatLookupMap(raw string) any {
@@ -2008,41 +2262,6 @@ func stripSourceSuffix(raw string) string {
 	return raw
 }
 
-func convertChinese(mode string, value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	switch mode {
-	case "t2s":
-		openccT2SOnce.Do(func() {
-			openccT2S, openccT2SErr = opencc.New("t2s")
-		})
-		if openccT2SErr != nil || openccT2S == nil {
-			return value
-		}
-		converted, err := openccT2S.Convert(value)
-		if err != nil {
-			return value
-		}
-		return converted
-	case "s2t":
-		openccS2TOnce.Do(func() {
-			openccS2T, openccS2TErr = opencc.New("s2t")
-		})
-		if openccS2TErr != nil || openccS2T == nil {
-			return value
-		}
-		converted, err := openccS2T.Convert(value)
-		if err != nil {
-			return value
-		}
-		return converted
-	default:
-		return value
-	}
-}
-
 func aesBase64DecodeToString(data string, key string, transformation string, iv string) (string, error) {
 	plain, err := decryptSymmetricBytes(decodeSymmetricInput(data), transformation, []byte(key), []byte(iv))
 	if err != nil {
@@ -2105,69 +2324,9 @@ func pkcs7Unpad(data []byte, blockSize int) ([]byte, error) {
 	return data[:len(data)-padding], nil
 }
 
-func (r *Runtime) installInterrupt(ctx context.Context, vm *goja.Runtime) func() {
-	timeout := r.policy.Timeout
-	var cancel context.CancelFunc
-	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-	} else {
-		ctx, cancel = context.WithCancel(ctx)
-	}
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			select {
-			case <-done:
-				return
-			default:
-				vm.Interrupt(ErrScriptTimeout)
-			}
-		case <-done:
-		}
-	}()
-	return func() {
-		close(done)
-		cancel()
-	}
-}
-
-func (r *Runtime) wrapError(kind error, err any) error {
-	message := logging.RedactString(fmt.Sprint(err))
-	if r.policy.Stage != "" {
-		return fmt.Errorf("%w: %s: %s", kind, r.policy.Stage, message)
-	}
-	return fmt.Errorf("%w: %s", kind, message)
-}
-
+// Logs 返回有界日志缓冲的快照（仅 AllowLog 时写入）。
 func (r *Runtime) Logs() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.logs...)
-}
-
-type NamespacedCache struct {
-	mu     sync.Mutex
-	values map[string]map[string]any
-}
-
-func NewNamespacedCache() *NamespacedCache {
-	return &NamespacedCache{values: map[string]map[string]any{}}
-}
-
-func (c *NamespacedCache) Put(namespace string, key string, value any) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.values[namespace] == nil {
-		c.values[namespace] = map[string]any{}
-	}
-	c.values[namespace][key] = value
-}
-
-func (c *NamespacedCache) Get(namespace string, key string) any {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.values[namespace][key]
+	return r.logs.Snapshot()
 }
 
 type MemoryCookieStore struct {

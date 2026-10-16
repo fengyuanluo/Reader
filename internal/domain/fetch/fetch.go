@@ -20,6 +20,10 @@ type Request struct {
 	AllowNonSuccess  bool
 	EncodeBodyAsHex  bool
 	Retry            int
+	// Proxy 是 URL 选项或书源 header 中的 proxy（如 socks5://host:port）；为空表示直连。
+	Proxy string
+	// DNSIP 是 URL 选项 dnsIp：连接时使用的固定 IP，Host 头仍保持原域名。
+	DNSIP string
 }
 
 type Response struct {
