@@ -51,6 +51,7 @@ reader serve [--addr <addr>]
 - 默认监听 `127.0.0.1:8080`，只接受本机连接。
 - `READER_TOKEN` 为空时只允许监听回环地址（`127.0.0.0/8`、`::1`、`localhost`），此时不做鉴权；空 token 监听 `0.0.0.0`、`:8080`、局域网 IP 等非回环地址会拒绝启动（`error: READER_TOKEN is required ...`，退出码 2），所有环境都一样。
 - production 环境无论监听哪里都必须设置 `READER_TOKEN`。
+- 风险提示：`READER_ENV=test` 且 token 为空时，config 会填入公开默认 token `reader-test-token`，因此 test 环境即使监听非回环地址也能启动。仅限本地/CI，不要把 test 环境暴露到不可信网络。
 - 超时：读请求头 5s、读完整请求（含 body）60s、keep-alive 空闲 120s；不设全局写超时，保证 debug/check SSE 长连接不被截断。
 - Ctrl-C / SIGTERM 优雅关闭（最长 5s）。
 - 结构化 JSON 日志输出到 **stderr**（旧 `cmd/server` 输出到 stdout）。收集日志改用 `reader serve 2>app.log`；`1>app.log` 只会得到空文件。
