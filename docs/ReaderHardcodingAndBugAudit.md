@@ -110,7 +110,7 @@
 
 事实：
 
-- `cmd/server/main.go` 只创建一个共享 `scriptRuntime`。
+- `internal/bootstrap/bootstrap.go` 只创建一个共享 `scriptRuntime`（由 `cmd/reader serve` 与 CLI 子命令共用）。
 - `internal/infra/script/runtime.go` 在首次执行时会把 `policy.SourceKey` 写成当前源。
 - 写入后不会在下一次执行前重置。
 - `cache.get/put`、`java.get/put` 都依赖这个字段。
@@ -188,12 +188,12 @@
 事实：
 
 - Legado 会在 `bookList` / `chapterList` 前缀为 `-` 时反转结果，`+` 时显式保序。
-- Reader 搜索和发现没有实现这个语义。
-- Reader 目录虽然剥掉了前缀，但没有执行 reverse。
+- Reader 搜索、发现、目录此前都没有实现这个语义。
 
 结论：
 
-- 结果顺序可能与 Legado 不一致。
+- 已修复：搜索、发现、目录都按 `+`/`-` 前缀归一化列表规则，`-` 时对结果做 reverse（`normalizeListRule`/`normalizeDiscoveryListRule`/`normalizeTocListRule`），并补了对应回归测试。
+- 该差异在当前主链路上已收口，不再作为未修 bug。
 
 ### 5.7 `Analyzer` 变量域主链路已收口
 
@@ -216,12 +216,13 @@
 事实：
 
 - `bookUrlPattern` 命中详情页时，Legado 会直接走详情解析。
-- Reader 只返回最小 `SearchBook`。
-- 列表为空时，Legado 还会尝试详情页解析，Reader 没有。
+- 列表为空时，Legado 还会尝试详情页解析。
 
 结论：
 
-- 一类“搜索直接跳详情页”的源会丢字段甚至直接丢结果。
+- 已修复：`bookUrlPattern` 命中时用详情解析（`PreviewSearchBookFromInfo`）生成 `SearchBook`，解析失败才退回最小 `SearchBook`。
+- 已修复：仅在未配置 `bookUrlPattern` 时，列表为空会按详情页回退解析（搜索与发现共用同一语义）。
+- 该差异在当前主链路上已收口，不再作为未修 bug。
 
 ### 5.9 正文高级字段主链路已收口，剩余为服务端边界
 

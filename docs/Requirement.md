@@ -90,6 +90,7 @@
 - 阅读进度保存。
 - 书源调试事件流。
 - 书源批量校验任务。
+- 书源登录状态查询、登录脚本执行与登录头持久化。
 - Token 鉴权。
 - OpenAPI 契约、生成代码、契约测试。
 
@@ -293,7 +294,8 @@
 - 需求描述：服务必须将书源中的 URL 规则解析为实际 HTTP 请求，包括关键词、页码、自定义属性、Header、Body 等。
 - 输入：书源 URL 规则、关键词、页码、书籍/章节上下文。
 - 输出：可执行的 fetch request。
-- 边界：一期必须覆盖常用 HTTP 抓取；WebView 专属能力不支持并返回明确错误。
+- 边界：一期必须覆盖常用 HTTP 抓取；`serverID`、`webJs`、`webViewDelayTime` 接受但不生效；`webView: true` 与依赖浏览器的 `js` 明确不支持并返回明确错误。
+- 支持的 URL option：`proxy`（书源 `header` 的 `proxy` 键或 URL option，支持 `http`/`https`/`socks5`/`socks5h`，不支持 `socks4`）、`dnsIp`（直连指定 IP，保留 Host 头与 TLS SNI，不可与 `proxy` 同用）、`charset`（query/body 编码）。
 - 验收标准：关键词替换、页码替换、自定义 URL 属性和相对 URL 有单元测试。
 - 优先级：P0
 
@@ -303,7 +305,7 @@
 - 需求描述：所有外部请求必须有超时、并发、响应大小、重定向和 SSRF 防护。
 - 输入：抓取请求。
 - 输出：响应体或结构化抓取错误。
-- 边界：默认禁止私网、回环、链路本地、metadata 地址；重定向后目标也必须检查。
+- 边界：默认禁止私网、回环、链路本地、metadata 地址，以及 CGN、NAT64、6to4、文档段等特殊用途地址段；SSRF 校验在拨号阶段对每个解析结果执行，可防 DNS rebinding 与重定向绕过；忽略 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量，代理只来自书源配置，经代理抓取时目标校验为尽力而为。
 - 验收标准：mock 测试覆盖超时、过大响应、过多重定向、私网地址、Cookie 合并。
 - 优先级：P0
 
@@ -313,7 +315,7 @@
 - 需求描述：服务必须支持书源 Header、Header JS、Cookie Jar、登录 Header、`loginCheckJs` 的受限实现。
 - 输入：书源配置和 HTTP 响应。
 - 输出：带 Header/Cookie 的请求，或被 `loginCheckJs` 转换后的响应。
-- 边界：不实现 Android WebView 登录 UI；`loginUi` 只作为兼容字段和后续扩展。
+- 边界：不实现 Android WebView 登录 UI；`loginUi` 只作为兼容字段和后续扩展。Cookie 过期或 `expires_at` 损坏时不再发送并删除；`Max-Age <= 0` 视为删除；`enabledCookieJar` 按书源生效。
 - 验收标准：Header JSON 生效；Header JS 返回 JSON 生效；Cookie 按域保存和合并；`loginCheckJs` 能在沙箱内运行并处理响应。
 - 优先级：P0
 
@@ -333,9 +335,19 @@
 - 需求描述：服务必须提供受限 JS 执行能力，用于 Header JS、规则 JS、`loginCheckJs`、部分格式化 JS。
 - 输入：JS 代码、绑定变量、执行阶段。
 - 输出：JS 返回值或结构化 JS 错误。
-- 边界：禁止文件系统、进程、任意网络、宿主反射、无限循环；只暴露白名单 API。
-- 验收标准：无限循环被超时中断；无法访问文件系统；错误包含 sourceId 和阶段；敏感信息脱敏。
+- 边界：禁止进程、任意网络、宿主反射、无限循环；文件 API 只允许 `<DataDir>/script-files` 沙箱（越界路径与压缩包越界条目被拒绝，单次解压总量上限 64 MiB/4096 条，无沙箱根时抛 `script_unsupported`）；浏览器类 API（`webView*`、`startBrowser*`、`getVerificationCode`、`openUrl`）与 7z/rar 抛 `script_unsupported`，脚本可 try/catch；不提供 RSS 文章链路相关的 `rssArticle`。
+- 验收标准：无限循环被超时中断；沙箱外文件不可访问；错误包含 sourceId 和阶段（`<kind>: stage=<stage> source=<sourceId>: msg`）；敏感信息脱敏。
 - 优先级：P0
+
+### R-035：书源登录状态与登录脚本
+
+- 来源依据：`BaseSource.kt`、`SourceLoginViewModel.kt`
+- 需求描述：服务必须提供书源登录能力：查询/提交/清除登录状态；提交时先把表单值持久化为 `loginInfo`，再执行 `loginUrl` 的 login 脚本，脚本写入的登录头持久化为 `loginHeader`，并用于后续请求链。
+- 输入：书源 ID、可选的 `values` 表单键值。
+- 输出：`BookSourceLoginState{sourceId,hasLoginUrl,hasLoginUi,loggedIn,loginInfo,loginHeader}`。
+- 边界：不引入无头浏览器；`loginUi` 为空且 `loginUrl` 非脚本时返回 501 `unsupported_login_flow`；提交空 `values` 等价于只清除 `loginInfo`。
+- 验收标准：书源不存在 404；表单值非法 400；脚本失败 502；`DELETE` 清除后状态为未登录并可 204 返回。
+- 优先级：P1
 
 ## 9. 在线书源业务闭环需求
 
@@ -481,20 +493,20 @@
 
 - 来源依据：`AppDatabase.kt`
 - 需求描述：一期使用 SQLite 存储书源、书籍、章节、替换规则、Cookie、缓存、任务、调试日志。
-- 输入：应用配置中的 SQLite DSN。
+- 输入：应用配置中的 SQLite DSN（数据库文件路径）。
 - 输出：可迁移的数据库。
-- 边界：业务层不得依赖 SQLite 具体实现；必须通过 repository 接口访问。
+- 边界：业务层不得依赖 SQLite 具体实现；必须通过 repository 接口访问。数据目录以 `0700` 创建、数据库文件强制 `0600`；连接级 PRAGMA（`foreign_keys(1)`、`busy_timeout(5000)`、`journal_mode(WAL)`）由 `sqlite.Open` 通过 DSN `_pragma` 对每条连接生效；schema 变更用 `internal/infra/sqlite/migrate.go` 内嵌的版本化迁移列表，已发布版本禁止修改，结构变更只追加新版本。
 - 验收标准：空库迁移成功；重复迁移不破坏数据；repository 测试覆盖事务。
 - 优先级：P0
 
 ### R-081：缓存策略
 
 - 来源依据：`BookController.kt`、`ContentProcessor.kt`、`CookieStore.kt`
-- 需求描述：服务必须缓存章节正文、源变量、Cookie、临时抓取结果或任务结果。
+- 需求描述：服务必须缓存章节正文、源变量、Cookie、任务/调试状态。
 - 输入：抓取和解析产物。
 - 输出：缓存记录。
-- 边界：缓存必须可按书源或书籍清理；缓存命中策略必须可测试。
-- 验收标准：章节正文缓存命中避免二次网络请求；删除书籍清理章节正文缓存；删除书源清理源变量。
+- 边界：缓存必须可按书源或书籍清理（删除书源/书籍时随事务清理）；缓存命中策略必须可测试。图片缓存有效期 7 天，读取时跳过过期行，服务启动时清理过期行；章节正文缓存不过期，且只保存“书源 `replaceRegex` 之后、用户替换规则之前”的原文，用户替换规则在每次读取时应用（改规则立即生效）。脚本 `cache` 为进程内有界缓存，不落库。
+- 验收标准：章节正文缓存命中避免二次网络请求；修改替换规则后读取正文立即生效；删除书籍清理章节正文缓存；删除书源清理源变量。
 - 优先级：P0
 
 ### R-082：CLI 模式
@@ -515,8 +527,8 @@
 - 需求描述：服务必须通过配置控制监听地址、SQLite 路径、Token、超时、并发、响应大小、是否允许私网抓取。
 - 输入：环境变量或配置文件。
 - 输出：运行时配置。
-- 边界：敏感配置不得打印原文。
-- 验收标准：缺少 Token 时生产模式拒绝启动；测试模式可使用默认 token；配置错误返回启动错误。
+- 边界：敏感配置不得打印原文。默认监听 `127.0.0.1:8080`（回环）；`READER_TOKEN` 为空时只允许监听回环地址（`127.0.0.0/8`、`::1`、`localhost`），监听非回环地址时拒绝启动（退出码 2，不建库），该规则对所有环境生效；`READER_ENV=production` 无论监听哪里都必须设置 token；`READER_ENV=test` 且 token 为空时会填入公开默认 token `reader-test-token`（本地/CI 便利，不可暴露到不可信网络）。
+- 验收标准：缺少 Token 时生产模式拒绝启动；空 token 监听非回环地址拒绝启动；测试模式可使用默认 token；配置错误返回启动错误。
 - 优先级：P0
 
 ### R-091：可观测性
@@ -541,4 +553,4 @@
 - 能应用标题替换和正文替换规则。
 - 能启动调试 session 并看到搜索、详情、目录、正文阶段事件。
 - 能启动批量校验任务并得到每个书源的分类结果。
-- 能通过 `go generate ./...`、`go test ./...`、`go vet ./...`、OpenAPI 校验和 SQLite migration 测试。
+- 能通过 `go generate ./...`、`go test -race -count=1 ./...`、`go vet ./...`、OpenAPI 校验和 SQLite migration 测试。

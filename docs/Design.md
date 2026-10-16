@@ -60,6 +60,8 @@
 - `internal/infra` 实现 SQLite、HTTP、规则解析、JS 沙箱、缓存等具体能力。
 - `internal/worker` 只负责任务调度，不直接解析 HTTP 请求。
 
+HTTP server 超时（`cmd/reader/serve.go`）：`ReadHeaderTimeout` 5s、`ReadTimeout` 60s、`IdleTimeout` 120s；**有意不设全局 `WriteTimeout`**，因为 debug/check 的 SSE 长连接与长时搜索不能被全局写超时打断。日志为 JSON 输出到 **stderr**。
+
 ## 4. 推荐目录结构
 
 ```text
@@ -82,6 +84,7 @@ internal/
     book/
     content/
     replace/
+    diagnostic/
     debug/
     check/
   bootstrap/
@@ -96,17 +99,17 @@ internal/
     errors/
   infra/
     sqlite/
-      migrations/
       repositories/
     fetcher/
+    ratelimit/
+    concurrency/
     rule/
     script/
-    cache/
+    chinese/
     logging/
     config/
   worker/
     check/
-    debug/
 test/
   fixtures/
     book_sources/
@@ -121,6 +124,9 @@ test/
 - `internal/domain` 不允许导入 `database/sql`、`net/http`、`chi`、`goja`。
 - `internal/app` 不允许直接拼 SQL，不允许直接 new HTTP client。
 - `internal/infra` 可以依赖第三方库，但必须实现 domain ports。
+- 没有独立的 `internal/infra/cache/`：进程内缓存由 `internal/infra/script` 提供（脚本 `cache`/`java.put` 与日志缓冲），持久化缓存由 `internal/infra/sqlite/repositories` 通过 `cache_entries` 表提供（章节正文、图片）。
+- 没有 `internal/infra/sqlite/migrations/` 目录：schema 迁移改为 `internal/infra/sqlite/migrate.go` 内嵌的版本化列表。
+- 没有 `internal/worker/debug/`：调试会话 Runner 位于 `internal/app/debug`；`internal/worker` 只保留 `check/`。
 
 ## 5. OpenAPI 设计
 
@@ -149,6 +155,9 @@ DELETE /api/v1/book-sources/{sourceId}
 PATCH  /api/v1/book-sources/{sourceId}/enabled
 PATCH  /api/v1/book-sources/{sourceId}/explore-enabled
 PATCH  /api/v1/book-sources/reorder
+GET    /api/v1/book-sources/{sourceId}/login
+POST   /api/v1/book-sources/{sourceId}/login
+DELETE /api/v1/book-sources/{sourceId}/login
 
 POST   /api/v1/search
 POST   /api/v1/discovery
@@ -223,6 +232,22 @@ Error:
 | `task_cancelled` | 任务被取消 |
 | `internal_error` | 未分类内部错误 |
 
+### 5.4 状态码与会话语义
+
+- 异步资源创建/取消返回 **202** 而不是 200：`POST /check/book-sources`、`DELETE /check/tasks/{taskId}`、`POST /debug/book-source`、`DELETE /debug/sessions/{sessionId}` 返回任务/会话快照，终态由后续 `GET` 轮询或 SSE 事件流确认。
+- 未装配的可选服务返回 **501 `not_configured`**（应用 501 表达“本次装配不提供该能力”），不再用 500 掩盖；书源登录走 `loginUi` 无头浏览器流程时返回 **501 `unsupported_login_flow`**。
+- **409 `source_conflict`**：`PUT /book-sources/{sourceId}` 修改 `bookSourceUrl` 时，新地址已被别的书源占用，或 body 中的 `sourceId` 与路径不一致。
+- **413 `payload_too_large`**：普通 JSON 请求体超过 10 MiB，书源导入请求体超过 32 MiB。
+- **400**：`pageSize` 超过 200、缺少 `Content-Type: application/json`（JSON 端点）、`DebugSession.mode` 不在枚举内、`POST /check/book-sources` 指定不存在的 sourceId，均返回 `validation_failed` 或 `source_not_found`。
+- `GET /openapi.yaml` 返回 YAML，`Content-Type` 为 `application/yaml`。
+
+事件流（SSE）契约，适用于 `/debug/sessions/{sessionId}/events` 与 `/check/tasks/{taskId}/events`：
+
+- 响应 `Content-Type: text/event-stream`，事件行格式 `id: <eventId>\nevent: <type>\ndata: <json>\n\n`。
+- 订阅时先回放历史事件（支持 `Last-Event-ID` 续传），随后实时推送新增事件。
+- 会话进入终态后停止推送并关闭响应；订阅不存在的会话立即返回 **404**。
+- 连接空闲时周期发送 `: heartbeat` 注释行保活（同时用于检测已收敛的会话）。
+
 ## 6. 领域模型设计
 
 ### 6.1 BookSource
@@ -272,6 +297,8 @@ BookSource
 
 - `SearchBook.toBook()` 应保留 `name`、`author`、`bookUrl`、`origin`、`originName`、`type`、`wordCount`、`latestChapterTitle`、`coverUrl`、`intro`、`tocUrl`、`originOrder`、`variable`。
 - `Book` 必须保存 `durChapterIndex`、`durChapterPos`、`durChapterTime` 等进度字段。
+- `Book` 还必须持久化并在 API 往返中保留一批 Legado 元数据字段（迁移 v6 加列）：`customTag`、`customCoverUrl`、`customIntro`、`charset`、`group`、`latestChapterTime`、`lastCheckTime`、`lastCheckCount`、`totalChapterNum`、`canUpdate`、`order`、`syncTime`。
+- `POST` / `PATCH` 书源容忍未知字段：未识别的 Legado 字段原样写入 `raw_json` 并在读取时回写，保证未知字段不丢。
 
 ### 6.3 BookChapter
 
@@ -309,19 +336,20 @@ BookSource
 
 ### 7.1 迁移策略
 
-- 使用迁移工具管理 SQL，例如 `goose`。
-- 所有 schema 变更必须写迁移。
+- 不使用外部迁移工具：`internal/infra/sqlite/migrate.go` 内维护按版本升序排列的迁移列表（`version + name + apply`），每个版本在独立事务内执行并写入 `schema_migrations`。
+- 已发布版本禁止修改，结构变更只能追加新版本。
 - 迁移必须支持空库启动。
 - migration tests 必须验证重复运行不会破坏数据。
 
+连接级 PRAGMA（外键、`busy_timeout`、WAL）不由迁移设置，而由 `sqlite.Open` 通过 DSN `_pragma` 参数对连接池里的每条连接生效。
+
 ### 7.2 表设计
 
-建议表：
+当前表（不含已在 v3 删除的 `search_books`）：
 
 ```text
 book_sources
 books
-search_books
 chapters
 replace_rules
 cookies
@@ -333,6 +361,8 @@ check_tasks
 check_task_items
 schema_migrations
 ```
+
+索引：`book_sources(enabled)`、`book_sources(enabled_explore)`、`book_sources(custom_order)`、`debug_events(session_id, event_id)`。
 
 ### 7.3 book_sources
 
@@ -356,19 +386,22 @@ schema_migrations
 
 ### 7.5 cache_entries
 
-缓存 key 设计：
+`cache_entries` 只承载两类持久化缓存（源变量走独立 `source_variables` 表，脚本缓存是进程内的 `internal/infra/script`）：
 
-| 类型 | key 建议 |
-|---|---|
-| 章节正文 | `content:{bookId}:{chapterIndex}` |
-| 源变量 | `source_variable:{bookSourceUrl}:{name}` |
-| JS 缓存 | `script_cache:{bookSourceUrl}:{key}` |
-| 图片缓存 | `image:{sha256(url)}` |
-| 抓取缓存 | `fetch:{sha256(request)}` |
+| 类型 | namespace | key | 有效期 |
+|---|---|---|---|
+| 章节正文 | `content` | `content:{bookId}:{chapterIndex}` | 永不过期 |
+| 图片 | `image` | `image:{sha256(url)}` | 7 天（`expires_at = datetime('now','+7 days')`） |
+
+缓存语义：
+
+- 图片缓存读取时跳过已过期行；服务启动时删除过期行及 `expires_at` 为空的旧条目（避免引入 TTL 前的残留无限增长）。
+- 章节正文缓存只保存**书源 `replaceRegex` 之后、用户替换规则之前**的原文；用户替换规则在每次读取时应用，因此改动替换规则立即生效。
+- 迁移 v5 会清空旧的 `namespace='content'` 缓存（旧值保存的是已应用用户规则的正文）；旧库首次启动后正文需重新抓取一次。
 
 缓存表字段：
 
-- `key`
+- `cache_key`
 - `namespace`
 - `owner_type`
 - `owner_id`
@@ -414,6 +447,7 @@ type ChapterRepository interface {
     FindByIndex(ctx context.Context, bookID string, index int) (*BookChapter, error)
     SaveContent(ctx context.Context, bookID string, chapterIndex int, content string) error
     GetContent(ctx context.Context, bookID string, chapterIndex int) (string, bool, error)
+    SaveTitle(ctx context.Context, bookID string, chapterIndex int, title string) error
 }
 ```
 
@@ -505,6 +539,15 @@ type CheckTaskRunner interface {
 
 Legado 规则支持复杂切分，`RuleAnalyzer.kt` 和 `RuleAnalyzer.kt` 中的 `RuleAnalyzer` 是关键参考。Go 实现必须把规则切分单独封装，避免解析逻辑散落在业务代码中。
 
+具体语义（对齐 Legado `makeUpRule` / `AnalyzeRule`）：
+
+- `##regex##replacement###` 中的末尾 `###` 是 replaceFirst：只替换首个匹配片段，无匹配时返回空串；空替换写作 `##regex#####`；非法正则降级为字面量替换。
+- `@get:{...}` / `{{...}}` 模板支持混合与 `@put:{...}`，按 Legado `makeUpRule` 在完整规则上一次展开后再拆分。
+- JSONPath 过滤支持 `> < >= <= && || !`。
+- CSS 支持 `text.关键词.N` / `[N]`、`children.xxx`、逗号选择器按文档序求并集、属性值去重。
+- `@get:{bookName}` / `@get:{title}` 分别取当前书名与章节标题。
+- 正则编译、JSONPath `Evaluable`、CSS 选择器解析都有进程内 LRU 缓存。
+
 规则执行必须返回 typed error：
 
 - `RuleSyntaxError`
@@ -526,6 +569,8 @@ URL 归一化必须参考：
 - 规则提取 URL 时，以 redirect URL 优先作为 base。
 - 如果 URL 带自定义属性，属性必须被保留。
 - 空 URL 不应 panic，应返回空值或明确错误，取决于调用场景。
+- **只有 URL 类字段**（`bookUrl`、`coverUrl`、`tocUrl`、`nextTocUrl`、`nextContentUrl`、`downloadUrls`）按 Legado `isUrl` 语义做绝对化；普通文本字段不再被绝对化（例如 `1.2万` 不会被改写成 URL）。
+- `bookUrlPattern` 为整串匹配（对齐 Legado `baseUrl.matches(pattern)`），编译失败返回明确错误。
 
 ## 10. HTTP Fetcher 设计
 
@@ -543,6 +588,13 @@ Fetcher 必须支持：
 - Cookie 持久化与合并。
 - 登录 Header。
 - `loginCheckJs` 响应处理。
+- 代理：只来自书源 `header` 中的 `proxy` 键（Legado 约定）或 URL 选项 `proxy`，**忽略 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量**；支持 `http`/`https`/`socks5`/`socks5h`，凭证支持 Legado 的 `host:port@user@pass` 写法与标准 userinfo 写法；不支持 `socks4`。
+- URL 选项 `dnsIp`：直连指定 IP，保留 Host 头与 TLS SNI；该 IP 同样过 SSRF 校验，且不可与 `proxy` 同时使用。
+- URL 选项 `charset`：对 query/body 做指定编码。
+- GET/HEAD 不发送请求体（对齐 Legado `AnalyzeUrl`：忽略 body 选项）。
+- 响应无 `Content-Type` 时，按 BOM 与前 4 KiB 内 `<meta charset>` 嗅探编码（不做 Legado 的统计式编码探测）；有 `Content-Type` 时按 charset 把文本响应解码为 UTF-8。
+
+URL 选项 `serverID`、`webJs`、`webViewDelayTime` 接受但不生效；`webView: true` 与依赖浏览器的 `js` 明确不支持。
 
 ### 10.2 安全策略
 
@@ -560,6 +612,10 @@ Fetcher 必须支持：
 - 请求超时默认 30 秒。
 - 每源并发默认由 `concurrentRate` 或全局配置控制。
 
+SSRF 校验在**拨号阶段**执行：每次建立连接只解析一次域名，校验全部解析结果后直接连接已校验的 IP，因此 DNS rebinding 与重定向都无法绕过；重定向目标重新拨号，同样过校验。封禁范围除回环/私网/链路本地外，还包含 CGN（`100.64.0.0/10`）、NAT64（`64:ff9b::/96`、`64:ff9b:1::/48`）、6to4（`2002::/16`）、文档段（`192.0.2.0/24`、`198.51.100.0/24`、`203.0.113.0/24`、`2001:db8::/32`）等特殊用途地址段。
+
+经 `proxy` 抓取时，代理主机允许私网地址；目标主机的校验只做尽力而为（本地解析后校验），无法排除代理侧 DNS 解析结果与本地不同。
+
 ### 10.3 Cookie 策略
 
 参考 `CookieStore.kt`：
@@ -568,6 +624,8 @@ Fetcher 必须支持：
 - 持久 Cookie 和 session Cookie 合并。
 - Cookie 长度过大时必须有清理策略。
 - 调试日志不得打印 Cookie 原文。
+- 过期或 `expires_at` 损坏的持久化 Cookie 不再发送，并从存储中删除；`Max-Age <= 0` 视为删除该 Cookie（`Max-Age` 优先于 `Expires`）。
+- `enabledCookieJar` 按书源生效，由 `fetch.Request.UseCookieJar` 透传。
 
 Go 实现建议：
 
@@ -585,26 +643,31 @@ Go 实现建议：
 
 允许暴露：
 
-- `source`：只读书源字段和受控变量 API。
-- `book`：当前书籍上下文。
-- `chapter`：当前章节上下文。
+- `source`：只读书源字段和受控变量 API（含 `setVariable`/`getVariable`、`putLoginHeader`/`getLoginHeader`）。
+- `book`：当前书籍上下文（含 `getVariable`/`putVariable`）。
+- `chapter`：当前章节上下文（含 `getVariable`/`putVariable`）；Reader 无 RSS 文章链路，不提供 `rssArticle`，`title` 绑定为当前章节标题。
 - `result`：当前响应对象。
 - `cache.get`、`cache.put`：受命名空间限制的键值缓存。
 - `log`：调试日志输出。
 - `url.resolve`：URL 解析。
 - `JSON`、`String`、`Math`、`Date` 等 JS 内建能力。
+- 兼容补齐的 Legado helper：`java.ajax`、`java.head`、`java.timeFormat`、`java.htmlFormat`、`java.toNumChapter`、`java.strToBytes`/`java.bytesToStr`、`java.base64DecodeToByteArray`、`java.hexDecodeToByteArray`、`java.md5Encode16`、`java.getCookie`、`java.cacheFile`、`java.importScript`、`java.getSource`、`java.toURL`、`androidId`、`java.logType`、`java.queryTTF`/`java.queryBase64TTF`/`java.replaceFont`。
+- 本地文件 API（`java.readFile`/`java.writeFile`/`java.downloadFile`、zip 解压等）限定在 `<DataDir>/script-files` 沙箱内；未配置沙箱根时抛 `script_unsupported`。
+- `java.ajax` 失败时返回错误文本（与 Legado `JsExtensions.kt` 一致，非 null）。
 
 ### 11.3 禁止能力
 
 禁止暴露：
 
-- 文件系统。
+- 任意文件系统访问（仅允许上述沙箱内文件 API）。
 - 进程执行。
 - 任意网络请求。
 - Go 指针或反射。
 - 环境变量。
 - 未脱敏 Cookie 和 Token。
 - 无限循环。
+
+浏览器类 API（`webView*`、`startBrowser*`、`getVerificationCode`、`openUrl`）与 7z/rar 解压抛 `script_unsupported`（脚本可 try/catch）。
 
 ### 11.4 执行限制
 
@@ -615,7 +678,15 @@ Go 实现建议：
 - 最大调用次数或 interrupt 机制。
 - panic recover。
 - 错误包装。
-- 阶段信息，例如 `header_js`、`login_check_js`、`rule_js`、`toc_format_js`。
+- 阶段信息。
+
+阶段由 app 层通过 ctx 标注，不再有全局 Stage。阶段取值：`search`、`info`、`toc`、`content`、`image_decode`、`discovery`，以及子阶段 `toc.format_js`、`toc.pre_update_js`、`*.header_js`、`*.login_check_js`。脚本错误信息格式为 `<kind>: stage=<stage> source=<sourceId>: msg`。
+
+其他执行约束：
+
+- 书源级脚本状态（`sourceVariable`/`loginHeader`/`loginInfo`/`v_<key>`）持久化到 `source_variables` 表，每次读写直接走仓库，无跨请求内存缓存；删除书源时随事务清理。
+- 脚本 `cache` 有界（条目数、总字节、单值大小上限 + TTL），日志缓冲有界。
+- 书源 `jsLib` 按内容哈希缓存 `goja.Compile` 结果，每次 `Eval` 仍使用独立 VM，状态不跨执行共享。
 
 ## 12. 业务用例设计
 
@@ -645,6 +716,15 @@ Import request
 - `groupName`
 - `updatePolicy`: 默认按 `lastUpdateTime`
 
+落库语义：
+
+- 数组导入在单事务内落库：任一条写库失败整批回滚，不留部分导入状态；解析失败的单条记为 failed 并继续处理其余条目。
+- 同批次内重复 URL 视为“已存在”，仍受 `updatePolicy` 约束。
+- 默认 `lastUpdateTime` 策略在两者 `lastUpdateTime` 相等时跳过（与 Legado `ImportBookSourceViewModel` 一致），需要覆盖时用 `updatePolicy=always`。
+- 书源关键字/分组过滤会转义 LIKE 通配符（`ESCAPE '\'`）。
+- 书源组分隔符对齐 Legado `AppPattern.splitGroupRegex`：`[,;，；]`。
+- 导入或覆盖书源后会使该源的发现分类缓存失效。
+
 ### 12.2 搜索
 
 单源搜索流程：
@@ -671,6 +751,16 @@ resolve source scope
   -> return result
 ```
 
+并发与容错：
+
+- `READER_GLOBAL_CONCURRENCY` 是全局抓取并发上限，同时作为多源搜索与发现的并发度；`READER_SOURCE_CONCURRENCY` 是单源并发上限。
+- 书源 `concurrentRate`（`n` 为同一源两次访问的最小毫秒间隔，`n/ms` 为窗口内次数）按 Legado `ConcurrentRateLimiter` 语义按源限流，已接入多源搜索、发现与单源搜索抓取入口（book/content 抓取路径尚未接线，可后续在共享 fetcher 中间件统一注入）。
+- 每个源的 goroutine 有 panic 隔离：单源 panic 只转成该源的 Warning，其余源结果照常返回。
+- 无效 sourceId 转成 Warning（`source_unavailable`），不使整个请求 500。
+- 搜索结果按 Legado 语义清洗：书名去装饰、作者去前后缀、`wordCount`、`intro` 去 HTML。
+
+`SearchResponse.hasMore` 语义：本页有结果即可继续翻页（Legado 书源分页无总数信息，空页即结束）。
+
 ### 12.3 发现
 
 发现与搜索共用列表解析能力。差异：
@@ -678,6 +768,7 @@ resolve source scope
 - 输入为发现 URL 或分类。
 - 规则优先使用 `ruleExplore`，为空时可按 Legado 行为回退到 `ruleSearch`。
 - 只使用 `enabledExplore = true` 且有 `exploreUrl` 的书源。
+- 发现分类（`exploreKinds()`）结果按源缓存，带 TTL（默认 10 分钟）与条目上限（默认 256），并支持按源失效（导入/编辑书源后失效）。
 
 ### 12.4 详情
 
@@ -721,10 +812,29 @@ check chapter content cache
   -> parse content and nextContentUrl
   -> fetch next content pages
   -> apply contentRule.replaceRegex
+  -> save raw content to cache (SkipCache=false)
+  -> write parsed chapter title back (SaveTitle)
   -> apply ContentProcessor
-  -> save cache
   -> return content
 ```
+
+要点：
+
+- 缓存保存的是 `replaceRegex` 之后、用户替换规则之前的原文；缓存命中时也要重新应用 `ContentProcessor`（改动替换规则立即生效）。
+- 多 `nextContentUrl` 分页有界并发抓取（上限 8），并按规则顺序拼接；遇到“下一页链接等于下一章 URL”即停止。
+- 正文规则解析出的章节标题会写回章节表（`ChapterRepository.SaveTitle`）。
+- `contentRule.sourceRegex` 不支持：Legado 仅通过 BackstageWebView 资源嗅探实现（属 WebView-only），Reader 在校验阶段提前给出明确失败项，抓取阶段返回 `ErrUnsupportedContentBrowserFlow`。
+- 正文图片经安全代理获取时复用书源 `coverDecodeJs` / `imageDecode` 上下文（`image_decode` 阶段）。
+
+### 12.7 书源登录
+
+openapi-first 的登录能力（`GET/POST/DELETE /book-sources/{sourceId}/login`）：
+
+- `POST` 请求体为 `BookSourceLoginRequest{values?: map<string,string>}`：先把提交的表单值持久化为 `loginInfo`，再执行 `loginUrl` 中的 login 脚本，脚本通过 `source.putLoginHeader` 写入的登录头会持久化到 `loginHeader`；提交空 `values` 等价于只清除 `loginInfo`。
+- 状态响应 `BookSourceLoginState{sourceId,hasLoginUrl,hasLoginUi,loggedIn,loginInfo,loginHeader}`。
+- `loginUi` 为空且 `loginUrl` 非脚本时返回 501 `unsupported_login_flow`（不引入无头浏览器）；书源不存在 404，未声明 `loginUrl` 或表单值非法 400，脚本失败 502。
+- `DELETE` 清除持久化的 `loginInfo` 与 `loginHeader`（204）。
+- 状态存储与书源级脚本状态共用 `source_variables` 表（见 11.4）。
 
 ## 13. 替换净化设计
 
@@ -737,6 +847,12 @@ check chapter content cache
 - 应用正文替换。
 - 对 regex 设置超时。
 - 记录实际命中的替换规则。
+
+替换语义：
+
+- 规则内的 `##regex##replacement###` 末尾 `###` 表示 replaceFirst（只替换首个匹配片段，无匹配返回空串）；空替换写作 `##regex#####`；非法正则降级为字面量替换。
+- regex 命中 limit/timeout 时会自动禁用该规则并落库。
+- 正文缓存保存净化前正文，用户替换规则在每次读取时应用。
 
 正则安全：
 
@@ -777,6 +893,13 @@ debug.cancelled
 - `traceId`
 - `data`
 
+连接语义：
+
+- 响应 `Content-Type: text/event-stream`，每行事件为 `id: <eventId>\nevent: <type>\ndata: <json>\n\n`。
+- 订阅时先回放历史事件（支持 `Last-Event-ID` 续传），随后实时推送新增事件。
+- 会话进入终态（`succeeded`/`failed`/`cancelled`，并写 `CompletedAt`）后停止推送并关闭响应；订阅不存在的会话立即返回 404。
+- 空闲时周期发送 `: heartbeat` 注释行保活，并顺带检测已收敛的会话。
+
 ### 14.2 调试模式
 
 支持：
@@ -787,7 +910,7 @@ debug.cancelled
 - `content_url`：正文。
 - `discovery_url`：发现 -> 详情 -> 目录 -> 正文。
 
-这对应 `Debug.startDebug()` 中对关键词、绝对 URL、`::`、`++`、`--` 的分支，但新 API 不复用这些字符串协议，而使用显式字段。
+这对应 `Debug.startDebug()` 中对关键词、绝对 URL、`::`、`++`、`--` 的分支，但新 API 不复用这些字符串协议，而使用显式字段。`mode` 不在上述枚举内时创建会话返回 400。
 
 ### 14.3 脱敏
 
@@ -824,6 +947,8 @@ skipped
 cancelled
 ```
 
+终态会写入 `CompletedAt`；进程重启后遗留的 `running` 任务/会话无法再被推进，启动时统一置为 `failed`（interrupted）。
+
 ### 15.2 校验流程
 
 每个书源：
@@ -841,6 +966,10 @@ start checking
   -> persist result
 ```
 
+校验关键字（对齐 Legado `BookSource.getCheckKeyword`）：书源自身的 `RuleSearch.CheckKeyWord` 优先，其次请求指定的 keyword，最后回退默认关键字“我的”；缺少搜索规则或地址时直接给出明确失败项。
+
+任务级状态规则：任一源失败 → 任务 failed，但每个源的独立结果仍完整保留。
+
 失败分类：
 
 | 分类 | 触发 |
@@ -852,6 +981,8 @@ start checking
 | `discovery_failed` | 发现空结果 |
 | `toc_failed` | 目录为空或目录解析失败 |
 | `content_failed` | 正文为空或正文解析失败 |
+
+在上述标准 `failureCode` 之外，check/debug 还通过统一诊断器写入更细的 `failureClass`（持久化到 `check_task_items.failure_class` 与调试事件），用于区分安全策略拦截、授权失败、DNS/TLS/超时/连接重置、上游 4xx/5xx、上游空 JSON/非 JSON、脚本语法错误等，避免一律折叠成 `website_failed`。
 
 ## 16. SOLID 设计约束
 
@@ -1023,33 +1154,41 @@ real_source_collection_e2e_report.md
 
 ## 18. 配置设计
 
-建议配置项：
+应用配置项（`config.Load` 读取，含默认值）：
 
 ```text
-READER_ADDR
-READER_DATA_DIR
-READER_SQLITE_DSN
-READER_TOKEN
-READER_ENV
-READER_DEFAULT_USER_AGENT
-READER_FETCH_TIMEOUT
-READER_FETCH_MAX_BODY_BYTES
-READER_FETCH_MAX_REDIRECTS
-READER_ALLOW_PRIVATE_NETWORK
-READER_GLOBAL_CONCURRENCY
-READER_SOURCE_CONCURRENCY
-READER_SCRIPT_TIMEOUT
-READER_REGEX_TIMEOUT
-READER_DEBUG_BODY_LIMIT
-READER_CONTENT_RESEGMENT
-READER_CONTENT_CHINESE_CONVERTER_TYPE
-READER_REAL_E2E_ENABLED
-READER_REAL_E2E_SOURCE_COLLECTION_URL
-READER_REAL_E2E_KEYWORD
-READER_REAL_E2E_MAX_CANDIDATES
+READER_ADDR                         默认 127.0.0.1:8080
+READER_DATA_DIR                     默认 data
+READER_SQLITE_DSN                   默认 data/reader.db
+READER_TOKEN                        默认空
+READER_ENV                          默认 development
+READER_DEFAULT_USER_AGENT           默认 Reader/0.0.1
+READER_FETCH_TIMEOUT                默认 30s
+READER_FETCH_MAX_BODY_BYTES         默认 10 MiB
+READER_FETCH_MAX_REDIRECTS          默认 5
+READER_ALLOW_PRIVATE_NETWORK        默认 false
+READER_GLOBAL_CONCURRENCY           默认 8
+READER_SOURCE_CONCURRENCY           默认 2
+READER_SCRIPT_TIMEOUT               默认 10s
+READER_DEBUG_BODY_LIMIT             默认 32768
+READER_CONTENT_RESEGMENT            默认 false
+READER_CONTENT_CHINESE_CONVERTER_TYPE 默认 0
 ```
 
-生产模式缺少 `READER_TOKEN` 必须拒绝启动。
+监听与 token：
+
+- `READER_ADDR` 默认 `127.0.0.1:8080`（回环）。
+- `READER_TOKEN` 为空时只允许监听回环地址（`127.0.0.0/8`、`::1`、`localhost`）；监听非回环地址时 `serve` 拒绝启动并返回退出码 2，且在打开数据库之前失败。该规则对所有环境生效。
+- `READER_ENV=production` 无论监听哪里都必须设置 `READER_TOKEN`。
+- `READER_ENV=test` 且 token 为空时，`config.Load` 会填入公开默认 token `reader-test-token`，因此 test 环境在非回环地址也能启动——这是本地/CI 便利，不是可暴露到不可信网络的安全配置。
+
+已移除的配置项：
+
+- `READER_REGEX_TIMEOUT`：纯 no-op，已从 config 与 `config.Redacted()` 输出删除。
+
+非应用配置：
+
+- `READER_REAL_E2E_ENABLED`、`READER_REAL_E2E_SOURCE_COLLECTION_URL`、`READER_REAL_E2E_KEYWORD`、`READER_REAL_E2E_MAX_CANDIDATES` 等 `READER_REAL_E2E_*` 不再是应用配置：`config.Load` 不读取，只由 `test/e2e` 直接读环境变量。
 
 ## 19. 未来扩展
 

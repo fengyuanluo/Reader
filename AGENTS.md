@@ -131,7 +131,7 @@ git status --porcelain=v2 --branch
   - `openapi/`：契约与示例校验。
   - `e2e/`：mock 与真实远程集合 E2E。
   - `security/`：SSRF、JS 超时、日志脱敏等安全测试。
-  - `reports/`：真实 E2E 生成的报告，当前被 `.gitignore` 排除，可重生成。
+  - `reports/`：真实 E2E 生成的报告，作为可重生成的版本化快照保留在仓库中。
 - `scripts/verify.sh`
   - 本地快速完整门禁入口。
 

@@ -29,11 +29,11 @@
 当前仓库以以下门禁作为 `0.0.1` 验收依据：
 
 - `go generate ./...`
-- `go test ./... -count=1`
+- `go test -race -count=1 ./...`
 - `go vet ./...`
 - `git diff --exit-code internal/api/generated`
 
-真实远程集合 gate 最新快照：
+真实远程集合 gate 的仓库快照（`test/reports/real_source_collection_e2e_report.*`，可重生成）：
 
 - 报告文件：
   - `test/reports/real_source_collection_e2e_report.json`
@@ -41,12 +41,14 @@
 - 集合 URL：
   - `https://shuyuan-api.yiove.com/import/book-source-collection/a8adf570-e115-4b99-87e3-ccaf298ae361`
 - 报告时间：
-  - `2026-05-05T07:20:28Z`
+  - `2026-10-14T10:05:57Z`
 - 关键结果：
   - `Parsed count = 459`
   - `Attempted candidates = 100`
-  - `Full success count = 51`
+  - `Full success count = 39`
   - `Release allowed = true`
+
+该数值是当前仓库内快照的口径；真实 gate 依赖外部网络、书源规则与目标站点状态，重跑会刷新快照并可能得到不同结果。
 
 ## 文档分层
 
