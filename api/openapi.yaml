@@ -121,6 +121,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
         "500":
           $ref: "#/components/responses/InternalError"
   /book-sources/import:
@@ -157,6 +161,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /book-sources/{sourceId}:
@@ -210,6 +218,10 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
         "500":
           $ref: "#/components/responses/InternalError"
     delete:
@@ -259,6 +271,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
         "500":
           $ref: "#/components/responses/InternalError"
   /book-sources/{sourceId}/explore-enabled:
@@ -290,6 +304,94 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /book-sources/{sourceId}/login:
+    get:
+      operationId: getBookSourceLogin
+      tags:
+        - bookSources
+      summary: Query the persisted login state of one book source.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourceId"
+      responses:
+        "200":
+          description: Persisted login state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookSourceLoginState"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: loginBookSource
+      tags:
+        - bookSources
+      summary: Persist login form values and run the source loginUrl script.
+      description: |
+        对齐 Legado BaseSource.login/SourceLoginViewModel：先把提交的表单值持久化为 loginInfo，
+        再执行 loginUrl 中的 login 函数，脚本通过 source.putLoginHeader 写入的登录头会持久化。
+        提交空的 values 等价于只清除 loginInfo。loginUi 为空的书源在 Legado 中走 WebView 登录，
+        本服务不支持无头浏览器，返回 501 unsupported_login_flow。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourceId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookSourceLoginRequest"
+      responses:
+        "200":
+          description: Login executed; current login state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookSourceLoginState"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "502":
+          $ref: "#/components/responses/ScriptFailed"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteBookSourceLogin
+      tags:
+        - bookSources
+      summary: Clear the persisted loginInfo and loginHeader of one book source.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourceId"
+      responses:
+        "204":
+          description: Login state cleared.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /book-sources/reorder:
@@ -317,6 +419,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
         "500":
           $ref: "#/components/responses/InternalError"
   /search:
@@ -349,6 +453,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /discovery:
@@ -376,6 +484,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /books:
@@ -398,6 +510,8 @@ paths:
                 $ref: "#/components/schemas/BookListResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
     post:
@@ -427,6 +541,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /books/{bookId}:
@@ -454,6 +572,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
     delete:
@@ -476,6 +596,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /books/{bookId}/refresh-info:
@@ -503,6 +625,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /books/{bookId}/refresh-toc:
@@ -530,6 +654,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /books/{bookId}/chapters:
@@ -557,6 +683,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /books/{bookId}/chapters/{index}/content:
@@ -590,6 +718,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /books/{bookId}/progress:
@@ -625,6 +755,10 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /images/proxy:
@@ -703,6 +837,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /replace-rules:
@@ -722,6 +858,8 @@ paths:
                 $ref: "#/components/schemas/ReplaceRuleListResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
     post:
@@ -753,6 +891,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /replace-rules/{ruleId}:
@@ -789,6 +931,10 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
     delete:
@@ -812,6 +958,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /replace-rules/test:
@@ -839,6 +987,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
         "500":
           $ref: "#/components/responses/InternalError"
   /debug/book-source:
@@ -1134,6 +1286,50 @@ components:
             message: internal server error
             details: {}
             traceId: trace-example
+    Conflict:
+      description: Request conflicts with the current state of the resource.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: source_conflict
+            message: sourceId does not match path
+            details: {}
+            traceId: trace-example
+    NotImplemented:
+      description: The requested capability is not implemented for this deployment.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: not_implemented
+            message: webView login is not supported
+            details: {}
+            traceId: trace-example
+    RequestEntityTooLarge:
+      description: The request body exceeds the configured size limit of the endpoint.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: payload_too_large
+            message: request body too large
+            details: {}
+            traceId: trace-example
+    ScriptFailed:
+      description: The book source script failed while serving the request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: script_failed
+            message: "script_failed: stage=login: login function not implements!!!"
+            details: {}
+            traceId: trace-example
   schemas:
     Error:
       type: object
@@ -1341,6 +1537,46 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/BookSourceOrder"
+    BookSourceLoginRequest:
+      type: object
+      properties:
+        values:
+          description: 登录 UI 表单值，键为 loginUi 中字段的 name；省略或为空对象表示只清除 loginInfo。
+          type: object
+          additionalProperties:
+            type: string
+          nullable: true
+    BookSourceLoginState:
+      type: object
+      required:
+        - sourceId
+        - hasLoginUrl
+        - hasLoginUi
+        - loggedIn
+      properties:
+        sourceId:
+          type: string
+        hasLoginUrl:
+          description: 书源是否声明了 loginUrl。
+          type: boolean
+        hasLoginUi:
+          description: 书源是否声明了 loginUi；为空时 Legado 走 WebView 登录。
+          type: boolean
+        loggedIn:
+          description: loginHeader 非空即视为已登录。
+          type: boolean
+        loginInfo:
+          description: 持久化的登录表单值（解析 loginInfo 得到；不存在时为 null）。
+          type: object
+          additionalProperties:
+            type: string
+          nullable: true
+        loginHeader:
+          description: 持久化的登录请求头（解析 loginHeader 得到；不存在时为 null）。
+          type: object
+          additionalProperties:
+            type: string
+          nullable: true
     ImportBookSourcesRequest:
       type: object
       properties:

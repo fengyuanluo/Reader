@@ -3,6 +3,7 @@ package sourceapp
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -78,6 +79,37 @@ func TestValidUpdatePolicy(t *testing.T) {
 		if got := ValidUpdatePolicy(policy); got != want {
 			t.Fatalf("ValidUpdatePolicy(%q) = %v, want %v", policy, got, want)
 		}
+	}
+}
+
+// TestImporterMarksInvalidPayload 覆盖 R-032：请求体不合法时返回 sentinel，由 handler 映射为 400。
+func TestImporterMarksInvalidPayload(t *testing.T) {
+	ctx := context.Background()
+	importer := NewImporter(repositories.NewBookSourceRepository(openImporterTestDB(t)))
+
+	tests := map[string]string{
+		"broken json":  `{"bookSourceUrl":`,
+		"number":       `42`,
+		"empty string": ``,
+	}
+	for name, payload := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := importer.Import(ctx, ImportInput{Payload: []byte(payload)})
+			if !errors.Is(err, ErrInvalidImportPayload) {
+				t.Fatalf("Import() error = %v, want ErrInvalidImportPayload", err)
+			}
+		})
+	}
+}
+
+// TestImporterRequiresFetcherForSourceURLs 覆盖远程导入缺少抓取器的装配错误。
+func TestImporterRequiresFetcherForSourceURLs(t *testing.T) {
+	ctx := context.Background()
+	importer := NewImporter(repositories.NewBookSourceRepository(openImporterTestDB(t)))
+
+	_, err := importer.Import(ctx, ImportInput{RemoteURL: "https://example.test/sources.json"})
+	if !errors.Is(err, ErrImportFetcherUnavailable) {
+		t.Fatalf("Import() error = %v, want ErrImportFetcherUnavailable", err)
 	}
 }
 

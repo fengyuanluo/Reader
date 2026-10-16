@@ -32,6 +32,8 @@ type MultiSearchInput struct {
 type MultiSearchResult struct {
 	Items    []book.SearchBook
 	Warnings []SourceWarning
+	// HasMore 表示本页有命中，可以继续请求下一页（Legado 书源分页没有总数信息，空页即结束）。
+	HasMore bool
 }
 
 type MultiSourceSearcher struct {
@@ -115,6 +117,7 @@ func (s *MultiSourceSearcher) Search(ctx context.Context, input MultiSearchInput
 		}()
 	}
 	wg.Wait()
+	result.HasMore = len(result.Items) > 0
 	return result, nil
 }
 

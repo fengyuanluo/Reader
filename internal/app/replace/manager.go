@@ -18,6 +18,18 @@ func (m *Manager) List(ctx context.Context, filter replace.ReplaceRuleFilter) ([
 	return m.repo.List(ctx, filter)
 }
 
+// replaceRuleListAllPageSize 是“拉全量替换规则”的取数上限；该策略属于应用层，不下沉到 handler。
+const replaceRuleListAllPageSize = 10000
+
+// ListAll 返回全部替换规则，供 GET /replace-rules 这类无分页入参的入口使用。
+func (m *Manager) ListAll(ctx context.Context) ([]*replace.ReplaceRule, error) {
+	items, _, err := m.List(ctx, replace.ReplaceRuleFilter{Page: 1, PageSize: replaceRuleListAllPageSize})
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 // Create 新建替换规则：ID 由仓储层（SQLite rowid）生成并回写，避免并发创建时主键碰撞。
 func (m *Manager) Create(ctx context.Context, rule *replace.ReplaceRule) (*replace.ReplaceRule, error) {
 	if err := m.repo.Save(ctx, rule); err != nil {

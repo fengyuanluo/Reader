@@ -171,3 +171,115 @@ func parseHeaderJSON(value any) (map[string]string, error) {
 	}
 	return headers, nil
 }
+
+var (
+	// ErrLoginURLMissing 表示书源没有声明 loginUrl，无法执行登录（对齐 Legado BaseSource.getLoginJs 返回 null）。
+	ErrLoginURLMissing = errors.New("source loginUrl is not configured")
+	// ErrLoginRuntimeUnavailable 表示脚本运行时未装配，登录脚本无法执行。
+	ErrLoginRuntimeUnavailable = errors.New("script runtime is not available")
+	// ErrLoginInfoNotPersisted 表示 loginInfo 写入持久层失败。
+	ErrLoginInfoNotPersisted = errors.New("persist login info failed")
+	// ErrUnsupportedLoginFlow 表示该登录流程需要 Legado 的 WebView，本服务不支持无头浏览器。
+	ErrUnsupportedLoginFlow = errors.New("webView login is not supported")
+)
+
+// LoginState 是书源持久化的登录状态；空串表示该条目不存在。
+type LoginState struct {
+	Info   string
+	Header string
+}
+
+// LoginStateOf 读取持久化的 loginInfo/loginHeader（对齐 Legado BaseSource.getLoginInfo/getLoginHeader）。
+func (s *ScriptIntegration) LoginStateOf(ctx context.Context, src *domainsource.BookSource) LoginState {
+	if s == nil || s.runtime == nil || src == nil {
+		return LoginState{}
+	}
+	bindings := s.runtime.SourceBindings(ctx, src)
+	state := LoginState{}
+	if get, ok := bindings["getLoginInfo"].(func() any); ok {
+		if value, ok := get().(string); ok {
+			state.Info = value
+		}
+	}
+	if get, ok := bindings["getLoginHeader"].(func() string); ok {
+		state.Header = get()
+	}
+	return state
+}
+
+// Login 对齐 Legado BaseSource.login/SourceLoginViewModel.login：先把表单值持久化为 loginInfo，
+// 再执行 loginUrl 中的 login 函数；脚本通过 source.putLoginHeader 写入的登录头同样会持久化。
+// values 为空时只清除 loginInfo（Legado 对空表单的处理），不执行脚本。
+func (s *ScriptIntegration) Login(ctx context.Context, src *domainsource.BookSource, values map[string]string) error {
+	if s == nil || s.runtime == nil {
+		return ErrLoginRuntimeUnavailable
+	}
+	if src == nil {
+		return ErrLoginURLMissing
+	}
+	bindings := s.runtime.SourceBindings(ctx, src)
+	if len(values) == 0 {
+		if remove, ok := bindings["removeLoginInfo"].(func() bool); ok {
+			remove()
+		}
+		return nil
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	put, _ := bindings["putLoginInfo"].(func(string) bool)
+	if put == nil || !put(string(raw)) {
+		return ErrLoginInfoNotPersisted
+	}
+	scriptText, isScript := scriptRuleText(src.LoginURL)
+	if !isScript {
+		// Legado getLoginJs 对无前缀的 loginUrl 也按脚本处理。
+		scriptText = strings.TrimSpace(src.LoginURL)
+	}
+	if scriptText == "" {
+		return ErrLoginURLMissing
+	}
+	ctx = script.WithSubStage(ctx, "login")
+	_, err = s.runtime.EvalWithBindings(ctx, loginScriptSource(scriptText), sourceScriptBindings(src))
+	return err
+}
+
+// ClearLogin 清除持久化的 loginInfo 与 loginHeader（对齐 Legado removeLoginInfo/removeLoginHeader）。
+func (s *ScriptIntegration) ClearLogin(ctx context.Context, src *domainsource.BookSource) {
+	if s == nil || s.runtime == nil || src == nil {
+		return
+	}
+	bindings := s.runtime.SourceBindings(ctx, src)
+	if remove, ok := bindings["removeLoginInfo"].(func() bool); ok {
+		remove()
+	}
+	if remove, ok := bindings["removeLoginHeader"].(func() bool); ok {
+		remove()
+	}
+}
+
+// loginScriptSource 包一层 login 函数调用，与 Legado BaseSource.login 的注入代码一致。
+func loginScriptSource(scriptText string) string {
+	return scriptText + `
+if (typeof login == 'function') {
+  login.apply(this);
+} else {
+  throw('Function login not implements!!!');
+}
+`
+}
+
+// scriptRuleText 提取 Legado "@js:"/"<js>" 规则里的脚本文本；非脚本规则返回 ok=false。
+func scriptRuleText(raw string) (string, bool) {
+	text := strings.TrimSpace(raw)
+	lower := strings.ToLower(text)
+	switch {
+	case strings.HasPrefix(lower, "@js:"):
+		return strings.TrimSpace(text[4:]), true
+	case strings.HasPrefix(lower, "<js>") && strings.HasSuffix(lower, "</js>"):
+		return strings.TrimSpace(text[4 : len(text)-5]), true
+	default:
+		return "", false
+	}
+}

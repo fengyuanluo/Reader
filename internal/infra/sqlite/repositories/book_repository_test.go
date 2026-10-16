@@ -146,6 +146,54 @@ func TestDeletingBookCleansChaptersAndContentCache(t *testing.T) {
 	assertCount(t, db, `SELECT count(*) FROM cache_entries WHERE owner_type = 'book' AND owner_id = ?`, 0, bookID)
 }
 
+// TestBookRepositoryPersistsLegadoMetadata 覆盖 R-017：Legado Book 字段需要落库并读回。
+func TestBookRepositoryPersistsLegadoMetadata(t *testing.T) {
+	ctx := context.Background()
+	db := openRepoTestDB(t)
+	books := NewBookRepository(db)
+	b := testBook("https://example.test/book/meta")
+	b.CustomTag = "我的标签"
+	b.CustomCoverURL = "https://example.test/custom.jpg"
+	b.CustomIntro = "自定义简介"
+	b.Charset = "GBK"
+	b.Group = 7
+	b.LatestChapterTime = 1700000000
+	b.LastCheckTime = 1700000001
+	b.LastCheckCount = 3
+	b.TotalChapterNum = 1200
+	b.CanUpdate = false
+	b.Order = 5
+	b.SyncTime = 1700000002
+
+	if err := books.Save(ctx, b); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	got, err := books.FindByURL(ctx, b.BookURL)
+	if err != nil {
+		t.Fatalf("FindByURL() error = %v", err)
+	}
+	if got.CustomTag != b.CustomTag || got.CustomCoverURL != b.CustomCoverURL || got.CustomIntro != b.CustomIntro ||
+		got.Charset != b.Charset || got.Group != b.Group || got.LatestChapterTime != b.LatestChapterTime ||
+		got.LastCheckTime != b.LastCheckTime || got.LastCheckCount != b.LastCheckCount || got.TotalChapterNum != b.TotalChapterNum ||
+		got.CanUpdate != b.CanUpdate || got.Order != b.Order || got.SyncTime != b.SyncTime {
+		t.Fatalf("book = %#v", got)
+	}
+
+	// 覆盖保存后仍然保持新值（列已加入 ON CONFLICT 更新列表）。
+	b.CanUpdate = true
+	b.Group = 9
+	if err := books.Save(ctx, b); err != nil {
+		t.Fatalf("Save() update error = %v", err)
+	}
+	got, err = books.FindByURL(ctx, b.BookURL)
+	if err != nil {
+		t.Fatalf("FindByURL() after update error = %v", err)
+	}
+	if !got.CanUpdate || got.Group != 9 {
+		t.Fatalf("book after update = %#v", got)
+	}
+}
+
 func testBook(bookURL string) *book.Book {
 	return &book.Book{
 		BookURL:            bookURL,

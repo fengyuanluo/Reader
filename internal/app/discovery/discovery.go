@@ -42,6 +42,8 @@ type Input struct {
 type Result struct {
 	Items    []book.SearchBook
 	Warnings []Warning
+	// HasMore 表示本页有命中，可以继续请求下一页（发现页同样没有总数信息，空页即结束）。
+	HasMore bool
 }
 
 type Warning struct {
@@ -147,6 +149,7 @@ func (s *Service) Discover(ctx context.Context, input Input) (Result, error) {
 		}()
 	}
 	wg.Wait()
+	result.HasMore = len(result.Items) > 0
 	return result, nil
 }
 

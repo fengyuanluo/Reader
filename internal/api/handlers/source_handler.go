@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -29,25 +32,53 @@ import (
 
 type SourceHandler struct {
 	generated.Unimplemented
-	manager   *sourceapp.Manager
-	importer  *sourceapp.Importer
-	searcher  Searcher
-	discovery DiscoveryService
-	books     *bookapp.Service
-	content   *contentapp.AppService
-	images    *contentapp.ImageProxy
-	replace   *replaceapp.Manager
-	debugSvc  *debugapp.Service
-	debug     *debugapp.Publisher
-	check     *checkapp.Manager
+	manager    *sourceapp.Manager
+	importer   *sourceapp.Importer
+	login      *sourceapp.LoginService
+	searcher   Searcher
+	discovery  DiscoveryService
+	books      *bookapp.Service
+	content    *contentapp.AppService
+	images     *contentapp.ImageProxy
+	replace    *replaceapp.Manager
+	debugSvc   *debugapp.Service
+	debug      *debugapp.Publisher
+	check      *checkapp.Manager
+	bodyLimit  int64
+	importBody int64
 }
 
+// 请求体上限：普通 JSON 请求体参照 READER_FETCH_MAX_BODY_BYTES 的默认值 10 MiB
+// （替换规则测试与正文相关请求可能携带整章文本）；书源导入可能携带批量书源数组，放宽到 32 MiB。
+const (
+	defaultJSONBodyLimit   int64 = 10 << 20
+	defaultImportBodyLimit int64 = 32 << 20
+	// maxPageSize 与 OpenAPI PageSize 参数的 maximum 保持一致。
+	maxPageSize = 200
+)
+
 func NewSourceHandler(manager *sourceapp.Manager) *SourceHandler {
-	return &SourceHandler{manager: manager}
+	return &SourceHandler{manager: manager, bodyLimit: defaultJSONBodyLimit, importBody: defaultImportBodyLimit}
 }
 
 func (h *SourceHandler) WithImporter(importer *sourceapp.Importer) *SourceHandler {
 	h.importer = importer
+	return h
+}
+
+func (h *SourceHandler) WithLogin(login *sourceapp.LoginService) *SourceHandler {
+	h.login = login
+	return h
+}
+
+// WithBodyLimits 覆盖请求体上限（字节）；非正值沿用默认上限。
+func (h *SourceHandler) WithBodyLimits(jsonLimit, importLimit int64) *SourceHandler {
+	if jsonLimit > 0 {
+		h.bodyLimit = jsonLimit
+	}
+	if importLimit > 0 {
+		h.importBody = importLimit
+	}
 	return h
 }
 
@@ -102,7 +133,7 @@ func (h *SourceHandler) CreateBookSourceCheckTask(w http.ResponseWriter, r *http
 		return
 	}
 	var body generated.CheckTaskCreateRequest
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSON(w, r, &body) {
 		return
 	}
 	if len(body.SourceIds) == 0 {
@@ -175,7 +206,7 @@ func (h *SourceHandler) ImportBookSources(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var body generated.ImportBookSourcesRequest
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSONBody(w, r, &body, h.importBody, true) {
 		return
 	}
 	input, err := importInputFromDTO(body)
@@ -185,10 +216,24 @@ func (h *SourceHandler) ImportBookSources(w http.ResponseWriter, r *http.Request
 	}
 	result, err := h.importer.Import(r.Context(), input)
 	if err != nil {
-		middleware.WriteError(w, r, http.StatusInternalServerError, "import_failed", err.Error(), nil)
+		writeImportError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, mapImportResult(result, middleware.TraceIDFromContext(r.Context())))
+}
+
+// writeImportError 区分导入的输入错误与服务端错误：请求体不合法返回 400，抓取器缺失返回 501。
+func writeImportError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, sourceapp.ErrInvalidImportPayload):
+		middleware.WriteError(w, r, http.StatusBadRequest, "import_invalid", err.Error(), nil)
+	case errors.Is(err, sourceapp.ErrImportFetcherUnavailable):
+		middleware.WriteError(w, r, http.StatusNotImplemented, "not_configured", err.Error(), nil)
+	case errors.Is(err, source.ErrConflict):
+		middleware.WriteError(w, r, http.StatusConflict, "source_conflict", err.Error(), nil)
+	default:
+		middleware.WriteError(w, r, http.StatusInternalServerError, "import_failed", err.Error(), nil)
+	}
 }
 
 func (h *SourceHandler) CreateDebugSession(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +242,7 @@ func (h *SourceHandler) CreateDebugSession(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var body generated.DebugSessionCreateRequest
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSON(w, r, &body) {
 		return
 	}
 	if strings.TrimSpace(body.SourceId) == "" {
@@ -282,7 +327,7 @@ func (h *SourceHandler) ListReplaceRules(w http.ResponseWriter, r *http.Request)
 		writeNotConfigured(w, r, "replace service is not configured")
 		return
 	}
-	items, _, err := h.replace.List(r.Context(), replace.ReplaceRuleFilter{Page: 1, PageSize: 10000})
+	items, err := h.replace.ListAll(r.Context())
 	if err != nil {
 		writeReplaceError(w, r, err)
 		return
@@ -296,7 +341,7 @@ func (h *SourceHandler) CreateReplaceRule(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var body generated.ReplaceRule
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSON(w, r, &body) {
 		return
 	}
 	rule := replaceRuleFromDTO(body)
@@ -314,7 +359,7 @@ func (h *SourceHandler) UpdateReplaceRule(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var body generated.ReplaceRule
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSON(w, r, &body) {
 		return
 	}
 	rule := replaceRuleFromDTO(body)
@@ -344,7 +389,7 @@ func (h *SourceHandler) TestReplaceRule(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body generated.ReplaceRuleTestRequest
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSON(w, r, &body) {
 		return
 	}
 	rule, err := replaceRuleFromUnion(body.Rule)
@@ -366,7 +411,7 @@ func (h *SourceHandler) CreateBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body generated.Book
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSON(w, r, &body) {
 		return
 	}
 	b := bookFromDTO(body)
@@ -395,8 +440,8 @@ func (h *SourceHandler) ListBooks(w http.ResponseWriter, r *http.Request, params
 	if params.PageSize != nil {
 		pageSize = *params.PageSize
 	}
-	if page < 1 || pageSize < 1 {
-		writeValidationError(w, r, "page and pageSize must be positive")
+	if page < 1 || pageSize < 1 || pageSize > maxPageSize {
+		writeValidationError(w, r, fmt.Sprintf("page must be >= 1 and pageSize must be between 1 and %d", maxPageSize))
 		return
 	}
 	items, total, err := h.books.List(r.Context(), book.BookFilter{Page: page, PageSize: pageSize})
@@ -441,7 +486,7 @@ func (h *SourceHandler) UpdateBookProgress(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var body generated.BookProgress
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSON(w, r, &body) {
 		return
 	}
 	updated, err := h.books.SaveProgress(r.Context(), bookId, progressFromDTO(body))
@@ -545,11 +590,11 @@ func (h *SourceHandler) ProxyImage(w http.ResponseWriter, r *http.Request, param
 
 func (h *SourceHandler) SearchBooks(w http.ResponseWriter, r *http.Request) {
 	if h.searcher == nil {
-		middleware.WriteError(w, r, http.StatusInternalServerError, "internal_error", "search service is not configured", nil)
+		writeNotConfigured(w, r, "search service is not configured")
 		return
 	}
 	var body generated.SearchRequest
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSON(w, r, &body) {
 		return
 	}
 	keyword := strings.TrimSpace(body.Keyword)
@@ -588,20 +633,21 @@ func (h *SourceHandler) SearchBooks(w http.ResponseWriter, r *http.Request) {
 		writeSearchError(w, r, err)
 		return
 	}
+	traceID := middleware.TraceIDFromContext(r.Context())
 	writeJSON(w, http.StatusOK, generated.SearchResponse{
 		Items:    mapSearchBooks(result.Items),
-		Warnings: mapSourceWarnings(result.Warnings),
-		HasMore:  false,
+		Warnings: mapSourceWarnings(result.Warnings, traceID),
+		HasMore:  result.HasMore,
 	})
 }
 
 func (h *SourceHandler) DiscoverBooks(w http.ResponseWriter, r *http.Request) {
 	if h.discovery == nil {
-		middleware.WriteError(w, r, http.StatusInternalServerError, "internal_error", "discovery service is not configured", nil)
+		writeNotConfigured(w, r, "discovery service is not configured")
 		return
 	}
 	var body generated.DiscoveryRequest
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSON(w, r, &body) {
 		return
 	}
 	page := 1
@@ -627,10 +673,11 @@ func (h *SourceHandler) DiscoverBooks(w http.ResponseWriter, r *http.Request) {
 		writeDiscoveryError(w, r, err)
 		return
 	}
+	traceID := middleware.TraceIDFromContext(r.Context())
 	writeJSON(w, http.StatusOK, generated.SearchResponse{
 		Items:    mapSearchBooks(result.Items),
-		Warnings: mapDiscoveryWarnings(result.Warnings),
-		HasMore:  false,
+		Warnings: mapDiscoveryWarnings(result.Warnings, traceID),
+		HasMore:  result.HasMore,
 	})
 }
 
@@ -643,8 +690,8 @@ func (h *SourceHandler) ListBookSources(w http.ResponseWriter, r *http.Request, 
 	if params.PageSize != nil {
 		pageSize = int(*params.PageSize)
 	}
-	if page < 1 || pageSize < 1 {
-		writeValidationError(w, r, "page and pageSize must be positive")
+	if page < 1 || pageSize < 1 || pageSize > maxPageSize {
+		writeValidationError(w, r, fmt.Sprintf("page must be >= 1 and pageSize must be between 1 and %d", maxPageSize))
 		return
 	}
 	filter := source.BookSourceFilter{
@@ -675,7 +722,7 @@ func (h *SourceHandler) ListBookSources(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *SourceHandler) CreateBookSource(w http.ResponseWriter, r *http.Request) {
-	src, ok := decodeBookSourceBody(w, r)
+	src, ok := h.decodeBookSourceBody(w, r)
 	if !ok {
 		return
 	}
@@ -684,7 +731,7 @@ func (h *SourceHandler) CreateBookSource(w http.ResponseWriter, r *http.Request)
 		writeSourceError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, mapBookSource(created))
+	writeBookSourceJSON(w, r, http.StatusCreated, created)
 }
 
 func (h *SourceHandler) GetBookSource(w http.ResponseWriter, r *http.Request, sourceID generated.SourceId) {
@@ -693,11 +740,11 @@ func (h *SourceHandler) GetBookSource(w http.ResponseWriter, r *http.Request, so
 		writeSourceError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, mapBookSource(src))
+	writeBookSourceJSON(w, r, http.StatusOK, src)
 }
 
 func (h *SourceHandler) UpdateBookSource(w http.ResponseWriter, r *http.Request, sourceID generated.SourceId) {
-	src, ok := decodeBookSourceBody(w, r)
+	src, ok := h.decodeBookSourceBody(w, r)
 	if !ok {
 		return
 	}
@@ -706,7 +753,7 @@ func (h *SourceHandler) UpdateBookSource(w http.ResponseWriter, r *http.Request,
 		writeSourceError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, mapBookSource(updated))
+	writeBookSourceJSON(w, r, http.StatusOK, updated)
 }
 
 func (h *SourceHandler) DeleteBookSource(w http.ResponseWriter, r *http.Request, sourceID generated.SourceId) {
@@ -718,7 +765,7 @@ func (h *SourceHandler) DeleteBookSource(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *SourceHandler) UpdateBookSourceEnabled(w http.ResponseWriter, r *http.Request, sourceID generated.SourceId) {
-	body, ok := decodeEnabledBody(w, r)
+	body, ok := h.decodeEnabledBody(w, r)
 	if !ok {
 		return
 	}
@@ -731,7 +778,7 @@ func (h *SourceHandler) UpdateBookSourceEnabled(w http.ResponseWriter, r *http.R
 }
 
 func (h *SourceHandler) UpdateBookSourceExploreEnabled(w http.ResponseWriter, r *http.Request, sourceID generated.SourceId) {
-	body, ok := decodeEnabledBody(w, r)
+	body, ok := h.decodeEnabledBody(w, r)
 	if !ok {
 		return
 	}
@@ -745,7 +792,11 @@ func (h *SourceHandler) UpdateBookSourceExploreEnabled(w http.ResponseWriter, r 
 
 func (h *SourceHandler) ReorderBookSources(w http.ResponseWriter, r *http.Request) {
 	var body generated.BookSourceReorderRequest
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSON(w, r, &body) {
+		return
+	}
+	if len(body.Orders) == 0 {
+		writeValidationError(w, r, "orders is required")
 		return
 	}
 	orders := make([]source.SourceOrder, 0, len(body.Orders))
@@ -771,12 +822,19 @@ func (h *SourceHandler) ReorderBookSources(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func decodeBookSourceBody(w http.ResponseWriter, r *http.Request) (*source.BookSource, bool) {
-	var body generated.BookSource
-	if !decodeJSON(w, r, &body) {
+// decodeBookSourceBody 解析书源请求体。对齐 Legado 的 GSON 容忍未知字段（R-039），
+// 并把请求体原文保留到 RawJSON，供 GET/PATCH 回写时保留 spec 未声明的字段（R-020）。
+func (h *SourceHandler) decodeBookSourceBody(w http.ResponseWriter, r *http.Request) (*source.BookSource, bool) {
+	raw, ok := h.readJSONBody(w, r, h.bodyLimit)
+	if !ok {
 		return nil, false
 	}
-	src, err := bookSourceFromDTO(body)
+	var body generated.BookSource
+	if err := json.Unmarshal(raw, &body); err != nil {
+		writeValidationError(w, r, err.Error())
+		return nil, false
+	}
+	src, err := bookSourceFromDTO(body, raw)
 	if err != nil {
 		writeValidationError(w, r, err.Error())
 		return nil, false
@@ -784,18 +842,28 @@ func decodeBookSourceBody(w http.ResponseWriter, r *http.Request) (*source.BookS
 	return src, true
 }
 
-func decodeEnabledBody(w http.ResponseWriter, r *http.Request) (generated.EnabledUpdate, bool) {
+func (h *SourceHandler) decodeEnabledBody(w http.ResponseWriter, r *http.Request) (generated.EnabledUpdate, bool) {
 	var body generated.EnabledUpdate
-	if !decodeJSON(w, r, &body) {
+	if !h.decodeJSON(w, r, &body) {
 		return generated.EnabledUpdate{}, false
 	}
 	return body, true
 }
 
-func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
-	defer r.Body.Close()
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
+// decodeJSON 严格解析 JSON 请求体（拒绝未知字段）；请求体大小受限（R-078）。
+func (h *SourceHandler) decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
+	return h.decodeJSONBody(w, r, out, h.bodyLimit, true)
+}
+
+func (h *SourceHandler) decodeJSONBody(w http.ResponseWriter, r *http.Request, out any, limit int64, strict bool) bool {
+	raw, ok := h.readJSONBody(w, r, limit)
+	if !ok {
+		return false
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if strict {
+		dec.DisallowUnknownFields()
+	}
 	if err := dec.Decode(out); err != nil {
 		writeValidationError(w, r, err.Error())
 		return false
@@ -803,11 +871,43 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 	return true
 }
 
+// readJSONBody 读取并校验 JSON 请求体：Content-Type 必须是 application/json（R-120），
+// 超出 limit 字节返回 413（R-078）。
+func (h *SourceHandler) readJSONBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
+	if !isJSONContentType(r.Header.Get("Content-Type")) {
+		writeValidationError(w, r, "Content-Type must be application/json")
+		return nil, false
+	}
+	defer func() { _ = r.Body.Close() }()
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			middleware.WriteError(w, r, http.StatusRequestEntityTooLarge, "payload_too_large", fmt.Sprintf("request body exceeds %d bytes", limit), nil)
+			return nil, false
+		}
+		writeValidationError(w, r, err.Error())
+		return nil, false
+	}
+	return raw, true
+}
+
+// isJSONContentType 接受 application/json 及其带参数形式（如 application/json; charset=utf-8）。
+func isJSONContentType(value string) bool {
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(mediaType, "application/json")
+}
+
 func writeSourceError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, source.ErrNotFound):
 		middleware.WriteError(w, r, http.StatusNotFound, "source_not_found", "book source not found", nil)
-	case errors.Is(err, source.ErrMissingBookSourceURL), errors.Is(err, source.ErrMissingBookSourceName), errors.Is(err, source.ErrConflict):
+	case errors.Is(err, source.ErrConflict):
+		middleware.WriteError(w, r, http.StatusConflict, "source_conflict", err.Error(), nil)
+	case errors.Is(err, source.ErrMissingBookSourceURL), errors.Is(err, source.ErrMissingBookSourceName):
 		writeValidationError(w, r, err.Error())
 	default:
 		middleware.WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal error", nil)
@@ -836,6 +936,8 @@ func writeBookError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, sqliterepo.ErrNotFound), errors.Is(err, source.ErrNotFound):
 		middleware.WriteError(w, r, http.StatusNotFound, "book_not_found", "book not found", nil)
+	case errors.Is(err, bookapp.ErrProgressBookIdentity):
+		writeValidationError(w, r, err.Error())
 	case errors.Is(err, contentapp.ErrContentEmpty):
 		middleware.WriteError(w, r, http.StatusInternalServerError, "content_empty", "content is empty", nil)
 	case errors.Is(err, contentapp.ErrUnsupportedContentBrowserFlow):
@@ -897,8 +999,9 @@ func writeCheckError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
+// writeNotConfigured 表示该能力在本次装配中不可用（依赖服务为 nil），用 501 与真实内部错误区分。
 func writeNotConfigured(w http.ResponseWriter, r *http.Request, message string) {
-	middleware.WriteError(w, r, http.StatusInternalServerError, "internal_error", message, nil)
+	middleware.WriteError(w, r, http.StatusNotImplemented, "not_configured", message, nil)
 }
 
 func writeValidationError(w http.ResponseWriter, r *http.Request, message string) {
