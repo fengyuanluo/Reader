@@ -19,6 +19,7 @@ import (
 	"reader/internal/domain/source"
 	"reader/internal/infra/config"
 	"reader/internal/infra/fetcher"
+	"reader/internal/infra/ratelimit"
 	"reader/internal/infra/script"
 	readersqlite "reader/internal/infra/sqlite"
 	"reader/internal/infra/sqlite/repositories"
@@ -97,9 +98,14 @@ func Open(cfg config.Config) (*Runtime, func(), error) {
 		FileRoot:  filepath.Join(cfg.DataDir, "script-files"),
 	})
 	importer := sourceapp.NewImporterWithFetcher(repo, httpFetcher)
-	singleSearcher := searchapp.NewSingleSourceSearcher(httpFetcher, scriptRuntime)
-	multiSearcher := searchapp.NewMultiSourceSearcher(repo, singleSearcher)
-	discoveryService := discoveryapp.NewService(repo, httpFetcher, scriptRuntime)
+	// 并发限流器按 READER_GLOBAL_CONCURRENCY / READER_SOURCE_CONCURRENCY 装配，
+	// 搜索与发现在抓取入口共用同一实例，并按书源 concurrentRate 限速。
+	limiter := ratelimit.New(ratelimit.Options{Global: cfg.GlobalConcurrency, Source: cfg.SourceConcurrency})
+	singleSearcher := searchapp.NewSingleSourceSearcher(httpFetcher, scriptRuntime).WithLimiter(limiter)
+	multiSearcher := searchapp.NewMultiSourceSearcher(repo, singleSearcher).WithLimiter(limiter)
+	discoveryService := discoveryapp.NewService(repo, httpFetcher, scriptRuntime).WithLimiter(limiter)
+	// 书源导入/覆盖后失效探索分类缓存，避免继续返回旧分类。
+	importer.WithSavedCallback(discoveryService.InvalidateExploreKinds)
 	infoService := bookapp.NewInfoService(bookRepo, httpFetcher, scriptRuntime)
 	tocService := bookapp.NewTocService(chapterRepo, httpFetcher, scriptRuntime)
 	bookService := bookapp.NewService(bookRepo, chapterRepo, repo, infoService, tocService)

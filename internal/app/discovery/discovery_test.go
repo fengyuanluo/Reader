@@ -2,13 +2,16 @@ package discovery
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/rule"
 	"reader/internal/domain/source"
+	"reader/internal/infra/ratelimit"
 	"reader/internal/infra/script"
 )
 
@@ -200,9 +203,12 @@ func TestResolveSourcesSkipsDisabledExploreByDefault(t *testing.T) {
 	}}
 	service := NewService(repo, fakeFetcher{}, nil)
 
-	sources, err := service.resolveSources(context.Background(), Input{})
+	sources, warnings, err := service.resolveSources(context.Background(), Input{})
 	if err != nil {
 		t.Fatalf("resolveSources() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v", warnings)
 	}
 	if len(sources) != 1 || sources[0].SourceID != "enabled" {
 		t.Fatalf("sources = %#v", sources)
@@ -331,3 +337,212 @@ func (r *fakeSourceRepo) UpdateExploreEnabled(ctx context.Context, id string, en
 	return nil
 }
 func (r *fakeSourceRepo) Reorder(ctx context.Context, orders []source.SourceOrder) error { return nil }
+
+func TestBuildPageURLReplacesPageListPlaceholder(t *testing.T) {
+	tests := []struct {
+		page int
+		want string
+	}{
+		{1, "https://x.test/list/1/index.html?p=4"},
+		{2, "https://x.test/list/2/index.html?p=5"},
+		{9, "https://x.test/list/3/index.html?p=5"},
+	}
+	for _, tt := range tests {
+		got := buildPageURL("https://x.test/list/<1,2,3>/index.html?p=<4,5>", tt.page)
+		if got != tt.want {
+			t.Fatalf("buildPageURL(page=%d) = %q, want %q", tt.page, got, tt.want)
+		}
+	}
+}
+
+func TestCategoriesCacheExpiresAfterTTL(t *testing.T) {
+	src := countingExploreSource()
+	runtime := script.NewRuntime(script.Policy{Timeout: time.Second, SourceKey: src.BookSourceURL})
+	service := NewService(&fakeSourceRepo{items: []*source.BookSource{src}}, fakeFetcher{}, runtime)
+	now := time.Unix(1_700_000_000, 0)
+	service.cache.now = func() time.Time { return now }
+
+	if _, err := service.Categories(context.Background(), "s1"); err != nil {
+		t.Fatalf("first Categories() error = %v", err)
+	}
+	if _, err := service.Categories(context.Background(), "s1"); err != nil {
+		t.Fatalf("second Categories() error = %v", err)
+	}
+	if got := exploreRunCount(runtime, src); got != "1" {
+		t.Fatalf("script runs = %s, want 1 (second call served from cache)", got)
+	}
+
+	now = now.Add(defaultCategoryCacheTTL + time.Minute)
+	if _, err := service.Categories(context.Background(), "s1"); err != nil {
+		t.Fatalf("third Categories() error = %v", err)
+	}
+	if got := exploreRunCount(runtime, src); got != "2" {
+		t.Fatalf("script runs = %s, want 2 after TTL expiry", got)
+	}
+}
+
+func TestInvalidateExploreKindsClearsCache(t *testing.T) {
+	src := countingExploreSource()
+	runtime := script.NewRuntime(script.Policy{Timeout: time.Second, SourceKey: src.BookSourceURL})
+	service := NewService(&fakeSourceRepo{items: []*source.BookSource{src}}, fakeFetcher{}, runtime)
+
+	if _, err := service.Categories(context.Background(), "s1"); err != nil {
+		t.Fatalf("first Categories() error = %v", err)
+	}
+	service.InvalidateExploreKinds(src.BookSourceURL)
+	if _, err := service.Categories(context.Background(), "s1"); err != nil {
+		t.Fatalf("second Categories() error = %v", err)
+	}
+	if got := exploreRunCount(runtime, src); got != "2" {
+		t.Fatalf("script runs = %s, want 2 after invalidation", got)
+	}
+}
+
+func TestCategoryCacheEvictsWhenOverLimit(t *testing.T) {
+	cache := newCategoryCache(time.Hour, 2)
+	now := time.Unix(1_700_000_000, 0)
+	cache.now = func() time.Time { return now }
+
+	cache.put(categoryCacheKey{sourceURL: "a", exploreURL: "x"}, []Category{{Title: "A"}})
+	now = now.Add(time.Second)
+	cache.put(categoryCacheKey{sourceURL: "b", exploreURL: "x"}, []Category{{Title: "B"}})
+	now = now.Add(time.Second)
+	cache.put(categoryCacheKey{sourceURL: "c", exploreURL: "x"}, []Category{{Title: "C"}})
+
+	cache.mu.Lock()
+	size := len(cache.entries)
+	cache.mu.Unlock()
+	if size != 2 {
+		t.Fatalf("cache size = %d, want 2", size)
+	}
+	if _, ok := cache.get(categoryCacheKey{sourceURL: "a", exploreURL: "x"}); ok {
+		t.Fatal("oldest entry should have been evicted")
+	}
+	if _, ok := cache.get(categoryCacheKey{sourceURL: "c", exploreURL: "x"}); !ok {
+		t.Fatal("newest entry should still be cached")
+	}
+}
+
+func TestCategoryCacheDropsExpiredEntries(t *testing.T) {
+	cache := newCategoryCache(time.Minute, 8)
+	now := time.Unix(1_700_000_000, 0)
+	cache.now = func() time.Time { return now }
+
+	key := categoryCacheKey{sourceURL: "a", exploreURL: "x"}
+	cache.put(key, []Category{{Title: "A"}})
+	now = now.Add(2 * time.Minute)
+
+	if _, ok := cache.get(key); ok {
+		t.Fatal("expired entry should not be returned")
+	}
+	cache.mu.Lock()
+	size := len(cache.entries)
+	cache.mu.Unlock()
+	if size != 0 {
+		t.Fatalf("cache size = %d, want 0 after expiry", size)
+	}
+}
+
+func TestDiscoverRunsSourcesConcurrentlyWithLimit(t *testing.T) {
+	sources := []*source.BookSource{}
+	for i := range 3 {
+		sources = append(sources, &source.BookSource{
+			SourceID:       fmt.Sprintf("s%d", i),
+			BookSourceURL:  fmt.Sprintf("https://s%d.test/base/", i),
+			BookSourceName: fmt.Sprintf("S%d", i),
+			ExploreURL:     "https://s.test/list",
+			EnabledExplore: true,
+			RuleExplore: rule.Flexible[rule.ExploreRule]{Value: &rule.ExploreRule{
+				BookList: ".item",
+				Name:     ".name@text",
+				Author:   ".author@text",
+				BookURL:  ".name@href",
+			}},
+		})
+	}
+	fetcher := &blockingFetcher{body: `<div class="item"><a class="name" href="/book/1">发现书</a><span class="author">作者</span></div>`}
+	service := NewService(&fakeSourceRepo{items: sources}, fetcher, nil).WithLimiter(ratelimit.New(ratelimit.Options{Global: 1}))
+
+	result, err := service.Discover(context.Background(), Input{DiscoveryURL: "https://s.test/list"})
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if len(result.Items) != 3 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	if max := fetcher.maxConcurrent(); max > 1 {
+		t.Fatalf("max concurrent fetches = %d, want <= 1", max)
+	}
+}
+
+func TestDiscoverSkipsInvalidSourceIDWithWarning(t *testing.T) {
+	src := &source.BookSource{
+		SourceID:       "s1",
+		BookSourceURL:  "https://source.example.test/base/",
+		BookSourceName: "S1",
+		ExploreURL:     "https://source.example.test/list",
+		EnabledExplore: true,
+		RuleExplore: rule.Flexible[rule.ExploreRule]{Value: &rule.ExploreRule{
+			BookList: ".item",
+			Name:     ".name@text",
+			Author:   ".author@text",
+			BookURL:  ".name@href",
+		}},
+	}
+	service := NewService(&fakeSourceRepo{items: []*source.BookSource{src}}, fakeFetcher{body: `<div class="item"><a class="name" href="/book/1">发现书</a><span class="author">作者</span></div>`, url: "https://source.example.test/list"}, nil)
+
+	result, err := service.Discover(context.Background(), Input{SourceIDs: []string{"missing", "s1"}, Page: 1})
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].SourceID != "missing" || result.Warnings[0].Code != "source_unavailable" {
+		t.Fatalf("warnings = %#v", result.Warnings)
+	}
+}
+
+// countingExploreSource 返回一个每次执行 JS 都会自增 source 变量的书源，用于观察缓存是否命中。
+func countingExploreSource() *source.BookSource {
+	return &source.BookSource{
+		SourceID:       "s1",
+		BookSourceURL:  "https://source.example.test",
+		BookSourceName: "S1",
+		ExploreURL:     `@js:(function(){ var n = parseInt(source.getVariable() || "0", 10) || 0; source.setVariable(String(n + 1)); return '[{"title":"玄幻","url":"/xuanhuan"}]'; })()`,
+		EnabledExplore: true,
+	}
+}
+
+func exploreRunCount(runtime *script.Runtime, src *source.BookSource) string {
+	return runtime.SourceBindings(context.Background(), src)["getVariable"].(func(...any) string)()
+}
+
+// blockingFetcher 记录同时进行的抓取数，用于验证发现并发受限于限流器。
+type blockingFetcher struct {
+	body string
+
+	mu      sync.Mutex
+	running int
+	max     int
+}
+
+func (f *blockingFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
+	f.mu.Lock()
+	f.running++
+	if f.running > f.max {
+		f.max = f.running
+	}
+	f.mu.Unlock()
+	time.Sleep(10 * time.Millisecond)
+	f.mu.Lock()
+	f.running--
+	f.mu.Unlock()
+	return &fetch.Response{URL: req.URL, Body: []byte(f.body)}, nil
+}
+
+func (f *blockingFetcher) maxConcurrent() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.max
+}

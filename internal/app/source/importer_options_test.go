@@ -99,6 +99,57 @@ func TestImporterAppliesGroupAppendAndReplace(t *testing.T) {
 	}
 }
 
+func TestImporterSplitsGroupsWithLegadoSeparators(t *testing.T) {
+	ctx := context.Background()
+	db := openImporterTestDB(t)
+	repo := repositories.NewBookSourceRepository(db)
+	importer := NewImporter(repo)
+
+	_, err := importer.Import(ctx, ImportInput{
+		Payload: []byte(`{"bookSourceUrl":"https://cn.example.test","bookSourceName":"Cn","bookSourceGroup":"玄幻，都市；仙侠"}`),
+		Options: ImportOptions{GroupMode: "append", GroupName: "历史;科幻"},
+	})
+	if err != nil {
+		t.Fatalf("Import() error = %v", err)
+	}
+	got, _ := repo.FindByURL(ctx, "https://cn.example.test")
+	if got.BookSourceGroup != "玄幻,都市,仙侠,历史,科幻" {
+		t.Fatalf("group = %q, want 玄幻,都市,仙侠,历史,科幻", got.BookSourceGroup)
+	}
+}
+
+func TestImporterNotifiesSavedCallbackOnlyForWrittenSources(t *testing.T) {
+	ctx := context.Background()
+	db := openImporterTestDB(t)
+	repo := repositories.NewBookSourceRepository(db)
+	var saved []string
+	importer := NewImporter(repo).WithSavedCallback(func(bookSourceURL string) {
+		saved = append(saved, bookSourceURL)
+	})
+
+	if _, err := importer.Import(ctx, ImportInput{
+		Payload: []byte(`[
+			{"bookSourceUrl":"https://a.example.test","bookSourceName":"A","lastUpdateTime":10},
+			{"bookSourceUrl":"https://b.example.test","bookSourceName":"B","lastUpdateTime":10}
+		]`),
+	}); err != nil {
+		t.Fatalf("Import() error = %v", err)
+	}
+	if len(saved) != 2 || saved[0] != "https://a.example.test" || saved[1] != "https://b.example.test" {
+		t.Fatalf("saved = %#v", saved)
+	}
+
+	// 相同 lastUpdateTime 默认跳过，不再回调。
+	if _, err := importer.Import(ctx, ImportInput{
+		Payload: []byte(`{"bookSourceUrl":"https://a.example.test","bookSourceName":"A","lastUpdateTime":10}`),
+	}); err != nil {
+		t.Fatalf("Import(skip) error = %v", err)
+	}
+	if len(saved) != 2 {
+		t.Fatalf("saved = %#v, want no callback for skipped import", saved)
+	}
+}
+
 func optionSource(url, name string, lastUpdate int64) *domainsource.BookSource {
 	src := &domainsource.BookSource{
 		BookSourceURL:    url,

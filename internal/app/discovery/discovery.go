@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	bookapp "reader/internal/app/book"
 	sourceapp "reader/internal/app/source"
@@ -14,6 +16,7 @@ import (
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/rule"
 	"reader/internal/domain/source"
+	"reader/internal/infra/ratelimit"
 	ruleinfra "reader/internal/infra/rule"
 	urlrule "reader/internal/infra/rule/url"
 	"reader/internal/infra/script"
@@ -49,15 +52,38 @@ type Warning struct {
 	Message        string
 }
 
+// Service 提供书源分类（发现页签）与多源发现能力。
 type Service struct {
 	repo    source.BookSourceRepository
 	fetcher fetch.Fetcher
 	script  *script.Runtime
-	cache   sync.Map
+	limiter *ratelimit.Limiter
+	cache   *categoryCache
 }
 
 func NewService(repo source.BookSourceRepository, fetcher fetch.Fetcher, scriptRuntime *script.Runtime) *Service {
-	return &Service{repo: repo, fetcher: fetcher, script: scriptRuntime}
+	return &Service{repo: repo, fetcher: fetcher, script: scriptRuntime, cache: newCategoryCache(defaultCategoryCacheTTL, defaultCategoryCacheMaxItems)}
+}
+
+// WithLimiter 注入限流器：多源发现并发度缺省取其全局并发上限，单源请求在抓取入口按源限流。
+func (s *Service) WithLimiter(limiter *ratelimit.Limiter) *Service {
+	s.limiter = limiter
+	return s
+}
+
+// WithCategoryCache 覆盖探索分类缓存参数（TTL 与最大条目数），仅用于测试或按需调优。
+func (s *Service) WithCategoryCache(ttl time.Duration, maxItems int) *Service {
+	s.cache = newCategoryCache(ttl, maxItems)
+	return s
+}
+
+// InvalidateExploreKinds 清除指定书源的探索分类缓存（对齐 Legado removeExploreKinds），
+// 书源导入/更新/删除后调用，避免继续返回旧分类。
+func (s *Service) InvalidateExploreKinds(bookSourceURL string) {
+	if s == nil || s.cache == nil {
+		return
+	}
+	s.cache.invalidateSource(bookSourceURL)
 }
 
 func (s *Service) Categories(ctx context.Context, sourceID string) ([]Category, error) {
@@ -71,53 +97,90 @@ func (s *Service) Categories(ctx context.Context, sourceID string) ([]Category, 
 
 func (s *Service) Discover(ctx context.Context, input Input) (Result, error) {
 	ctx = script.WithStage(ctx, "discovery")
-	sources, err := s.resolveSources(ctx, input)
+	sources, resolveWarnings, err := s.resolveSources(ctx, input)
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{}
-	for _, src := range sources {
-		items, err := s.discoverSource(ctx, src, input)
-		if err != nil {
-			result.Warnings = append(result.Warnings, Warning{
-				SourceID:       src.SourceID,
-				BookSourceURL:  src.BookSourceURL,
-				BookSourceName: src.BookSourceName,
-				Code:           "discovery_failed",
-				Message:        err.Error(),
-			})
-			continue
-		}
-		result.Items = append(result.Items, items...)
+	concurrency := s.limiter.GlobalLimit()
+	if concurrency < 1 {
+		concurrency = defaultDiscoverConcurrency
 	}
+	sem := make(chan struct{}, concurrency)
+	var mu sync.Mutex
+	result := Result{Warnings: resolveWarnings}
+	var wg sync.WaitGroup
+	for _, src := range sources {
+		src := src
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// 单源 panic 只影响该源，转成 Warning，其余源结果照常返回。
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					mu.Lock()
+					result.Warnings = append(result.Warnings, Warning{
+						SourceID:       src.SourceID,
+						BookSourceURL:  src.BookSourceURL,
+						BookSourceName: src.BookSourceName,
+						Code:           "discovery_panic",
+						Message:        fmt.Sprintf("panic: %v", recovered),
+					})
+					mu.Unlock()
+				}
+			}()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			items, err := s.discoverSource(ctx, src, input)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				result.Warnings = append(result.Warnings, Warning{
+					SourceID:       src.SourceID,
+					BookSourceURL:  src.BookSourceURL,
+					BookSourceName: src.BookSourceName,
+					Code:           "discovery_failed",
+					Message:        err.Error(),
+				})
+				return
+			}
+			result.Items = append(result.Items, items...)
+		}()
+	}
+	wg.Wait()
 	return result, nil
 }
 
-func (s *Service) resolveSources(ctx context.Context, input Input) ([]*source.BookSource, error) {
+// defaultDiscoverConcurrency 为未配置任何并发参数时的兜底多源发现并发度。
+const defaultDiscoverConcurrency = 4
+
+// resolveSources 解析待发现书源；单个无效 sourceId 只跳过该源并记录 Warning，不中止整个请求。
+func (s *Service) resolveSources(ctx context.Context, input Input) ([]*source.BookSource, []Warning, error) {
 	if len(input.SourceIDs) > 0 {
 		out := []*source.BookSource{}
+		warnings := []Warning{}
 		for _, id := range input.SourceIDs {
 			src, err := s.repo.FindByID(ctx, id)
 			if err != nil {
-				return nil, err
+				warnings = append(warnings, Warning{SourceID: id, Code: "source_unavailable", Message: err.Error()})
+				continue
 			}
 			if !src.EnabledExplore {
 				continue
 			}
 			out = append(out, src)
 		}
-		return out, nil
+		return out, warnings, nil
 	}
 	enabled := true
-	filter := source.BookSourceFilter{Page: 1, PageSize: 10000, EnabledExplore: &enabled}
+	filter := source.BookSourceFilter{EnabledExplore: &enabled}
 	if input.Group != "" {
 		filter.Group = input.Group
 	}
-	page, err := s.repo.List(ctx, filter)
+	items, err := source.ListAll(ctx, s.repo, filter)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return page.Items, nil
+	return items, nil, nil
 }
 
 func (s *Service) discoverSource(ctx context.Context, src *source.BookSource, input Input) ([]book.SearchBook, error) {
@@ -144,7 +207,9 @@ func (s *Service) discoverSource(ctx context.Context, src *source.BookSource, in
 	}
 	req.Headers = headers
 	sourceapp.ApplyNetworkOptions(&req, nil)
-	resp, err := s.fetcher.Fetch(ctx, req)
+	resp, err := ratelimit.Do(ctx, s.limiter, src.BookSourceURL, src.ConcurrentRate, func(ctx context.Context) (*fetch.Response, error) {
+		return s.fetcher.Fetch(ctx, req)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +339,7 @@ func parseBookList(ctx context.Context, src *source.BookSource, listRule rule.Se
 		})
 		itemAnalyzer.SetVariables(baseVars)
 		name, _ := itemAnalyzer.GetString(ctx, listRule.Name, element)
-		name = strings.TrimSpace(name)
+		name = bookapp.FormatBookName(name)
 		if name == "" {
 			continue
 		}
@@ -287,18 +352,18 @@ func parseBookList(ctx context.Context, src *source.BookSource, listRule rule.Se
 			continue
 		}
 		seen[bookURL] = struct{}{}
-		kind, _ := itemAnalyzer.GetString(ctx, listRule.Kind, element)
+		kinds, _ := itemAnalyzer.GetStringList(ctx, listRule.Kind, element)
 		intro, _ := itemAnalyzer.GetString(ctx, listRule.Intro, element)
 		cover, _ := itemAnalyzer.GetURL(ctx, listRule.CoverURL, element)
 		wordCount, _ := itemAnalyzer.GetString(ctx, listRule.WordCount, element)
 		lastChapter, _ := itemAnalyzer.GetString(ctx, listRule.LastChapter, element)
 		searchBook.BookURL = bookURL
 		searchBook.Name = name
-		searchBook.Author = strings.TrimSpace(author)
-		searchBook.Kind = strings.TrimSpace(kind)
+		searchBook.Author = bookapp.FormatBookAuthor(author)
+		searchBook.Kind = strings.TrimSpace(strings.Join(kinds, ","))
 		searchBook.CoverURL = cover
-		searchBook.Intro = strings.TrimSpace(intro)
-		searchBook.WordCount = strings.TrimSpace(wordCount)
+		searchBook.Intro = bookapp.FormatIntro(intro)
+		searchBook.WordCount = bookapp.FormatWordCount(wordCount)
 		searchBook.LatestChapterTitle = strings.TrimSpace(lastChapter)
 		if variable := itemAnalyzer.VariablesJSON(); variable != "" {
 			searchBook.Variable = variable
@@ -310,7 +375,8 @@ func parseBookList(ctx context.Context, src *source.BookSource, listRule rule.Se
 			out[i], out[j] = out[j], out[i]
 		}
 	}
-	if len(out) == 0 {
+	if len(out) == 0 && strings.TrimSpace(src.BookURLPattern) == "" {
+		// 对齐 Legado BookList.kt:100-106：仅在未配置 bookUrlPattern 时才按详情页回退解析。
 		preview, err := bookapp.PreviewSearchBookFromInfo(ctx, src, redirectURL, body, book.SearchBook{
 			BookURL:     redirectURL,
 			Origin:      src.BookSourceURL,
@@ -332,7 +398,8 @@ func buildPageURL(template string, page int) string {
 	pageText := strconv.Itoa(page)
 	out := strings.ReplaceAll(template, "{{page}}", pageText)
 	out = strings.ReplaceAll(out, "{page}", pageText)
-	return out
+	// 对齐 Legado AnalyzeUrl.replaceKeyPageJs：处理 <a,b,c> 分页列表。
+	return urlrule.ReplacePagePlaceholders(out, page)
 }
 
 func splitExploreKinds(raw string) []string {
@@ -361,34 +428,41 @@ func toString(value any) string {
 }
 
 func (s *Service) loadCategoryCache(src *source.BookSource, rawExploreURL string) ([]Category, bool) {
-	key := categoryCacheKey(src, rawExploreURL)
-	if key == "" {
+	if s.cache == nil {
 		return nil, false
 	}
-	value, ok := s.cache.Load(key)
+	key, ok := categoryCacheKeyFor(src, rawExploreURL)
 	if !ok {
 		return nil, false
 	}
-	categories, ok := value.([]Category)
-	if !ok {
-		return nil, false
-	}
-	return cloneCategories(categories), true
+	return s.cache.get(key)
 }
 
 func (s *Service) storeCategoryCache(src *source.BookSource, rawExploreURL string, categories []Category) {
-	key := categoryCacheKey(src, rawExploreURL)
-	if key == "" {
+	if s.cache == nil {
 		return
 	}
-	s.cache.Store(key, cloneCategories(categories))
+	key, ok := categoryCacheKeyFor(src, rawExploreURL)
+	if !ok {
+		return
+	}
+	s.cache.put(key, categories)
 }
 
-func categoryCacheKey(src *source.BookSource, rawExploreURL string) string {
+type categoryCacheKey struct {
+	sourceURL  string
+	exploreURL string
+}
+
+func categoryCacheKeyFor(src *source.BookSource, rawExploreURL string) (categoryCacheKey, bool) {
 	if src == nil {
-		return ""
+		return categoryCacheKey{}, false
 	}
-	return strings.TrimSpace(src.BookSourceURL) + "\n" + strings.TrimSpace(rawExploreURL)
+	sourceURL := strings.TrimSpace(src.BookSourceURL)
+	if sourceURL == "" {
+		return categoryCacheKey{}, false
+	}
+	return categoryCacheKey{sourceURL: sourceURL, exploreURL: strings.TrimSpace(rawExploreURL)}, true
 }
 
 func cloneCategories(categories []Category) []Category {

@@ -30,7 +30,6 @@ func testServeConfig(t *testing.T, token string) config.Config {
 		GlobalConcurrency: 8,
 		SourceConcurrency: 2,
 		ScriptTimeout:     10 * time.Second,
-		RegexTimeout:      500 * time.Millisecond,
 		DebugBodyLimit:    32 * 1024,
 	}
 }

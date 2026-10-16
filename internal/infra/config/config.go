@@ -32,7 +32,6 @@ type Config struct {
 	GlobalConcurrency           int
 	SourceConcurrency           int
 	ScriptTimeout               time.Duration
-	RegexTimeout                time.Duration
 	DebugBodyLimit              int64
 	ContentReSegment            bool
 	ContentChineseConverterType int
@@ -73,7 +72,6 @@ func Load(source Source) (Config, error) {
 		GlobalConcurrency:           8,
 		SourceConcurrency:           2,
 		ScriptTimeout:               10 * time.Second,
-		RegexTimeout:                500 * time.Millisecond,
 		DebugBodyLimit:              32 * 1024,
 		ContentReSegment:            false,
 		ContentChineseConverterType: 0,
@@ -111,10 +109,6 @@ func Load(source Source) (Config, error) {
 		return Config{}, err
 	}
 	cfg.ScriptTimeout, err = durationValue(source, "READER_SCRIPT_TIMEOUT", cfg.ScriptTimeout)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.RegexTimeout, err = durationValue(source, "READER_REGEX_TIMEOUT", cfg.RegexTimeout)
 	if err != nil {
 		return Config{}, err
 	}
@@ -159,7 +153,6 @@ func (cfg Config) Redacted() map[string]any {
 		"globalConcurrency":           cfg.GlobalConcurrency,
 		"sourceConcurrency":           cfg.SourceConcurrency,
 		"scriptTimeout":               cfg.ScriptTimeout.String(),
-		"regexTimeout":                cfg.RegexTimeout.String(),
 		"debugBodyLimit":              cfg.DebugBodyLimit,
 		"contentReSegment":            cfg.ContentReSegment,
 		"contentChineseConverterType": cfg.ContentChineseConverterType,

@@ -50,7 +50,6 @@ func TestLoadAcceptsProductionWithTokenAndOverrides(t *testing.T) {
 		"READER_GLOBAL_CONCURRENCY":             "8",
 		"READER_SOURCE_CONCURRENCY":             "2",
 		"READER_SCRIPT_TIMEOUT":                 "1500ms",
-		"READER_REGEX_TIMEOUT":                  "750ms",
 		"READER_DEBUG_BODY_LIMIT":               "4096",
 		"READER_CONTENT_RESEGMENT":              "true",
 		"READER_CONTENT_CHINESE_CONVERTER_TYPE": "2",
@@ -101,6 +100,24 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		if _, err := Load(FromMap(env)); err == nil {
 			t.Fatalf("Load(%v) error = nil, want error", env)
 		}
+	}
+}
+
+func TestLoadReadsConcurrencyAndDropsRegexTimeout(t *testing.T) {
+	cfg, err := Load(FromMap(map[string]string{
+		"READER_ENV":                "test",
+		"READER_GLOBAL_CONCURRENCY": "16",
+		"READER_SOURCE_CONCURRENCY": "3",
+		"READER_REGEX_TIMEOUT":      "750ms",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.GlobalConcurrency != 16 || cfg.SourceConcurrency != 3 {
+		t.Fatalf("concurrency = %d/%d, want 16/3", cfg.GlobalConcurrency, cfg.SourceConcurrency)
+	}
+	if _, ok := cfg.Redacted()["regexTimeout"]; ok {
+		t.Fatal("Redacted() still exposes the removed regexTimeout option")
 	}
 }
 

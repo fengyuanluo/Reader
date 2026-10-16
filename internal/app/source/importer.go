@@ -80,6 +80,8 @@ type ImportItemResult struct {
 type Importer struct {
 	repo    source.BookSourceRepository
 	fetcher fetch.Fetcher
+	// onSaved 在书源写入成功后回调，用于清理依赖书源的缓存（如探索分类缓存）。
+	onSaved func(bookSourceURL string)
 }
 
 func NewImporter(repo source.BookSourceRepository) *Importer {
@@ -88,6 +90,12 @@ func NewImporter(repo source.BookSourceRepository) *Importer {
 
 func NewImporterWithFetcher(repo source.BookSourceRepository, fetcher fetch.Fetcher) *Importer {
 	return &Importer{repo: repo, fetcher: fetcher}
+}
+
+// WithSavedCallback 注册书源写入成功后的回调，参数为书源地址。
+func (i *Importer) WithSavedCallback(callback func(bookSourceURL string)) *Importer {
+	i.onSaved = callback
+	return i
 }
 
 func (i *Importer) Import(ctx context.Context, input ImportInput) (*ImportResult, error) {
@@ -198,8 +206,28 @@ func (i *Importer) importEntries(ctx context.Context, entries []json.RawMessage,
 		if err := i.repo.SaveMany(ctx, toSave); err != nil {
 			return nil, err
 		}
+		i.notifySaved(toSave)
 	}
 	return result, nil
+}
+
+// notifySaved 在整批写入成功后回调每个书源地址，供缓存失效使用。
+func (i *Importer) notifySaved(sources []*source.BookSource) {
+	if i.onSaved == nil {
+		return
+	}
+	seen := map[string]struct{}{}
+	for _, src := range sources {
+		url := strings.TrimSpace(src.BookSourceURL)
+		if url == "" {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		i.onSaved(url)
+	}
 }
 
 // planImport 决定单条书源的导入状态并应用导入选项，记入 result；需要写库时返回 true。
@@ -244,6 +272,9 @@ func (i *Importer) planImport(ctx context.Context, result *ImportResult, src *so
 	return true, nil
 }
 
+// shouldSkip 判断默认（lastUpdateTime）策略下是否跳过导入。
+// 对齐 Legado ImportBookSourceViewModel.comparisonSource：`source.lastUpdateTime < it.lastUpdateTime`
+// 才会默认选中更新，因此两者相等（含大量书源默认的 0）时跳过；如需强制覆盖请使用 updatePolicy=always。
 func shouldSkip(existing, incoming *source.BookSource, policy string) bool {
 	switch policy {
 	case UpdatePolicyAlways:
@@ -274,8 +305,8 @@ func applyGroupOption(incoming *source.BookSource, options ImportOptions) {
 		return
 	}
 	if options.GroupMode == "append" {
-		groups := splitGroups(incoming.BookSourceGroup)
-		for _, group := range splitGroups(options.GroupName) {
+		groups := source.SplitGroups(incoming.BookSourceGroup)
+		for _, group := range source.SplitGroups(options.GroupName) {
 			if !containsGroup(groups, group) {
 				groups = append(groups, group)
 			}
@@ -284,18 +315,6 @@ func applyGroupOption(incoming *source.BookSource, options ImportOptions) {
 		return
 	}
 	incoming.BookSourceGroup = options.GroupName
-}
-
-func splitGroups(value string) []string {
-	parts := strings.Split(value, ",")
-	groups := []string{}
-	for _, part := range parts {
-		group := strings.TrimSpace(part)
-		if group != "" {
-			groups = append(groups, group)
-		}
-	}
-	return groups
 }
 
 func containsGroup(groups []string, want string) bool {

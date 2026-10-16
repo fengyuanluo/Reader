@@ -37,7 +37,6 @@ func newTestRuntime(t *testing.T) *bootstrap.Runtime {
 		GlobalConcurrency:   8,
 		SourceConcurrency:   2,
 		ScriptTimeout:       10 * 1e9,
-		RegexTimeout:        500 * 1e6,
 		DebugBodyLimit:      32 * 1024,
 	}
 	rt, cleanup, err := bootstrap.Open(cfg)

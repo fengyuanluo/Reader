@@ -69,14 +69,7 @@ func buildBookFetchRequest(ctx context.Context, rawURL string, src *source.BookS
 			switch body := value.(type) {
 			case string:
 				rawFormBody = body
-				if looksLikeFormBody(body) {
-					req.Body = []byte(urlrule.EncodeFormString(body, ""))
-				} else {
-					req.Body = []byte(body)
-				}
-				if req.Headers["Content-Type"] == "" && looksLikeFormBody(body) {
-					req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
-				}
+				req.Body = []byte(body)
 			case map[string]any, []any:
 				if encoded, err := json.Marshal(body); err == nil {
 					req.Body = encoded
@@ -108,7 +101,13 @@ func buildBookFetchRequest(ctx context.Context, rawURL string, src *source.BookS
 	}
 	req.URL = urlrule.EncodeURLQuery(req.URL, charsetName)
 	if rawFormBody != "" && looksLikeFormBody(rawFormBody) {
-		req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
+		// 对齐 Legado AnalyzeUrl:279-283：仅在没有显式 Content-Type 时才做一次表单编码并补头。
+		if strings.TrimSpace(req.Headers["Content-Type"]) == "" {
+			req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
+			req.Headers["Content-Type"] = "application/x-www-form-urlencoded"
+		} else {
+			req.Body = []byte(rawFormBody)
+		}
 	}
 	sourceapp.ApplyNetworkOptions(&req, custom.Attribute)
 	return req, nil

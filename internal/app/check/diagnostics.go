@@ -114,21 +114,5 @@ func removeFailureGroups(groups string) string {
 }
 
 func splitGroups(groups string) []string {
-	parts := strings.FieldsFunc(groups, func(r rune) bool {
-		return r == ',' || r == ';' || r == '，' || r == '；'
-	})
-	out := make([]string, 0, len(parts))
-	seen := map[string]struct{}{}
-	for _, part := range parts {
-		value := strings.TrimSpace(part)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
+	return source.SplitGroups(groups)
 }
