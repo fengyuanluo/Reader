@@ -155,15 +155,48 @@ func TestContentServiceUsesBookTocHTMLBeforeFetching(t *testing.T) {
 	}
 }
 
-func TestContentServiceRejectsUnsupportedURLOption(t *testing.T) {
-	src := testContentSource()
-	chapter := testContentChapter()
-	chapter.URL = `https://site.example.test/api/content,{"proxy":"http://127.0.0.1:8888"}`
-	service := NewService(&fakeChapterRepo{}, &fakeContentFetcher{}, nil)
+func TestContentServiceAppliesNetworkURLOptions(t *testing.T) {
+	tests := []struct {
+		name      string
+		header    string
+		option    string
+		wantProxy string
+		wantDNSIP string
+		wantErr   string
+	}{
+		{name: "proxy option", option: `{"proxy":"http://127.0.0.1:8888"}`, wantProxy: "http://127.0.0.1:8888"},
+		{name: "dnsIp option", option: `{"dnsIp":"93.184.216.34"}`, wantDNSIP: "93.184.216.34"},
+		{name: "source header proxy", header: `{"proxy":"socks5://proxy.test:1080@u@p","X-Test":"1"}`, option: `{}`, wantProxy: "socks5://proxy.test:1080@u@p"},
+		{name: "serverID and webView delay ignored", option: `{"serverID":"1","webViewDelayTime":"500","webJs":"1"}`},
+		{name: "webView unsupported", option: `{"webView":true}`, wantErr: "unsupported url option"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := testContentSource()
+			src.Header = tt.header
+			chapter := testContentChapter()
+			chapter.URL = `https://site.example.test/api/content,` + tt.option
+			fetcher := &fakeContentFetcher{}
+			service := NewService(&fakeChapterRepo{}, fetcher, nil)
 
-	_, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
-	if err == nil || !strings.Contains(err.Error(), "unsupported url option") {
-		t.Fatalf("err = %v", err)
+			_, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if fetcher.calls == 0 {
+				t.Fatalf("fetch not called, err = %v", err)
+			}
+			req := fetcher.lastReq
+			if req.Proxy != tt.wantProxy || req.DNSIP != tt.wantDNSIP {
+				t.Fatalf("Proxy/DNSIP = %q/%q, want %q/%q", req.Proxy, req.DNSIP, tt.wantProxy, tt.wantDNSIP)
+			}
+			if _, ok := req.Headers["proxy"]; ok {
+				t.Fatalf("proxy leaked into headers: %#v", req.Headers)
+			}
+		})
 	}
 }
 

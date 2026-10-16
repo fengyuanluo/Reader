@@ -44,7 +44,7 @@ func prepareBookFetchRequest(ctx context.Context, rawURL string, src *source.Boo
 
 func buildBookFetchRequest(ctx context.Context, rawURL string, src *source.BookSource, scriptRuntime *script.Runtime) (fetch.Request, error) {
 	custom := urlrule.ParseCustom(rawURL)
-	if err := sourceapp.ValidateSupportedURLOptions(custom.Attribute, "method", "body", "headers", "type", "charset", "origin", "retry"); err != nil {
+	if err := sourceapp.ValidateSupportedURLOptions(custom.Attribute); err != nil {
 		return fetch.Request{}, err
 	}
 	req := fetch.Request{URL: custom.URL, Method: "GET", Headers: map[string]string{}, AllowNonSuccess: true, UseCookieJar: src != nil && src.EnabledCookieJar}
@@ -110,6 +110,7 @@ func buildBookFetchRequest(ctx context.Context, rawURL string, src *source.BookS
 	if rawFormBody != "" && looksLikeFormBody(rawFormBody) {
 		req.Body = []byte(urlrule.EncodeFormString(rawFormBody, charsetName))
 	}
+	sourceapp.ApplyNetworkOptions(&req, custom.Attribute)
 	return req, nil
 }
 

@@ -20,6 +20,10 @@ type Request struct {
 	AllowNonSuccess  bool
 	EncodeBodyAsHex  bool
 	Retry            int
+	// Proxy 为本次请求使用的代理，支持 Legado 写法 scheme://host:port@user@pass 与标准 userinfo 写法。
+	Proxy string
+	// DNSIP 固定该请求主机连接的 IP（dnsIp 选项），Host 头与 TLS SNI 仍取自 URL；不可与 Proxy 同时使用。
+	DNSIP string
 }
 
 type Response struct {
