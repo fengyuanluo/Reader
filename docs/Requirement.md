@@ -497,6 +497,16 @@
 - 验收标准：章节正文缓存命中避免二次网络请求；删除书籍清理章节正文缓存；删除书源清理源变量。
 - 优先级：P0
 
+### R-082：CLI 模式
+
+- 来源依据：用户确认的单二进制 CLI 决策
+- 需求描述：单二进制 `reader`，`serve` 子命令承接现有 HTTP 服务；`import`/`source`/`search`/`book`/`toc`/`content`/`download` 子命令直连服务层与 SQLite，不启动 server、不需要 token、不产生 HTTP 依赖。覆盖书源导入、书源列表/详情/启停、搜索、加书架、详情、目录、单章正文、整本下载（SQLite 缓存 + 默认 TXT 导出，`--no-export` 关闭）。
+- 输入：`READER_*` 环境变量与命令行参数。
+- 输出：默认 tab 分隔行式输出；`--json` 机读 JSON；进度与错误到 stderr。
+- 边界：全部子命令非交互；CLI 不鉴权（直连数据库，`READER_TOKEN` 仅 `serve` 需要）；退出码 0=成功、1=用法/参数错误、2=运行失败；发现/调试/校验/替换规则的 CLI 子命令不在一期范围。
+- 验收标准：import → source list → search → book add → book refresh → toc → download 全链可在不启动 server 的情况下完成；`--json` 输出可被 jq 解析；`serve` 与原 HTTP 服务行为等价。
+- 优先级：P1
+
 ## 14. 安全与运维需求
 
 ### R-090：服务配置

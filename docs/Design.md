@@ -67,8 +67,9 @@ api/
   openapi.yaml
   examples/
 cmd/
-  server/
+  reader/
     main.go
+    serve.go
 internal/
   api/
     generated/
@@ -83,6 +84,8 @@ internal/
     replace/
     debug/
     check/
+  bootstrap/
+  cli/
   domain/
     source/
     book/
@@ -882,7 +885,7 @@ start checking
 
 - `internal/app` 依赖 domain ports。
 - `internal/infra` 实现 domain ports。
-- 依赖注入在 `cmd/server` 或 composition root 完成。
+- 依赖注入在 composition root 完成：`internal/bootstrap` 装配共享 Runtime，`cmd/reader serve` 与 CLI 子命令共同复用。
 
 ## 17. 测试策略
 

@@ -224,6 +224,26 @@ func TestClassifyRealStageFailure(t *testing.T) {
 			want:   "network_timeout",
 		},
 		{
+			name:   "tls handshake timeout",
+			result: realStageResult{Stage: "toc", Status: "failed", Message: `Get "https://ocean.shuqireader.com/api/bcspub/qswebapi/book/chapterlist?bookId=6167443": net/http: TLS handshake timeout`},
+			want:   "network_tls_invalid",
+		},
+		{
+			name:   "search warning tls handshake timeout",
+			result: realStageResult{Stage: "search", Status: "failed", Message: `empty search result; warnings: search_failed: Get "https://api-x.shrtxs.cn/qd/search.php?keyword=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9&page=1": net/http: TLS handshake timeout`},
+			want:   "network_tls_invalid",
+		},
+		{
+			name:   "content eof",
+			result: realStageResult{Stage: "content", Status: "failed", Message: `Post "http://119.45.176.116:5006/chapterContent": EOF`},
+			want:   "network_connection_reset",
+		},
+		{
+			name:   "search warning connection refused",
+			result: realStageResult{Stage: "search", Status: "failed", Message: `empty search result; warnings: search_failed: Get "http://www.shencou.com/modules/article/search.php?searchtype=articlename": dial tcp 0.0.0.0:80: connect: connection refused`},
+			want:   "network_connection_reset",
+		},
+		{
 			name:   "connection reset",
 			result: realStageResult{Stage: "search", Status: "failed", Message: `Post "https://x": read tcp 1.1.1.1:1->2.2.2.2:2: read: connection reset by peer`},
 			want:   "network_connection_reset",
@@ -524,35 +544,40 @@ func TestRealSourceSingleDebug(t *testing.T) {
 		}
 	}
 
-	contentReq := debugRequestFromCustomURL(src, chapters[0].URL)
-	rawResp, err := httpFetcher.Fetch(ctx, contentReq)
-	if err != nil {
-		t.Fatalf("debug raw content fetch: %v", err)
-	}
-	rawBody := string(rawResp.Body)
-	if len(rawBody) > 240 {
-		rawBody = rawBody[:240]
-	}
-	t.Logf("raw content status=%d url=%s body=%q", rawResp.StatusCode, rawResp.URL, rawBody)
-	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{RedirectURL: rawResp.URL, SourceURL: src.BookSourceURL})
-	preview, err := analyzer.GetString(ctx, src.RuleContent.Value.Content, string(rawResp.Body))
-	if err != nil {
-		t.Logf("direct analyzer error: %v", err)
+	if chapters[0].IsVolume && strings.HasPrefix(chapters[0].URL, chapters[0].Title) {
+		// Legado WebBook.getContentAwait 对一级目录章节短路，占位 URL 本就不可抓取。
+		t.Logf("volume chapter: skip raw content fetch of placeholder url=%s", chapters[0].URL)
 	} else {
-		if len(preview) > 120 {
-			preview = preview[:120]
+		contentReq := debugRequestFromCustomURL(src, chapters[0].URL)
+		rawResp, err := httpFetcher.Fetch(ctx, contentReq)
+		if err != nil {
+			t.Fatalf("debug raw content fetch: %v", err)
 		}
-		t.Logf("direct analyzer preview=%q", preview)
+		rawBody := string(rawResp.Body)
+		if len(rawBody) > 240 {
+			rawBody = rawBody[:240]
+		}
+		t.Logf("raw content status=%d url=%s body=%q", rawResp.StatusCode, rawResp.URL, rawBody)
+		analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{RedirectURL: rawResp.URL, SourceURL: src.BookSourceURL})
+		preview, err := analyzer.GetString(ctx, src.RuleContent.Value.Content, string(rawResp.Body))
+		if err != nil {
+			t.Logf("direct analyzer error: %v", err)
+		} else {
+			if len(preview) > 120 {
+				preview = preview[:120]
+			}
+			t.Logf("direct analyzer preview=%q", preview)
+		}
+		rawResp2, err := httpFetcher.Fetch(ctx, contentReq)
+		if err != nil {
+			t.Fatalf("debug second raw content fetch: %v", err)
+		}
+		rawBody2 := string(rawResp2.Body)
+		if len(rawBody2) > 240 {
+			rawBody2 = rawBody2[:240]
+		}
+		t.Logf("raw content second status=%d url=%s body=%q", rawResp2.StatusCode, rawResp2.URL, rawBody2)
 	}
-	rawResp2, err := httpFetcher.Fetch(ctx, contentReq)
-	if err != nil {
-		t.Fatalf("debug second raw content fetch: %v", err)
-	}
-	rawBody2 := string(rawResp2.Body)
-	if len(rawBody2) > 240 {
-		rawBody2 = rawBody2[:240]
-	}
-	t.Logf("raw content second status=%d url=%s body=%q", rawResp2.StatusCode, rawResp2.URL, rawBody2)
 
 	content, resolvedBook, err := env.content.GetChapterContent(ctx, bookID, chapters[0].Index)
 	if err != nil {
@@ -1109,11 +1134,15 @@ func classifyRealStageFailure(result realStageResult) string {
 		return "security_policy_blocked"
 	case strings.Contains(lower, "no such host") || strings.Contains(lower, "server misbehaving"):
 		return "network_dns_failure"
-	case strings.Contains(lower, "tls: failed to verify certificate") || strings.Contains(lower, "x509:"):
+	case strings.Contains(lower, "tls: failed to verify certificate") ||
+		strings.Contains(lower, "x509:") ||
+		strings.Contains(lower, "tls handshake timeout"):
 		return "network_tls_invalid"
 	case strings.Contains(lower, "context deadline exceeded") || strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "client.timeout exceeded while awaiting headers"):
 		return "network_timeout"
-	case strings.Contains(lower, "connection reset by peer"):
+	case strings.Contains(lower, "connection reset by peer") ||
+		strings.Contains(lower, "connection refused") ||
+		isConnectionEOFMessage(lower):
 		return "network_connection_reset"
 	case strings.Contains(lower, "unexpected status: 400"):
 		return "source_upstream_http_400"
@@ -1143,6 +1172,16 @@ func classifyRealStageFailure(result realStageResult) string {
 	default:
 		return "implementation_or_rule_failed"
 	}
+}
+
+// isConnectionEOFMessage mirrors diagnosticapp.isConnectionEOFMessage: Go http
+// transport errors that end with a bare EOF (`Post "url": EOF`) or a truncated
+// body ("unexpected EOF"). Kept narrow so script errors like `Unexpected end of
+// JSON input (EOF) at parse` keep their upstream classification.
+func isConnectionEOFMessage(lower string) bool {
+	return lower == "eof" ||
+		strings.HasSuffix(lower, ": eof") ||
+		strings.Contains(lower, "unexpected eof")
 }
 
 func hasPollutedSourceHost(raw string) bool {

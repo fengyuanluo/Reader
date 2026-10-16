@@ -18,6 +18,8 @@ Compatibility boundary:
 - `docs/Tasks.md`: task breakdown and required workflow.
 - `docs/Development.md`: local development, configuration, generation, verification.
 - `docs/API.md`: API usage examples.
+- `docs/CLI.md`: single-binary CLI command reference (`reader serve` + non-interactive subcommands).
+- `docs/skills/reader-cli/SKILL.md`: agent skill card; copy it into your skill directory to register (the repo cannot register skill:// entries itself).
 - `docs/LegadoAlignmentReport.md`: longitudinal Legado-vs-Reader alignment audit; use together with the latest real E2E report when citing current status.
 - `docs/Release-0.0.1.md`: first release snapshot and publication notes.
 - `docs/archive/`: archived historical documents; not a current source of truth unless you are explicitly tracing history.
@@ -30,7 +32,7 @@ READER_TOKEN=dev-token \
 READER_SQLITE_DSN=./data/reader.db \
 READER_CONTENT_RESEGMENT=false \
 READER_CONTENT_CHINESE_CONVERTER_TYPE=0 \
-go run ./cmd/server
+go run ./cmd/reader serve
 ```
 
 Health check:
@@ -45,6 +47,18 @@ Authenticated request:
 curl -H "Authorization: Bearer dev-token" \
   http://127.0.0.1:8080/api/v1/book-sources
 ```
+
+## CLI Mode
+
+`go run ./cmd/reader serve` starts the HTTP API; every other subcommand talks to the service layer and SQLite directly — no server process, no token:
+
+```bash
+go run ./cmd/reader import https://shuyuan-api.yiove.com/import/book-source-collection/a8adf570-e115-4b99-87e3-ccaf298ae361
+go run ./cmd/reader search 斗破苍穹 --limit 5 --json
+go run ./cmd/reader download "$BOOK_ID" --from 0 --to 2 --export /tmp/book.txt
+```
+
+Full reference: `docs/CLI.md`.
 
 ## Verification
 

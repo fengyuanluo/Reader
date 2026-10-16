@@ -53,6 +53,20 @@ func TestMigrateCreatesRequiredTables(t *testing.T) {
 	}
 }
 
+func TestMigrateSetsBusyTimeout(t *testing.T) {
+	db := openTestDB(t)
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	var timeout int
+	if err := db.QueryRow(`PRAGMA busy_timeout`).Scan(&timeout); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if timeout != 5000 {
+		t.Fatalf("busy_timeout = %d, want 5000", timeout)
+	}
+}
+
 func TestMigrateIsIdempotent(t *testing.T) {
 	db := openTestDB(t)
 	if err := Migrate(db); err != nil {

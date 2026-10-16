@@ -50,7 +50,7 @@ export READER_CONTENT_CHINESE_CONVERTER_TYPE="0"
 mkdir -p data
 READER_TOKEN=dev-token \
 READER_SQLITE_DSN=./data/reader.db \
-go run ./cmd/server
+go run ./cmd/reader serve
 ```
 
 健康检查无需 token：

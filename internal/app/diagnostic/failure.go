@@ -147,11 +147,17 @@ func ClassifyFailureClassFromMessage(message string, lower string, code string) 
 		return FailureClassSecurityPolicyBlocked
 	case strings.Contains(lower, "no such host") || strings.Contains(lower, "server misbehaving"):
 		return FailureClassNetworkDNSFailure
-	case strings.Contains(lower, "tls: failed to verify certificate") || strings.Contains(lower, "x509:"):
+	case strings.Contains(lower, "tls: failed to verify certificate") ||
+		strings.Contains(lower, "x509:") ||
+		strings.Contains(lower, "tls handshake timeout"):
 		return FailureClassNetworkTLSInvalid
 	case strings.Contains(lower, "context deadline exceeded") || strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "client.timeout exceeded while awaiting headers"):
 		return FailureClassNetworkTimeout
-	case strings.Contains(lower, "connection reset by peer"):
+	// network_connection_reset covers connection-level transport failures:
+	// RST, refused ports, and connections closed before a complete response.
+	case strings.Contains(lower, "connection reset by peer") ||
+		strings.Contains(lower, "connection refused") ||
+		isConnectionEOFMessage(lower):
 		return FailureClassNetworkConnectionReset
 	case strings.Contains(lower, "unexpected status: 400"):
 		return FailureClassSourceUpstreamHTTP400
@@ -188,4 +194,15 @@ func ClassifyFailureClassFromMessage(message string, lower string, code string) 
 	default:
 		return FailureClassUnknown
 	}
+}
+
+// isConnectionEOFMessage reports Go http transport errors that end with a bare
+// EOF (`Post "url": EOF`) or a truncated body ("unexpected EOF"); both mean the
+// peer closed the connection before a complete response arrived. It is
+// deliberately narrow so script errors like `Unexpected end of JSON input
+// (EOF) at parse` keep their upstream classification.
+func isConnectionEOFMessage(lower string) bool {
+	return lower == "eof" ||
+		strings.HasSuffix(lower, ": eof") ||
+		strings.Contains(lower, "unexpected eof")
 }

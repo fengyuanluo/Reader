@@ -59,6 +59,81 @@ func TestContentServiceUsesCacheBeforeFetching(t *testing.T) {
 	}
 }
 
+// Legado WebBook.getContentAwait: 卷名章节（url 为 toc 阶段合成的 title+index 占位串）不抓取、不解析正文规则。
+func TestContentServiceSkipsFetchForVolumeChapterWithURLStartingWithTitle(t *testing.T) {
+	src := testContentSource()
+	chapter := book.BookChapter{
+		URL:     "📖[卷一 高手乍成]📖0",
+		Title:   "📖[卷一 高手乍成]📖",
+		BaseURL: "https://site.example.test/toc/1",
+		BookURL: "https://site.example.test/book/1",
+		Index:   0,
+		Tag:     "更新时间：2019-10-21",
+	}
+	chapter.IsVolume = true
+	chapters := &fakeChapterRepo{}
+	fetcher := &fakeContentFetcher{}
+	service := NewService(chapters, fetcher, nil)
+
+	got, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Content != "更新时间：2019-10-21" {
+		t.Fatalf("content = %q, want tag text", got.Content)
+	}
+	if fetcher.calls != 0 {
+		t.Fatalf("fetch calls = %d, want 0 for volume chapter", fetcher.calls)
+	}
+	if chapters.savedContent != "" {
+		t.Fatalf("volume content should not be cached, got %q", chapters.savedContent)
+	}
+}
+
+func TestContentServiceVolumeChapterWithoutTagReturnsEmptyContent(t *testing.T) {
+	src := testContentSource()
+	chapter := testContentChapter()
+	chapter.IsVolume = true
+	chapter.URL = chapter.Title + "0"
+	chapter.Tag = ""
+	service := NewService(&fakeChapterRepo{}, &fakeContentFetcher{}, nil)
+
+	got, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Content != "" {
+		t.Fatalf("content = %q, want empty", got.Content)
+	}
+}
+
+func TestContentServiceStillFetchesVolumeChapterWithRealURL(t *testing.T) {
+	src := testContentSource()
+	chapter := book.BookChapter{
+		URL:     "https://site.example.test/volume/1",
+		Title:   "卷一",
+		BaseURL: "https://site.example.test/toc/1",
+		BookURL: "https://site.example.test/book/1",
+		Index:   0,
+	}
+	chapter.IsVolume = true
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL: {URL: chapter.URL, Body: []byte(`<html><body><h1>卷一</h1><div class="content"><p>卷首语</p></div></body></html>`)},
+	}}
+	service := NewService(&fakeChapterRepo{}, fetcher, nil)
+
+	got, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Content != "卷首语" {
+		t.Fatalf("content = %q, want parsed volume page", got.Content)
+	}
+	if fetcher.calls != 1 {
+		t.Fatalf("fetch calls = %d, want 1", fetcher.calls)
+	}
+}
+
 func TestContentServiceUsesBookTocHTMLBeforeFetching(t *testing.T) {
 	src := testContentSource()
 	chapter := testContentChapter()

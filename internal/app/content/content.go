@@ -78,6 +78,11 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 	}
 	bookValue := input.Book
 	chapter := input.Chapter
+	// Legado WebBook.getContentAwait: 一级目录（卷名）章节不抓取、不解析正文规则，直接返回 tag 附加信息。
+	// 卷章节的 url 是 toc 阶段按 Legado 语义合成的 title+index 占位串，抓取只会得到错误页面。
+	if chapter.IsVolume && strings.HasPrefix(chapter.URL, chapter.Title) {
+		return Result{Content: chapter.Tag, Chapter: chapter}, nil
+	}
 	bookID := book.IDFromURL(bookValue.BookURL)
 	if s.chapters != nil {
 		if cached, ok, err := s.chapters.GetContent(ctx, bookID, chapter.Index); err != nil {

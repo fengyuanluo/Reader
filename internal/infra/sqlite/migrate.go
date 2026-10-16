@@ -11,6 +11,9 @@ func Migrate(db *sql.DB) error {
 	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		return fmt.Errorf("enable foreign keys: %w", err)
 	}
+	if _, err := db.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
+		return fmt.Errorf("enable busy timeout: %w", err)
+	}
 	if _, err := db.Exec(initialSchema); err != nil {
 		return fmt.Errorf("apply initial schema: %w", err)
 	}

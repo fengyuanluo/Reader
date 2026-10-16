@@ -334,3 +334,9 @@
   - 在当前网络条件下，`READER_REAL_E2E_TIMEOUT_SECONDS=600` 已明显开始主导失败分布。
   - 最新带更高 `go test` 外层超时的真实报告中，`network_timeout=29`，而且这些条目里大量 message 是统一的 `context deadline exceeded`。
   - 因此当前 100 候选 `fullSuccessCount` 会受实时网络和固定 600 秒总预算显著影响，不能再把单次总数简单当成纯实现正确性的代理。
+- 2026-10-14 新一轮真实 100 候选 gate（预算 1800s、`CONTINUE_AFTER_SUCCESS=true`、`go test -timeout=2000s`，本轮 `network_timeout` 仅 2，预算不再挤压结果）触发了三路 source-specific triage，结论与修复如下：
+  - 通用实现缺口（已修）：`小米阅读（优+）/小米书城（优+）` content 阶段 `invalid json: invalid character '<'` 的根因不是站点改回 HTML，也不是 JSON 误判，而是 Reader 缺少 Legado `WebBook.getContentAwait` 对一级目录（卷名）章节的短路语义——卷章节 URL 是 toc 阶段合成的 `title+index` 占位串，抓取必然得到 404/HTML，再喂给 `$..` JSONPath 规则报 `ErrInvalidJSON`。已在 `internal/app/content/content.go` 补上 `isVolume && url 前缀 title` 短路（返回 `chapter.Tag`，不抓取、不缓存、不跑 processor），并补 3 条确定性回归测试。
+  - 站点/源侧（不改代码，证据确凿）：报告里的 `TypeError: Cannot read property 'join'...` 实际属于同名源 `m.zym888.com`（`src_ae48dc2981afcd5dbeea4255`），其 `<js>` 第 4 行 `.match(...)` 因 `java.ajax` 拿到 openresty 403 WAF 页返回 null 而失败；`炫动小说` 的 `script_timeout` 是上游 TCP 可连但 HTTP 永不响应，`java.ajax` 阻塞至 10s 沙箱预算；`fq-book.netsite.cc` 共享 Xposed 云手机 API 后端自返 `InvocationTargetError` 后宕机。三者均无 Reader 通用修复点（且禁止站点特判）。git 事实：`a6def37..HEAD` 零提交，源 JSON `lastUpdateTime` 早于 05-05 快照，排除 Reader 回归。
+  - 失败分类器（已修）：`net/http: TLS handshake timeout`、裸 `EOF`/`unexpected EOF` 此前漏配网络类，导致起点读书被误归 `source_search_empty_result`、阿巴小说/全本小说被误归 `implementation_or_rule_failed`，污染"剩余实现缺口"口径。已在 `internal/app/diagnostic/failure.go` 及 e2e 镜像分类器同步补齐并加表驱动回归测试；对旧报告 sweep 复核共 10 条翻转、0 条误翻。
+  - 本轮 100 候选 gate（修复前）：`fullSuccessCount=39`，search 49/51、info 47/2、toc 44/3、content 39/5；修复后复跑 content 阶段 `invalid json` 与 `implementation_or_rule_failed` 均清零，content 39 通过/2 失败（全本小说 POST EOF、七猫 JS 语法错，均为上游/源侧且与修复前相同）。
+  - 单源复核：`小米阅读（优+）` 真实 debug 全链路 search(17)→info→toc(442)→content 短路通过（卷章节返回 `tag ?: ''` 即空正文，与 Legado 一致）。
