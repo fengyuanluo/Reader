@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/netip"
@@ -20,13 +21,16 @@ import (
 	"time"
 
 	"golang.org/x/net/html/charset"
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/transform"
 
 	"reader/internal/domain/fetch"
 )
 
 // HTTPFetcher 执行书源 HTTP 请求。
-// SSRF 防护在拨号阶段完成：每次建立连接都只解析一次域名，校验全部解析结果后直接连接已校验的 IP，
-// 因此 DNS rebinding 与重定向都无法绕过校验；环境代理变量不生效，代理只来自请求自身的 Proxy 字段。
+// SSRF 防护在拨号阶段完成：每次建立连接只解析一次域名（结果按 host 缓存 dnsCacheTTL），校验全部解析结果后
+// 才连接已校验的 IP，因此重定向无法绕过校验；缓存只存解析结果，每次拨号仍对当次使用的 IP 重新校验，
+// 不缓存允许/拒绝结论。环境代理变量不生效，代理只来自请求自身的 Proxy 字段。
 type HTTPFetcher struct {
 	timeout          time.Duration
 	maxRedirects     int
@@ -42,6 +46,26 @@ type HTTPFetcher struct {
 
 	mu      sync.Mutex
 	clients map[routeKey]*http.Client
+
+	// dnsCache 按 host 缓存 DNS 解析结果（TTL dnsCacheTTL），避免每条新连接重复解析（C-024/C-025）。
+	// 只缓存解析结果：每次拨号仍对当次使用的 IP 重新执行 checkIPs 校验，SSRF 语义不变。
+	dnsCacheMu sync.Mutex
+	dnsCache   map[string]dnsCacheEntry
+}
+
+type dnsCacheEntry struct {
+	ips       []net.IP
+	expiresAt time.Time
+}
+
+// dnsCacheTTL 是 DNS 解析结果的缓存时长。
+const dnsCacheTTL = 60 * time.Second
+
+// clearDNSCache 清空 DNS 缓存，供测试使用。
+func (f *HTTPFetcher) clearDNSCache() {
+	f.dnsCacheMu.Lock()
+	defer f.dnsCacheMu.Unlock()
+	f.dnsCache = map[string]dnsCacheEntry{}
 }
 
 // routeKey 区分不同出口路由；连接池不感知 DNS 固定与代理，必须按路由隔离 Transport。
@@ -65,6 +89,7 @@ func NewHTTPFetcher(opts ...Option) *HTTPFetcher {
 		},
 		dial:        dialer.DialContext,
 		clients:     map[routeKey]*http.Client{},
+		dnsCache:    map[string]dnsCacheEntry{},
 		rateLimiter: newSourceRateLimiter(),
 	}
 	for _, opt := range opts {
@@ -137,6 +162,20 @@ func (f *HTTPFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Resp
 	var lastResp *fetch.Response
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 && req.Retry > 0 {
+			// 指数退避：100ms × 2^(attempt-1)，上限 2s，ctx 可取消。
+			backoff := time.Duration(100) * time.Millisecond << (attempt - 1)
+			if backoff > 2*time.Second {
+				backoff = 2 * time.Second
+			}
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
 		resp, err := f.fetchOnce(ctx, client, req)
 		if err != nil {
 			lastErr = err
@@ -192,10 +231,12 @@ func (f *HTTPFetcher) clientFor(req fetch.Request) (*http.Client, error) {
 	}
 	transport := &http.Transport{
 		// 显式不读取 HTTP(S)_PROXY 环境变量，避免环境代理改变实际连接目标。
-		Proxy:                 nil,
-		DialContext:           f.dialContext(key.pinHost, pinIP),
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
+		Proxy:             nil,
+		DialContext:       f.dialContext(key.pinHost, pinIP),
+		ForceAttemptHTTP2: true,
+		MaxIdleConns:      100,
+		// 与并发下载的章节数同量级，避免同源并发时反复 TCP+TLS 握手（C-023）。
+		MaxIdleConnsPerHost:   8,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: time.Second,
@@ -260,6 +301,8 @@ func (f *HTTPFetcher) proxyFunc(proxyURL *url.URL) func(*http.Request) (*url.URL
 }
 
 // allowedIPs 解析主机并在禁止私网时校验全部结果；任一地址被封禁即拒绝。
+// DNS 解析结果按 host 缓存（TTL dnsCacheTTL）；无论命中缓存与否，每次调用都对当次使用的 IP 重新执行 checkIPs，
+// 不缓存允许/拒绝结论，SSRF 防护不放宽。
 func (f *HTTPFetcher) allowedIPs(ctx context.Context, host string) ([]net.IP, error) {
 	if strings.TrimSpace(host) == "" {
 		return nil, fmt.Errorf("%w: empty host", fetch.ErrBlocked)
@@ -268,7 +311,7 @@ func (f *HTTPFetcher) allowedIPs(ctx context.Context, host string) ([]net.IP, er
 	if ip := net.ParseIP(host); ip != nil {
 		ips = []net.IP{ip}
 	} else {
-		resolved, err := f.resolver(ctx, host)
+		resolved, err := f.cachedResolve(ctx, host)
 		if err != nil {
 			return nil, err
 		}
@@ -281,6 +324,30 @@ func (f *HTTPFetcher) allowedIPs(ctx context.Context, host string) ([]net.IP, er
 		return nil, err
 	}
 	return ips, nil
+}
+
+// cachedResolve 返回主机的 DNS 解析结果；命中未过期缓存则不再次解析。
+// 解析失败或结果为空时不写缓存，并把原始错误（含 context.Canceled）返回给调用方，避免吞掉 DNS 具体原因。
+func (f *HTTPFetcher) cachedResolve(ctx context.Context, host string) ([]net.IP, error) {
+	now := time.Now()
+	f.dnsCacheMu.Lock()
+	if entry, ok := f.dnsCache[host]; ok && now.Before(entry.expiresAt) {
+		f.dnsCacheMu.Unlock()
+		return entry.ips, nil
+	}
+	f.dnsCacheMu.Unlock()
+	resolved, err := f.resolver(ctx, host)
+	if err != nil {
+		// 解析失败不缓存，保持原有错误路径。
+		return nil, err
+	}
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("no addresses for host %s", host)
+	}
+	f.dnsCacheMu.Lock()
+	f.dnsCache[host] = dnsCacheEntry{ips: resolved, expiresAt: now.Add(dnsCacheTTL)}
+	f.dnsCacheMu.Unlock()
+	return resolved, nil
 }
 
 func (f *HTTPFetcher) checkIPs(ips []net.IP) error {
@@ -364,8 +431,14 @@ func (f *HTTPFetcher) fetchOnce(ctx context.Context, client *http.Client, req fe
 	if err != nil {
 		return nil, err
 	}
+	// C-047：书源 header 可能含非法 HTTP token 字符（如 U+2011 连字符），原样写入会让传输层报
+	// invalid header field name 而整源失效；此处统一清洗：非法 key 跳过并告警，value 去除 \r\n 防注入。
 	for key, value := range req.Headers {
-		httpReq.Header.Set(key, value)
+		if !validHeaderToken(key) {
+			slog.WarnContext(ctx, "dropping invalid header name from source", "header", key)
+			continue
+		}
+		httpReq.Header.Set(key, stripHeaderCRLF(value))
 	}
 	if req.UseCookieJar && f.cookies != nil {
 		cookie, err := f.cookies.Load(ctx, targetURL, httpReq.Header.Get("Cookie"))
@@ -440,23 +513,54 @@ func hasGzipMagic(body []byte) bool {
 	return len(body) >= 2 && body[0] == 0x1f && body[1] == 0x8b
 }
 
+// validHeaderToken 判断 key 是否为 RFC 7230 合法 token（!#$%&'*+-.^_`|~ 与数字字母）。
+func validHeaderToken(key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, r := range key {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("!#$%&'*+-.^_`|~", r):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// stripHeaderCRLF 去除 value 中的 \r 与 \n，防止 header 注入。
+func stripHeaderCRLF(value string) string {
+	if !strings.ContainsAny(value, "\r\n") {
+		return value
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' {
+			return -1
+		}
+		return r
+	}, value)
+}
+
 func decodeTextResponseBody(body []byte, contentType string, maxBodyBytes int64) ([]byte, error) {
 	if strings.TrimSpace(contentType) == "" {
 		// 缺少 Content-Type 时按 Legado OkHttpUtils.text 的回退思路探测 BOM / HTML meta 声明的编码；
 		// 探测不到时保持原字节，避免误伤二进制响应。
-		label := sniffCharset(body)
-		if label == "" {
-			return body, nil
-		}
-		contentType = "text/html; charset=" + label
+		contentType = "text/html; charset=" + sniffCharset(body)
 	} else if !looksLikeTextContent(contentType) {
 		return body, nil
 	}
-	reader, err := charset.NewReader(bytes.NewReader(body), contentType)
-	if err != nil {
-		return body, err
+	label := charsetLabel(contentType)
+	if label == "" {
+		// Content-Type 未带 charset 参数（charset.NewReader 的 DetermineEncoding 同样如此处理）时
+		// 回退到内容嗅探：BOM → 文档开头的 <meta charset> / http-equiv 声明；探测不到时保持原字节。
+		if label = sniffCharset(body); label == "" {
+			return body, nil
+		}
 	}
-	decoded, err := io.ReadAll(io.LimitReader(reader, maxBodyBytes+1))
+	// 用 charset.Lookup 直接取编码并包 LimitReader，一次 ReadAll 完成解码，避免中间整本拷贝。
+	decoded, err := io.ReadAll(io.LimitReader(
+		transform.NewReader(bytes.NewReader(body), encodingFromLabel(label).NewDecoder()), maxBodyBytes+1))
 	if err != nil {
 		return body, err
 	}
@@ -464,6 +568,23 @@ func decodeTextResponseBody(body []byte, contentType string, maxBodyBytes int64)
 		return nil, errors.New("response body too large")
 	}
 	return decoded, nil
+}
+
+// charsetLabel 从 Content-Type 解析 charset 名，缺失时按 UTF-8 处理。
+func charsetLabel(contentType string) string {
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return ""
+	}
+	return params["charset"]
+}
+
+// encodingFromLabel 按 charset 标签名返回对应编码，未识别时按原字节处理（与 charset.NewReader 的 UTF-8 回退一致）。
+func encodingFromLabel(label string) encoding.Encoding {
+	if e, _ := charset.Lookup(label); e != nil {
+		return e
+	}
+	return encoding.Nop
 }
 
 func looksLikeTextContent(contentType string) bool {

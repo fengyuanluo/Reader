@@ -52,13 +52,68 @@ func (s *SessionCookieStore) List(domain string) map[string]string {
 type CookieManager struct {
 	repo    fetch.CookieRepository
 	session *SessionCookieStore
+	// cache 按 domain 缓存持久化 Cookie（C-027），Load 命中时不再查 SQLite；
+	// Save/Delete 后同步更新或失效对应 domain 的缓存。
+	cacheMu sync.RWMutex
+	cache   map[string][]fetch.Cookie
 }
 
 func NewCookieManager(repo fetch.CookieRepository, session *SessionCookieStore) *CookieManager {
 	if session == nil {
 		session = NewSessionCookieStore()
 	}
-	return &CookieManager{repo: repo, session: session}
+	return &CookieManager{repo: repo, session: session, cache: map[string][]fetch.Cookie{}}
+}
+
+// cachedCookies 返回 domain 的持久化 Cookie 缓存副本；缓存未命中时查一次 repo 并写入缓存。
+// 返回的 bool 表示缓存是否命中；命中时不再访问 repo。
+// 命中路径返回切片副本，避免调用方在锁外遍历的同时 setCacheCookie 原地写同一底层数组（数据竞争）。
+func (m *CookieManager) cachedCookies(ctx context.Context, domain string) ([]fetch.Cookie, bool, error) {
+	m.cacheMu.RLock()
+	cached, ok := m.cache[domain]
+	if ok {
+		cached = append([]fetch.Cookie{}, cached...)
+	}
+	m.cacheMu.RUnlock()
+	if ok {
+		return cached, true, nil
+	}
+	persisted, err := m.repo.ListByDomain(ctx, domain)
+	if err != nil {
+		return nil, false, err
+	}
+	m.cacheMu.Lock()
+	m.cache[domain] = persisted
+	m.cacheMu.Unlock()
+	return append([]fetch.Cookie{}, persisted...), false, nil
+}
+
+// setCacheCookie 在缓存中更新一条 Cookie（Save 后同步更新）。
+func (m *CookieManager) setCacheCookie(domain string, cookie fetch.Cookie) {
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+	cookies := m.cache[domain]
+	for i := range cookies {
+		if cookies[i].Name == cookie.Name {
+			cookies[i] = cookie
+			return
+		}
+	}
+	m.cache[domain] = append(append([]fetch.Cookie{}, cookies...), cookie)
+}
+
+// deleteCacheCookie 在缓存中删除一条 Cookie（删除后同步失效）。
+func (m *CookieManager) deleteCacheCookie(domain, name string) {
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+	cookies := m.cache[domain]
+	out := cookies[:0:0]
+	for _, c := range cookies {
+		if c.Name != name {
+			out = append(out, c)
+		}
+	}
+	m.cache[domain] = out
 }
 
 func (m *CookieManager) Load(ctx context.Context, rawURL string, requestCookie string) (string, error) {
@@ -71,17 +126,18 @@ func (m *CookieManager) Load(ctx context.Context, rawURL string, requestCookie s
 	}
 	merged := cookieToMap(requestCookie)
 	if m.repo != nil {
-		persisted, err := m.repo.ListByDomain(ctx, domain)
+		persisted, _, err := m.cachedCookies(ctx, domain)
 		if err != nil {
 			return "", err
 		}
 		now := time.Now()
 		for _, cookie := range persisted {
-			// 已过期（含 expires_at 损坏而按已过期处理）的持久化 Cookie 不再发送，并从存储中清除。
+			// 已过期（含 expires_at 损坏而按已过期处理）的持久化 Cookie 不再发送，并批量从存储中清除。
 			if cookie.ExpiresAt != nil && !cookie.ExpiresAt.After(now) {
 				if err := m.repo.Delete(ctx, cookie.Domain, cookie.Name); err != nil {
 					return "", err
 				}
+				m.deleteCacheCookie(domain, cookie.Name)
 				continue
 			}
 			merged[cookie.Name] = cookie.Value
@@ -128,6 +184,7 @@ func (m *CookieManager) Save(ctx context.Context, rawURL string, headers http.He
 				if err := m.repo.Delete(ctx, persistDomain, cookie.Name); err != nil {
 					return err
 				}
+				m.deleteCacheCookie(persistDomain, cookie.Name)
 			}
 			continue
 		}
@@ -142,6 +199,7 @@ func (m *CookieManager) Save(ctx context.Context, rawURL string, headers http.He
 			if err := m.repo.Save(ctx, persisted); err != nil {
 				return err
 			}
+			m.setCacheCookie(persistDomain, persisted)
 		}
 	}
 	if len(sessionCookies) > 0 {

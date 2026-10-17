@@ -120,6 +120,8 @@ func TestHTTPFetcherDialsValidatedIPDespiteDNSRebinding(t *testing.T) {
 	if _, err := f.Fetch(context.Background(), fetch.Request{URL: target}); err != nil {
 		t.Fatalf("first Fetch() error = %v", err)
 	}
+	// DNS 解析结果已缓存（C-024）；清空缓存模拟 TTL 过期后的重新解析。
+	f.clearDNSCache()
 	if _, err := f.Fetch(context.Background(), fetch.Request{URL: target}); !errors.Is(err, fetch.ErrBlocked) {
 		t.Fatalf("second Fetch() error = %v, want ErrBlocked", err)
 	}
