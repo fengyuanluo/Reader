@@ -2,9 +2,11 @@ package searchapp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"reader/internal/domain/book"
 	"reader/internal/domain/source"
@@ -27,12 +29,17 @@ type MultiSearchInput struct {
 	EnabledOnly bool
 	Precision   bool
 	Concurrency int
+	// Timeout 为单源搜索的超时时间；<=0 表示不启用（保持原有行为）。
+	Timeout time.Duration
 }
 
 type MultiSearchResult struct {
 	Items    []book.SearchBook
 	Warnings []SourceWarning
-	// HasMore 表示本页有命中，可以继续请求下一页（Legado 书源分页没有总数信息，空页即结束）。
+	// All 为各源未合并的原始条目（precision 过滤后，按完成顺序排列）。
+	All []book.SearchBook
+	// HasMore 为本页有命中的近似语义，可以据此继续请求下一页；
+	// 它不表示某个书源还有下一页（Legado 书源分页没有总数信息，空页即结束）。
 	HasMore bool
 }
 
@@ -100,25 +107,60 @@ func (s *MultiSourceSearcher) Search(ctx context.Context, input MultiSearchInput
 			}()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			items, err := s.single.Search(ctx, SearchInput{Source: src, Keyword: input.Keyword, Page: input.Page})
+			searchCtx := ctx
+			cancel := func() {}
+			if input.Timeout > 0 {
+				searchCtx, cancel = context.WithTimeout(ctx, input.Timeout)
+			}
+			items, err := s.single.Search(searchCtx, SearchInput{Source: src, Keyword: input.Keyword, Page: input.Page})
+			cancel()
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
+				code := "search_failed"
+				if input.Timeout > 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+					code = "search_timeout"
+				}
 				result.Warnings = append(result.Warnings, SourceWarning{
 					SourceID:       src.SourceID,
 					BookSourceURL:  src.BookSourceURL,
 					BookSourceName: src.BookSourceName,
-					Code:           "search_failed",
+					Code:           code,
 					Message:        err.Error(),
 				})
 				return
 			}
-			result.Items = mergeSearchBooks(result.Items, items, input.Keyword, input.Precision)
+			// 锁内只 append 原始条目，去重与排序在 wg.Wait() 之后统一做一次。
+			for _, item := range items {
+				if input.Precision && !strings.Contains(item.Name, input.Keyword) && !strings.Contains(item.Author, input.Keyword) {
+					continue
+				}
+				result.All = append(result.All, item)
+			}
 		}()
 	}
 	wg.Wait()
+	result.Items = rankSearchBooks(dedupeSearchBooks(result.All), input.Keyword, input.Precision)
 	result.HasMore = len(result.Items) > 0
 	return result, nil
+}
+
+// dedupeSearchBooks 按 name+"\x00"+author 索引 O(n) 去重：同名同作者只保留一条，
+// Origins 合并所有源的 Origin，其余字段取首次出现的条目。输入顺序即输出顺序。
+func dedupeSearchBooks(items []book.SearchBook) []book.SearchBook {
+	index := make(map[string]int, len(items))
+	out := make([]book.SearchBook, 0, len(items))
+	for _, item := range items {
+		key := item.Name + "\x00" + item.Author
+		if i, ok := index[key]; ok {
+			out[i].Origins = appendOrigin(out[i].Origins, item.Origin)
+			continue
+		}
+		index[key] = len(out)
+		item.Origins = appendOrigin(item.Origins, item.Origin)
+		out = append(out, item)
+	}
+	return out
 }
 
 // resolveSources 解析待搜索书源；单个无效 sourceId 只跳过该源并记录 Warning，不中止整个请求。
@@ -154,29 +196,6 @@ func (s *MultiSourceSearcher) resolveSources(ctx context.Context, input MultiSea
 	return items, nil, nil
 }
 
-func mergeSearchBooks(existing []book.SearchBook, incoming []book.SearchBook, keyword string, precision bool) []book.SearchBook {
-	out := append([]book.SearchBook(nil), existing...)
-	for _, item := range incoming {
-		if precision && !strings.Contains(item.Name, keyword) && !strings.Contains(item.Author, keyword) {
-			continue
-		}
-		merged := false
-		for i := range out {
-			if out[i].Name == item.Name && out[i].Author == item.Author {
-				out[i].Origins = appendOrigin(out[i].Origins, out[i].Origin)
-				out[i].Origins = appendOrigin(out[i].Origins, item.Origin)
-				merged = true
-				break
-			}
-		}
-		if !merged {
-			item.Origins = appendOrigin(item.Origins, item.Origin)
-			out = append(out, item)
-		}
-	}
-	return rankSearchBooks(out, keyword, precision)
-}
-
 func appendOrigin(origins []string, origin string) []string {
 	if origin == "" {
 		return origins
@@ -189,10 +208,12 @@ func appendOrigin(origins []string, origin string) []string {
 	return append(origins, origin)
 }
 
+// rankSearchBooks 按 等值 → 包含 → 其他 分桶排序；单次遍历分桶，
+// 桶内保持输入顺序（稳定）。precision=true 时丢弃 other 桶。
 func rankSearchBooks(items []book.SearchBook, keyword string, precision bool) []book.SearchBook {
-	equal := []book.SearchBook{}
-	contains := []book.SearchBook{}
-	other := []book.SearchBook{}
+	equal := make([]book.SearchBook, 0, len(items))
+	contains := make([]book.SearchBook, 0)
+	other := make([]book.SearchBook, 0)
 	for _, item := range items {
 		switch {
 		case item.Name == keyword || item.Author == keyword:
@@ -204,6 +225,5 @@ func rankSearchBooks(items []book.SearchBook, keyword string, precision bool) []
 		}
 	}
 	out := append(equal, contains...)
-	out = append(out, other...)
-	return out
+	return append(out, other...)
 }

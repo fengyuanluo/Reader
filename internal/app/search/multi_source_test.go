@@ -5,21 +5,161 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"reader/internal/domain/book"
 	"reader/internal/domain/source"
 )
 
-func TestMergeSearchBooksMergesSameNameAuthorOrigins(t *testing.T) {
+func TestMultiSourceSearchMergesSameNameAuthorAndKeepsRawItems(t *testing.T) {
 	first := []book.SearchBook{{Name: "斗破苍穹", Author: "天蚕土豆", Origin: "source-a"}}
 	second := []book.SearchBook{{Name: "斗破苍穹", Author: "天蚕土豆", Origin: "source-b"}}
 
-	got := mergeSearchBooks(first, second, "斗破", false)
-	if len(got) != 1 {
-		t.Fatalf("got = %#v", got)
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "a", BookSourceURL: "source-a", BookSourceName: "A", SearchURL: "https://a.test", Enabled: true},
+		{SourceID: "b", BookSourceURL: "source-b", BookSourceName: "B", SearchURL: "https://b.test", Enabled: true},
+	}}
+	single := &stubSingleSearcher{byOrigin: map[string][]book.SearchBook{"source-a": first, "source-b": second}}
+	searcher := NewMultiSourceSearcher(repo, single)
+
+	result, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", EnabledOnly: true, Concurrency: 2})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
 	}
-	if len(got[0].Origins) != 2 || got[0].Origins[0] != "source-a" || got[0].Origins[1] != "source-b" {
-		t.Fatalf("origins = %#v", got[0].Origins)
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	// Origins 不保证顺序（并发完成顺序决定），只断言两个源都在且唯一。
+	origins := map[string]bool{}
+	for _, o := range result.Items[0].Origins {
+		origins[o] = true
+	}
+	if len(result.Items[0].Origins) != 2 || !origins["source-a"] || !origins["source-b"] {
+		t.Fatalf("origins = %#v", result.Items[0].Origins)
+	}
+	// All 保留每个源的原始条目（未合并）；顺序由并发完成顺序决定，只断言两个源都在。
+	allOrigins := map[string]bool{}
+	for _, item := range result.All {
+		allOrigins[item.Origin] = true
+	}
+	if len(result.All) != 2 || len(allOrigins) != 2 {
+		t.Fatalf("all = %#v", result.All)
+	}
+}
+
+func TestMultiSourceSearchKeepsDifferentAuthorsUnmerged(t *testing.T) {
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "a", BookSourceURL: "source-a", BookSourceName: "A", SearchURL: "https://a.test", Enabled: true},
+		{SourceID: "b", BookSourceURL: "source-b", BookSourceName: "B", SearchURL: "https://b.test", Enabled: true},
+	}}
+	single := &stubSingleSearcher{byOrigin: map[string][]book.SearchBook{
+		"source-a": {{Name: "斗破苍穹", Author: "天蚕土豆", Origin: "source-a"}},
+		"source-b": {{Name: "斗破苍穹", Author: "某同人", Origin: "source-b"}},
+	}}
+	searcher := NewMultiSourceSearcher(repo, single)
+
+	result, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", EnabledOnly: true, Concurrency: 2})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("同名不同作者不应合并: items = %#v", result.Items)
+	}
+}
+
+func TestMultiSourceSearchPrecisionDropsNonContains(t *testing.T) {
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "a", BookSourceURL: "source-a", BookSourceName: "A", SearchURL: "https://a.test", Enabled: true},
+		{SourceID: "b", BookSourceURL: "source-b", BookSourceName: "B", SearchURL: "https://b.test", Enabled: true},
+	}}
+	single := &stubSingleSearcher{byOrigin: map[string][]book.SearchBook{
+		"source-a": {{Name: "斗破苍穹", Author: "天蚕土豆", Origin: "source-a"}},
+		"source-b": {{Name: "完全无关", Author: "另一个人", Origin: "source-b"}},
+	}}
+	searcher := NewMultiSourceSearcher(repo, single)
+
+	result, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", EnabledOnly: true, Precision: true, Concurrency: 2})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Items) != 1 || result.Items[0].Name != "斗破苍穹" {
+		t.Fatalf("precision 应丢弃非包含项: items = %#v", result.Items)
+	}
+	if len(result.All) != 1 {
+		t.Fatalf("precision 应同样过滤 All: all = %#v", result.All)
+	}
+}
+
+func TestMultiSourceSearchRankingEqualThenContains(t *testing.T) {
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "a", BookSourceURL: "source-a", BookSourceName: "A", SearchURL: "https://a.test", Enabled: true},
+		{SourceID: "b", BookSourceURL: "source-b", BookSourceName: "B", SearchURL: "https://b.test", Enabled: true},
+		{SourceID: "c", BookSourceURL: "source-c", BookSourceName: "C", SearchURL: "https://c.test", Enabled: true},
+	}}
+	single := &stubSingleSearcher{byOrigin: map[string][]book.SearchBook{
+		// 故意乱序返回，验证排序仍为 等值 → 包含 → 其他。
+		"source-a": {{Name: "斗破苍穹前传", Author: "天蚕土豆", Origin: "source-a"}, {Name: "其他", Author: "某人", Origin: "source-a"}},
+		"source-b": {{Name: "斗破苍穹", Author: "天蚕土豆", Origin: "source-b"}},
+		"source-c": {{Name: "完全无关", Author: "另一个人", Origin: "source-c"}},
+	}}
+	searcher := NewMultiSourceSearcher(repo, single)
+
+	result, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破苍穹", EnabledOnly: true, Concurrency: 3})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Items) != 4 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	if result.Items[0].Name != "斗破苍穹" {
+		t.Fatalf("等值应排第一: items = %#v", result.Items)
+	}
+	if result.Items[1].Name != "斗破苍穹前传" {
+		t.Fatalf("包含应排第二: items = %#v", result.Items)
+	}
+	if result.Items[2].Name != "完全无关" && result.Items[3].Name != "完全无关" {
+		t.Fatalf("其他桶应排在包含之后（other 两条的相对顺序由并发完成顺序决定）: items = %#v", result.Items)
+	}
+	if result.Items[0].Name == "完全无关" || result.Items[0].Name == "其他" {
+		t.Fatalf("其他不应排第一: items = %#v", result.Items)
+	}
+}
+
+func TestMultiSourceSearchTimeoutMarksWarning(t *testing.T) {
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "slow", BookSourceURL: "source-slow", BookSourceName: "S", SearchURL: "https://s.test", Enabled: true},
+	}}
+	single := slowSingleSearcher{}
+	searcher := NewMultiSourceSearcher(repo, single)
+
+	result, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", EnabledOnly: true, Concurrency: 1, Timeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Items) != 0 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "search_timeout" {
+		t.Fatalf("warnings = %#v", result.Warnings)
+	}
+}
+
+type stubSingleSearcher struct {
+	byOrigin map[string][]book.SearchBook
+}
+
+func (s *stubSingleSearcher) Search(ctx context.Context, input SearchInput) ([]book.SearchBook, error) {
+	return s.byOrigin[input.Source.BookSourceURL], nil
+}
+
+type slowSingleSearcher struct{}
+
+func (slowSingleSearcher) Search(ctx context.Context, input SearchInput) ([]book.SearchBook, error) {
+	select {
+	case <-time.After(2 * time.Second):
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 

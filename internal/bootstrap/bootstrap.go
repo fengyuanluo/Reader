@@ -132,7 +132,7 @@ func Open(cfg config.Config) (*Runtime, func(), error) {
 	contentService := contentapp.NewService(chapterRepo, httpFetcher, scriptRuntime).WithProcessor(contentProcessor)
 	contentApp := contentapp.NewAppService(bookRepo, chapterRepo, repo, contentService)
 	imageProxy := contentapp.NewImageProxy(httpFetcher, repo, bookRepo, scriptRuntime).WithCache(imageCacheRepo)
-	replaceManager := replaceapp.NewManager(replaceRepo)
+	replaceManager := replaceapp.NewManager(replaceRepo).WithChangedCallback(contentProcessor.InvalidateRuleCache)
 	debugPublisher := debugapp.NewPublisher(debugRepo)
 	debugFlow := debugapp.NewKeywordFlow(multiSearcher, bookService, contentApp, debugPublisher).WithDiscovery(discoveryService)
 	debugRunner := debugapp.NewRunner(debugFlow, debugRepo)
