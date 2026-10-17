@@ -19,6 +19,7 @@ func runSearch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	limit := fs.Int("limit", 20, "max results printed (>= 1)")
 	precision := fs.Bool("precision", false, "only keep exact keyword matches")
 	concurrency := fs.Int("concurrency", 0, "per-source search concurrency (0 = searcher default)")
+	timeout := fs.Duration("timeout", 0, "per-source search timeout (0 = disabled)")
 	asJSON := fs.Bool("json", false, "output JSON")
 	if code, done := ParseFlags(fs, "search <keyword> [flags]", args, stdout, stderr); done {
 		return code
@@ -31,6 +32,10 @@ func runSearch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: --limit must be >= 1, got %d\n", *limit)
 		return 1
 	}
+	if *timeout < 0 {
+		fmt.Fprintf(stderr, "error: --timeout must be >= 0, got %s\n", *timeout)
+		return 1
+	}
 	var ids []string
 	if trimmed := strings.TrimSpace(*sourceIDs); trimmed != "" {
 		for _, id := range strings.Split(trimmed, ",") {
@@ -39,6 +44,8 @@ func runSearch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+	// --concurrency 在 config.Load 后覆盖 READER_GLOBAL_CONCURRENCY，保证设置真正生效。
+	env.globalConcurrency = *concurrency
 	rt, code := env.runtime(stderr)
 	if code != 0 {
 		return code
@@ -51,6 +58,7 @@ func runSearch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 		EnabledOnly: len(ids) == 0,
 		Precision:   *precision,
 		Concurrency: *concurrency,
+		Timeout:     *timeout,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)

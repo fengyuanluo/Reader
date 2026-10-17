@@ -35,6 +35,7 @@ commands:
   toc <bookId>                       list chapters of a book
   content <bookId> <index>           print chapter content
   download <bookId>                  download chapters into SQLite cache, export TXT
+  fetch <name>                       search, pick best source, download and export TXT
   help                               show this help
 
 notes:
@@ -158,6 +159,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fn = runContent
 	case "download":
 		fn = runDownload
+	case "fetch":
+		fn = runFetch
 	default:
 		fmt.Fprintf(stderr, "error: unknown command %q\n\n", name)
 		_, _ = fmt.Fprint(stderr, usageText)

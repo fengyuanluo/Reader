@@ -17,10 +17,12 @@ const cliTokenFallback = "cli-unused"
 // cmdEnv 是子命令执行环境：根 ctx（SIGINT/SIGTERM 时取消）与延迟打开的运行时。
 // 子命令必须先完成全部参数校验再调用 runtime，保证用法错误不会建目录、建库或跑迁移。
 type cmdEnv struct {
-	ctx     context.Context
-	open    func(stderr io.Writer) (*bootstrap.Runtime, func(), int)
-	rt      *bootstrap.Runtime
-	cleanup func()
+	ctx context.Context
+	// open 的第二个参数为 CLI 显式指定的全局并发数（0 表示不覆盖配置）。
+	open              func(stderr io.Writer, globalConcurrency int) (*bootstrap.Runtime, func(), int)
+	rt                *bootstrap.Runtime
+	cleanup           func()
+	globalConcurrency int
 }
 
 // runtime 首次调用时打开运行时并缓存；失败已写 stderr，返回非 0 退出码。
@@ -28,7 +30,7 @@ func (e *cmdEnv) runtime(stderr io.Writer) (*bootstrap.Runtime, int) {
 	if e.rt != nil {
 		return e.rt, 0
 	}
-	rt, cleanup, code := e.open(stderr)
+	rt, cleanup, code := e.open(stderr, e.globalConcurrency)
 	if code != 0 {
 		return nil, code
 	}
@@ -43,8 +45,9 @@ func (e *cmdEnv) close() {
 	}
 }
 
-// openRuntime 装配 CLI 运行时；失败输出 error 并返回 2。
-func openRuntime(stderr io.Writer) (*bootstrap.Runtime, func(), int) {
+// openRuntime 装配 CLI 运行时；globalConcurrency > 0 时在 config.Load 后覆盖全局并发上限。
+// 失败输出 error 并返回 2。
+func openRuntime(stderr io.Writer, globalConcurrency int) (*bootstrap.Runtime, func(), int) {
 	cfg, err := config.Load(config.SourceFunc(func(key string) (string, bool) {
 		if value, ok := os.LookupEnv(key); ok {
 			return value, ok
@@ -57,6 +60,9 @@ func openRuntime(stderr io.Writer) (*bootstrap.Runtime, func(), int) {
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return nil, nil, 2
+	}
+	if globalConcurrency > 0 {
+		cfg.GlobalConcurrency = globalConcurrency
 	}
 	rt, cleanup, err := bootstrap.Open(cfg)
 	if err != nil {

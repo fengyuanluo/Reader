@@ -22,6 +22,7 @@ Reader 提供单二进制 CLI（`go run ./cmd/reader` 或构建后的 `reader`�
 | 列章节目录 | `reader toc <bookId> --json` |
 | 读单章正文 | `reader content <bookId> <index>` |
 | 整本/区间下载并导出 TXT | `reader download <bookId> [--from N --to M --export path]` |
+| 一键搜书→选源→下载→导出 | `reader fetch <书名> [--author <a> --group <g> --probe N --max-sources N --search-workers N --workers N --export path --json]` |
 | 启停书源 | `reader source enable|disable <sourceId>` |
 
 ## 调用约定
@@ -36,6 +37,8 @@ Reader 提供单二进制 CLI（`go run ./cmd/reader` 或构建后的 `reader`�
 - CLI 直连 SQLite（`READER_SQLITE_DSN`，默认 `data/reader.db`），不需要启动 server、不需要 token。`reader serve` 默认监听 `127.0.0.1:8080`，此时可以不设 token；监听非回环地址必须设置 `READER_TOKEN`（production 始终必须）。serve 的 JSON 日志在 stderr。
 - `book add` 默认自动刷新书名与简介（可 `--no-refresh` 跳过）；`toc` 为空先执行 `reader book refresh <bookId>`。
 - `download` 幂等：缓存命中的章节不再抓取，重跑即断点续跑；卷章节自动 skip，不写入 TXT。
+- 并发参数是真生效的：`search --concurrency N` 覆盖 `READER_GLOBAL_CONCURRENCY`（只影响本次命令），`download --workers N` 是单源并发下载章节数（默认 4，失败章节自动重试一轮），`fetch --search-workers N --workers N` 分别对应搜索与下载两段。`download` 进度行序号按派发顺序，TXT 顺序始终等于目录顺序。
+- `fetch` 的选源信号只有探测得到的目录章节数、首章长度（>=200 rune）与耗时，以及书源的 `weight`/`respondTime`；不依赖历史成功率。探测时会临时建书，未被采用的会删除。
 - 默认禁止抓内网地址；对本地 httptest mock 源调试时需 `READER_ALLOW_PRIVATE_NETWORK=true`。
 
 ## 最小可复现链

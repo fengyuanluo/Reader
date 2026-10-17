@@ -15,7 +15,7 @@ import (
 // noRuntimeEnv 返回打开运行时即判失败的环境，用于断言用法错误不触碰数据库。
 func noRuntimeEnv(t *testing.T) *cmdEnv {
 	t.Helper()
-	return &cmdEnv{ctx: t.Context(), open: func(io.Writer) (*bootstrap.Runtime, func(), int) {
+	return &cmdEnv{ctx: t.Context(), open: func(io.Writer, int) (*bootstrap.Runtime, func(), int) {
 		t.Errorf("runtime must not be opened for usage errors")
 		return nil, nil, 2
 	}}

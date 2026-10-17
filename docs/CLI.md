@@ -111,11 +111,15 @@ reader source disable <sourceId> [--json]
 
 ```bash
 reader search <keyword> [--source id1,id2] [--group <g>] [--page 1] [--limit 20]
-              [--precision] [--concurrency N] [--json]
+              [--precision] [--concurrency N] [--timeout <duration>] [--json]
 ```
 
 - 不指定 `--source` 时只搜启用源；显式指定 `--source` 允许搜未启用源。
 - `--limit` 只截断输出条数，不影响搜索本身；必须 >= 1，否则退出码 1。
+- `--concurrency N` 现在真正控制全局并发：N > 0 时会在 `config.Load` 之后覆盖
+  `READER_GLOBAL_CONCURRENCY`，搜索阶段的全局并发上限即为 N；0（默认）表示沿用配置值。
+- `--timeout <duration>` 为单源搜索超时（如 `30s`）；默认 0 = 不启用，保持原有行为。
+  超时的源记 `code: "search_timeout"` 的 warning，已返回的结果照常使用。负值报用法错退出码 1。
 - 文本模式下每条源失败/告警输出 stderr `warn: <sourceName>: <message>`。
 
 文本行：`idx<TAB>name<TAB>author<TAB>sourceId<TAB>latestChapter`。
@@ -175,15 +179,15 @@ reader content <bookId> <index> [--json]
 ## download
 
 ```bash
-reader download <bookId> [--from 0] [--to -1] [--export <path>] [--no-export] [--workers 1] [--json]
+reader download <bookId> [--from 0] [--to -1] [--export <path>] [--no-export] [--workers 4] [--json]
 ```
 
 - `--from` 必须 >= 0 且不超过最后一章索引，否则退出码 1；`--to -1` 表示最后一章，超过最后一章时夹取到最后一章；`--to` 小于 `--from` 退出码 1。
 - 逐章写入 SQLite 缓存：缓存命中不再抓取，重跑即断点续跑；单章失败记入 `failed` 继续不中断。
 - 卷章节（isVolume）计入 `skipped`，不入 TXT。
 - 默认导出 TXT 到 `downloads/<bookId>.txt`（`--export` 可指定路径，覆盖写）；`--no-export` 跳过导出。区间内没有任何正文（全是卷章节或全部失败）时不导出，`warn: no chapter content, export skipped`，已有文件保持不变，`exported` 为空。
-- Ctrl-C 中断：停止后续章节，不导出（避免残缺内容覆盖已有 TXT），stderr `error: interrupted, export skipped; rerun to resume from cache`，退出码 2；已抓章节在缓存中，重跑即续传。
-- `--workers > 1` 当前按 1 执行并 warn（SQLite 单连接，并发写无收益）。
+- 并发下载：`--workers` 个 goroutine 同时抓取章节（默认 4），失败章节自动重试一轮；进度行在锁内输出，TXT 章节顺序与目录一致。
+- Ctrl-C 中断：停止派发新章节，不导出（避免残缺内容覆盖已有 TXT），stderr `error: interrupted, export skipped; rerun to resume from cache`，退出码 2；已抓章节在缓存中，重跑即续传。
 - 进度输出 stderr：`[序号/总数] index title`。
 
 TXT 格式：文件头 `<name>\n<author>\n\n`，每章 `\n\n=== <index> <title> ===\n\n<content>`。
@@ -195,6 +199,42 @@ JSON：
 ```
 
 `failed` 非空退出码 2，否则 0。文本等价 tab 行（`failed` 明细行 + `downloaded/cached/skipped/failed/exported` 汇总行）。
+
+## fetch
+
+一键命令：多源搜索 → 候选筛选 → 并发探测 → 选最佳源 → 并发下载 → 导出 TXT。
+
+```bash
+reader fetch <书名> [--author <a>] [--group <g>] [--search-workers 32] [--search-timeout 30s] [--probe 5] [--workers 4] [--max-sources 3] [--export <path>] [--json]
+```
+
+flags：
+
+- `--author`：按作者子串筛选候选（去掉空白并转小写后包含匹配）。未指定时按多源投票选出出现最多的作者，避免选到同名同人作品；平票取最早出现的作者。
+- `--group`：只搜索该分组的书源。
+- `--search-workers`：多源搜索并发数（默认 32，覆盖 `READER_GLOBAL_CONCURRENCY`）。
+- `--search-timeout`：多源搜索超时（默认 30s；超时只会让未完成的源变成 warning，已返回结果照常使用）。
+- `--probe`：探测的候选数（默认 5，并发数等于候选数）。
+- `--workers`：单源并发下载章节数（默认 4，与 download 相同）。
+- `--max-sources`：换源尝试的最大源数（默认 3）。
+- `--export`：TXT 导出路径；默认 `downloads/<name>_<author>.txt`（`/`、`\` 替换为 `_`）。
+
+选源规则：
+
+1. 候选筛选：先保留书名精确匹配（规范化后相等）的条目，一条都没有时退化为包含匹配；再按作者筛选/投票；同一 origin 只保留第一条；origin 查不到已导入书源的丢弃。排序（稳定）：有最新章节的优先 → `Weight` 降序 → `RespondTime` 升序。
+2. 探测：对前 `--probe` 个候选执行 Save → RefreshInfo → RefreshToc → 首个非卷章节正文；任一步出错、非卷章节数为 0 或首章正文少于 200 rune 即不合格。stderr 每候选一行 `probe: <originName> chapters=C len=L 1.2s`。
+3. 排名：合格者中 `C >= 0.95*maxC` 进第一梯队按探测耗时升序，其余按章节数降序；全部不合格时 stderr `error: no usable source for <书名>`，退出码 2。
+4. 下载与换源：按排名依次尝试，最多 `--max-sources` 个源；失败章节 `<= 5% × 非卷章节数` 即采用，否则 `warn: <originName> failed N chapters, switching source` 换下一个；全部超阈值时采用失败数最少的一次。探测新建、最终未采用的书自动删除。
+
+stdout 文本：`fetched\t<bookId>\t<name>\t<author>\t<originName>\tchapters=<n>\tfailed=<m>\t<path>`。
+
+JSON：
+
+```json
+{"bookId": "book_xxx", "name": "斗破苍穹", "author": "天蚕土豆", "sourceId": "src_xxx", "originName": "XX 书源", "chapters": 1200, "downloaded": 1200, "cached": 0, "failed": [{"index": 3, "error": "..."}], "exported": "downloads/斗破苍穹_天蚕土豆.txt", "probes": [{"originName": "XX 书源", "chapters": 1200, "contentLen": 3400, "elapsedMs": 1200, "error": ""}]}
+```
+
+退出码：有失败章节时 2，其余与 download 一致；Ctrl-C 中断不导出、退出码 2。
 
 ## Agent 管道配方
 
