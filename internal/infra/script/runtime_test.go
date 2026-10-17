@@ -1273,7 +1273,7 @@ func TestVMRequestEvaluatorWrapsGoquerySelectionSlices(t *testing.T) {
 	})
 
 	vm := goja.New()
-	got, err := vmRequestEvaluator(vm)(context.Background(), `result.toArray().map(function(item) { return item.text() + item.select("a").attr("href"); }).join("|")`, selections)
+	got, err := vmRequestEvaluator(NewRuntime(Policy{}), vm)(context.Background(), `result.toArray().map(function(item) { return item.text() + item.select("a").attr("href"); }).join("|")`, selections)
 	if err != nil {
 		t.Fatalf("vmRequestEvaluator() error = %v", err)
 	}

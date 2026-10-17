@@ -98,6 +98,9 @@ type Runtime struct {
 	variables domainsource.VariableRepository
 	files     *fileSandbox
 	programs  *programCache
+	// callSites 缓存热点脚本（主脚本、loginCheck、@js: header、模板表达式）的编译结果，
+	// 与 jsLib 的 programs 分开，互不挤占容量。
+	callSites *programCache
 	logs      *logBuffer
 }
 
@@ -131,6 +134,7 @@ func NewRuntime(policy Policy) *Runtime {
 		variables: variables,
 		files:     newFileSandbox(policy.FileRoot),
 		programs:  newProgramCache(defaultProgramCacheSize),
+		callSites: newProgramCache(defaultProgramCacheSize),
 		logs:      newLogBuffer(defaultLogMaxEntries, defaultLogMaxBytes),
 	}
 }
@@ -160,13 +164,18 @@ func (r *Runtime) Eval(ctx context.Context, script string, input any) (out any, 
 	return r.EvalWithBindings(ctx, script, Bindings{"result": input})
 }
 
-// EvalWithBindings 每次新建独立 goja VM 执行脚本。bindings["source"] 可传 *BookSource，
-// 运行时会把它转换为白名单 source 绑定，原始指针不会暴露给脚本。
+// EvalWithBindings 从 VM 池取 VM 执行脚本（超时过的 VM 直接丢弃不放回），bindings["source"]
+// 可传 *BookSource，运行时会把它转换为白名单 source 绑定，原始指针不会暴露给脚本。
 func (r *Runtime) EvalWithBindings(ctx context.Context, script string, bindings Bindings) (out any, err error) {
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
+	// 每 Eval 新建 VM（方案 (a)）：goja 全局非严格模式声明不可配置（Delete 抛 TypeError），池化
+	// 回收无法完整恢复原型链与 defineProperty 的非枚举属性，书源 jsLib 修改
+	// String.prototype 等内置对象会跨源残留；放弃池化、只保留脚本编译缓存，语义与旧实现一致。
 	vm := goja.New()
-	// 一次 Eval 只注册一个中断回调：ctx 结束（超时或上层取消）即中断 VM，jsLib 与主脚本共用。
+	// 一次 Eval 只注册一个中断回调：ctx 结束（超时或上层取消）即中断 VM。goja.Runtime 非并发安全：
+	// defer stopInterrupt 与 defer cancel 同为 LIFO，stopInterrupt 后注册先执行，保证回调结束后
+	// VM 才随本 Eval 丢弃，不会把 Interrupt 打到后续脚本。
 	stopInterrupt := context.AfterFunc(ctx, func() { vm.Interrupt(ErrScriptTimeout) })
 	defer stopInterrupt()
 	src := sourceFromBindings(r.policy.Source, bindings)
@@ -202,7 +211,7 @@ func (r *Runtime) EvalWithBindings(ctx context.Context, script string, bindings 
 	if err := r.loadSourceJSLib(vm, runCtx); err != nil {
 		return nil, err
 	}
-	value, err := vm.RunString(rewriteJavaCompatScript(script))
+	value, err := r.runScriptCached(vm, "eval.main", script)
 	if err != nil {
 		return nil, runCtx.wrapRunError(err)
 	}
@@ -382,6 +391,79 @@ func (r *Runtime) loadSourceJSLib(vm *goja.Runtime, runCtx evalContext) error {
 	return nil
 }
 
+// runScriptCached 在当前 VM 中执行热点脚本：编译结果按调用点 + 改写后文本哈希缓存（LRU）。
+// *goja.Program 不可变，可在多个 VM 中并发运行；缓存命中路径不再重复编译与改写。
+func (r *Runtime) runScriptCached(vm *goja.Runtime, site string, script string) (goja.Value, error) {
+	program, err := r.callSites.compileScript(site, script)
+	if err != nil {
+		return nil, err
+	}
+	return vm.RunProgram(program)
+}
+
+var precompiledPrograms = struct {
+	ajaxAll      *goja.Program
+	stringProto  *goja.Program
+	byteArrayPkg *goja.Program
+}{
+	ajaxAll: goja.MustCompile("", `
+if (!java.ajaxAll) {
+  java.ajaxAll = function(urls) {
+    if (!urls || !urls.map) return [];
+    return urls.map(function(u) { return java.connect(u); });
+  };
+}
+`, false),
+	stringProto: goja.MustCompile("", `
+if (!String.prototype.getBytes) {
+  Object.defineProperty(String.prototype, "getBytes", {
+    value: function(charset){
+      return __readerStringBytes(this.toString(), charset || "UTF-8");
+    },
+    configurable: true
+  });
+}
+if (!String.prototype.body) {
+  Object.defineProperty(String.prototype, "body", {
+    value: function(){ return this.toString(); },
+    configurable: true
+  });
+}
+if (!String.prototype.url) {
+  Object.defineProperty(String.prototype, "url", {
+    value: function(){ return ""; },
+    configurable: true
+  });
+}
+if (!String.prototype.code) {
+  Object.defineProperty(String.prototype, "code", {
+    value: function(){ return 200; },
+    configurable: true
+  });
+}
+if (!String.prototype.header) {
+  Object.defineProperty(String.prototype, "header", {
+    value: function(){ return ""; },
+    configurable: true
+  });
+}
+if (!String.prototype.headers) {
+  Object.defineProperty(String.prototype, "headers", {
+    value: function(){ return { get: function(){ return ""; } }; },
+    configurable: true
+  });
+}
+`, false),
+	byteArrayPkg: goja.MustCompile("", `
+var __ReaderByteArrayInputStream = ByteArrayInputStream;
+var __ReaderByteArrayOutputStream = ByteArrayOutputStream;
+var __ReaderGZIPInputStream = GZIPInputStream;
+ByteArrayInputStream = function(value){ return __ReaderByteArrayInputStream(value); };
+ByteArrayOutputStream = function(){ return __ReaderByteArrayOutputStream(); };
+GZIPInputStream = function(value){ return __ReaderGZIPInputStream(value); };
+`, false),
+}
+
 func (r *Runtime) installSafeGlobals(vm *goja.Runtime, runCtx evalContext) error {
 	blocked := []string{"require", "process", "global", "globalThis", "window", "document", "XMLHttpRequest", "fetch"}
 	for _, name := range blocked {
@@ -405,14 +487,7 @@ func (r *Runtime) installSafeGlobals(vm *goja.Runtime, runCtx evalContext) error
 	if err := vm.Set("org", jsoupBindings(vm)); err != nil {
 		return err
 	}
-	if _, err := vm.RunString(`
-if (!java.ajaxAll) {
-  java.ajaxAll = function(urls) {
-    if (!urls || !urls.map) return [];
-    return urls.map(function(u) { return java.connect(u); });
-  };
-}
-`); err != nil {
+	if _, err := vm.RunProgram(precompiledPrograms.ajaxAll); err != nil {
 		return err
 	}
 	if err := installJavaImporterCompat(vm); err != nil {
@@ -826,7 +901,7 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 				if err == nil {
 					req.SkipRateLimit = skipRate
 					var resp *fetch.Response
-					resp, err = requestoption.Fetch(callCtx, r.policy.Fetcher, req, vmRequestEvaluator(vm))
+					resp, err = requestoption.Fetch(callCtx, r.policy.Fetcher, req, vmRequestEvaluator(r, vm))
 					responses = append(responses, newScriptHTTPResponse(vm, resp, err))
 				} else {
 					responses = append(responses, newScriptHTTPResponse(vm, nil, err))
@@ -919,46 +994,7 @@ func installJavaImporterCompat(vm *goja.Runtime) error {
 	}); err != nil {
 		return err
 	}
-	if _, err := vm.RunString(`
-if (!String.prototype.getBytes) {
-  Object.defineProperty(String.prototype, "getBytes", {
-    value: function(charset){
-      return __readerStringBytes(this.toString(), charset || "UTF-8");
-    },
-    configurable: true
-  });
-}
-if (!String.prototype.body) {
-  Object.defineProperty(String.prototype, "body", {
-    value: function(){ return this.toString(); },
-    configurable: true
-  });
-}
-if (!String.prototype.url) {
-  Object.defineProperty(String.prototype, "url", {
-    value: function(){ return ""; },
-    configurable: true
-  });
-}
-if (!String.prototype.code) {
-  Object.defineProperty(String.prototype, "code", {
-    value: function(){ return 200; },
-    configurable: true
-  });
-}
-if (!String.prototype.header) {
-  Object.defineProperty(String.prototype, "header", {
-    value: function(){ return ""; },
-    configurable: true
-  });
-}
-if (!String.prototype.headers) {
-  Object.defineProperty(String.prototype, "headers", {
-    value: function(){ return { get: function(){ return ""; } }; },
-    configurable: true
-  });
-}
-`); err != nil {
+	if _, err := vm.RunProgram(precompiledPrograms.stringProto); err != nil {
 		return err
 	}
 	if err := vm.Set("JavaImporter", func(call goja.ConstructorCall) *goja.Object {
@@ -1332,14 +1368,7 @@ if (!String.prototype.headers) {
 	}); err != nil {
 		return err
 	}
-	if _, err := vm.RunString(`
-var __ReaderByteArrayInputStream = ByteArrayInputStream;
-var __ReaderByteArrayOutputStream = ByteArrayOutputStream;
-var __ReaderGZIPInputStream = GZIPInputStream;
-ByteArrayInputStream = function(value){ return __ReaderByteArrayInputStream(value); };
-ByteArrayOutputStream = function(){ return __ReaderByteArrayOutputStream(); };
-GZIPInputStream = function(value){ return __ReaderGZIPInputStream(value); };
-`); err != nil {
+	if _, err := vm.RunProgram(precompiledPrograms.byteArrayPkg); err != nil {
 		return err
 	}
 	return nil
@@ -1692,7 +1721,7 @@ func (r *Runtime) fetchScriptURL(runCtx evalContext, vm *goja.Runtime, raw strin
 		return nil, err
 	}
 	// 走 requestoption.Fetch：bodyJs 链与 app 层请求保持同一套语义。
-	return requestoption.Fetch(runCtx.ctx, r.policy.Fetcher, req, vmRequestEvaluator(vm))
+	return requestoption.Fetch(runCtx.ctx, r.policy.Fetcher, req, vmRequestEvaluator(r, vm))
 }
 
 func (r *Runtime) scriptGetStringAt(ctx context.Context, vm *goja.Runtime, input any, fallback any, rule string, baseURL string) string {
@@ -1704,7 +1733,7 @@ func (r *Runtime) scriptGetStringAt(ctx context.Context, vm *goja.Runtime, input
 		BaseURL:     baseURL,
 		RedirectURL: baseURL,
 		SourceURL:   scriptAnalyzerSourceURL(vm),
-		Script:      vmAnalyzerScript{vm: vm},
+		Script:      vmAnalyzerScript{r: r, vm: vm},
 	})
 	// 反转义由 JS 绑定层按 unescape 参数决定，这里取原始文本，避免双重反转义。
 	if value, err := analyzer.GetStringRaw(ctx, rule, input); err == nil && value != "" {
@@ -1727,7 +1756,7 @@ func (r *Runtime) scriptGetStringListAt(ctx context.Context, vm *goja.Runtime, i
 		BaseURL:     baseURL,
 		RedirectURL: baseURL,
 		SourceURL:   scriptAnalyzerSourceURL(vm),
-		Script:      vmAnalyzerScript{vm: vm},
+		Script:      vmAnalyzerScript{r: r, vm: vm},
 	})
 	values, err := analyzer.GetStringList(ctx, rule, input)
 	if err != nil {
@@ -1745,7 +1774,7 @@ func (r *Runtime) scriptGetElementsAt(ctx context.Context, vm *goja.Runtime, inp
 		BaseURL:     baseURL,
 		RedirectURL: baseURL,
 		SourceURL:   scriptAnalyzerSourceURL(vm),
-		Script:      vmAnalyzerScript{vm: vm},
+		Script:      vmAnalyzerScript{r: r, vm: vm},
 	})
 	elements, err := analyzer.GetElements(ctx, rule, input)
 	if err != nil {
@@ -1816,15 +1845,17 @@ func scriptInputString(input any) string {
 
 // vmAnalyzerScript 让规则分析器里的 @js 表达式在当前 VM 上求值，上下文与 java.* 绑定一致。
 type vmAnalyzerScript struct {
+	r  *Runtime
 	vm *goja.Runtime
 }
 
 func (s vmAnalyzerScript) Eval(ctx context.Context, scriptText string, input any) (any, error) {
-	return vmRequestEvaluator(s.vm)(ctx, scriptText, input)
+	return vmRequestEvaluator(s.r, s.vm)(ctx, scriptText, input)
 }
 
 // vmRequestEvaluator 用当前 VM 求值 URL 选项 js/bodyJs 等脚本表达式：求值期间把 result 绑定指向输入。
-func vmRequestEvaluator(vm *goja.Runtime) requestoption.Evaluator {
+// 脚本表达式走按调用点 + 文本哈希的编译缓存（login_check 等 js 表达式高频重复）。
+func vmRequestEvaluator(r *Runtime, vm *goja.Runtime) requestoption.Evaluator {
 	return func(ctx context.Context, scriptText string, input any) (any, error) {
 		previous := vm.Get("result")
 		if previous == nil {
@@ -1834,7 +1865,7 @@ func vmRequestEvaluator(vm *goja.Runtime) requestoption.Evaluator {
 			return nil, err
 		}
 		defer func() { _ = vm.Set("result", previous) }()
-		value, err := vm.RunString(rewriteJavaCompatScript(scriptText))
+		value, err := r.runScriptCached(vm, "requestoption.js", scriptText)
 		if err != nil {
 			return nil, err
 		}
@@ -2341,7 +2372,7 @@ func (r *Runtime) fetchScriptCall(runCtx evalContext, vm *goja.Runtime, method s
 			req.Proxy = strings.TrimSpace(proxy)
 		}
 	}
-	return requestoption.Fetch(runCtx.ctx, r.policy.Fetcher, req, vmRequestEvaluator(vm))
+	return requestoption.Fetch(runCtx.ctx, r.policy.Fetcher, req, vmRequestEvaluator(r, vm))
 }
 
 type scriptHTTPRequest struct {
@@ -2489,7 +2520,7 @@ func callableHeaders(vm *goja.Runtime, headers fetch.Headers) *goja.Object {
 
 func (r *Runtime) buildScriptRequest(runCtx evalContext, vm *goja.Runtime, raw string, extraHeaders map[string]string) (fetch.Request, error) {
 	src := runCtx.src
-	expanded, err := expandScriptTemplates(runCtx, vm, raw)
+	expanded, err := r.expandScriptTemplates(runCtx, vm, raw)
 	if err != nil {
 		return fetch.Request{}, err
 	}
@@ -2517,7 +2548,7 @@ func (r *Runtime) buildScriptRequest(runCtx evalContext, vm *goja.Runtime, raw s
 		req.Headers[key] = value
 	}
 	// URL 选项（js/bodyJs/retry/webView/proxy/dnsIp/body…）与 app 层共用 requestoption，语义不分叉。
-	req, err = requestoption.Build(runCtx.ctx, expanded, baseURL, req, vmRequestEvaluator(vm))
+	req, err = requestoption.Build(runCtx.ctx, expanded, baseURL, req, vmRequestEvaluator(r, vm))
 	if err != nil {
 		return fetch.Request{}, runCtx.wrap(ErrScriptFailed, err)
 	}
@@ -2535,7 +2566,7 @@ func (r *Runtime) runtimeHeaderMap(runCtx evalContext, vm *goja.Runtime) (map[st
 	switch {
 	case header == "":
 	case strings.HasPrefix(strings.ToLower(header), "@js:"):
-		value, err := vm.RunString(rewriteJavaCompatScript(strings.TrimSpace(header[4:])))
+		value, err := r.runScriptCached(vm, "source.header.atjs", strings.TrimSpace(header[4:]))
 		if err != nil {
 			return nil, err
 		}
@@ -2543,7 +2574,7 @@ func (r *Runtime) runtimeHeaderMap(runCtx evalContext, vm *goja.Runtime) (map[st
 			headers[key] = headerValue
 		}
 	case strings.HasPrefix(strings.ToLower(header), "<js>") && strings.HasSuffix(strings.ToLower(header), "</js>"):
-		value, err := vm.RunString(rewriteJavaCompatScript(strings.TrimSpace(header[4 : len(header)-5])))
+		value, err := r.runScriptCached(vm, "source.header.tagjs", strings.TrimSpace(header[4:len(header)-5]))
 		if err != nil {
 			return nil, err
 		}
@@ -2576,7 +2607,7 @@ func (r *Runtime) runtimeHeaderMap(runCtx evalContext, vm *goja.Runtime) (map[st
 	return headers, nil
 }
 
-func expandScriptTemplates(runCtx evalContext, vm *goja.Runtime, raw string) (string, error) {
+func (r *Runtime) expandScriptTemplates(runCtx evalContext, vm *goja.Runtime, raw string) (string, error) {
 	if !strings.Contains(raw, "{{") || !strings.Contains(raw, "}}") {
 		return raw, nil
 	}
@@ -2597,7 +2628,7 @@ func expandScriptTemplates(runCtx evalContext, vm *goja.Runtime, raw string) (st
 			return b.String(), nil
 		}
 		expr := strings.TrimSpace(rest[:end])
-		value, err := vm.RunString(rewriteJavaCompatScript(expr))
+		value, err := r.runScriptCached(vm, "url.template", expr)
 		if err != nil {
 			return "", runCtx.wrapRunError(err)
 		}

@@ -60,11 +60,11 @@ func (a *Adapter) Element(input string, patterns ...string) ([]string, error) {
 		if i == len(patterns)-1 {
 			return normalizeGroups(matches[0]), nil
 		}
-		next := ""
+		var b strings.Builder
 		for _, match := range matches {
-			next += match[0]
+			b.WriteString(match[0])
 		}
-		current = next
+		current = b.String()
 	}
 	return nil, nil
 }
@@ -96,11 +96,11 @@ func (a *Adapter) Elements(input string, patterns ...string) ([][]string, error)
 			}
 			return out, nil
 		}
-		next := ""
+		var b strings.Builder
 		for _, match := range matches {
-			next += match[0]
+			b.WriteString(match[0])
 		}
-		current = next
+		current = b.String()
 	}
 	return [][]string{}, nil
 }
@@ -118,6 +118,19 @@ func Replace(input string, pattern string, replacement string, firstOnly bool) (
 		return strings.ReplaceAll(input, pattern, replacement), nil
 	}
 	return re.Replace(input, replacement, firstOnly)
+}
+
+// CompileStd 使用 LRU 编译缓存编译 Go 标准正则（不走 regexp2 回退），供热点路径复用编译结果。
+// 编译失败时返回错误。
+func CompileStd(pattern string) (*regexp.Regexp, error) {
+	re, err := compilePattern(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if re.std == nil {
+		return nil, ErrInvalidPattern
+	}
+	return re.std, nil
 }
 
 // MatchString 使用缓存的编译结果判断 value 是否包含 pattern 的匹配（Go 标准正则优先，失败回退 regexp2）。

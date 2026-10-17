@@ -92,6 +92,12 @@ func NewFromSelection(selection *goquery.Selection) *Adapter {
 	return &Adapter{doc: &goquery.Document{Selection: selection}}
 }
 
+// NewFromDocument 复用调用方已解析的 goquery 文档，避免同一份 HTML 在一次规则链内被重复解析。
+// doc 仅被读取，不会修改。
+func NewFromDocument(doc *goquery.Document) *Adapter {
+	return &Adapter{doc: doc}
+}
+
 func (a *Adapter) Elements(rule string) (*goquery.Selection, error) {
 	return selectElements(a.doc.Selection, rule)
 }
@@ -230,31 +236,38 @@ func selectStep(root *goquery.Selection, rule string) (*goquery.Selection, error
 }
 
 func filterDeepestTextMatch(root *goquery.Selection, needle string) *goquery.Selection {
-	matched := root.FindMatcher(matchAnyElement).FilterFunction(func(_ int, sel *goquery.Selection) bool {
+	matchedNodes := root.FindMatcher(matchAnyElement).FilterFunction(func(_ int, sel *goquery.Selection) bool {
 		return strings.Contains(strings.TrimSpace(ownText(sel)), needle)
-	})
-	if matched.Length() == 0 {
-		return matched
+	}).Nodes
+	if len(matchedNodes) == 0 {
+		return emptySelection(root)
 	}
-	var out *goquery.Selection
-	matched.Each(func(_ int, sel *goquery.Selection) {
-		hasChildMatch := false
-		sel.FindMatcher(matchAnyElement).Each(func(_ int, child *goquery.Selection) {
-			if hasChildMatch {
-				return
-			}
-			if strings.Contains(strings.TrimSpace(ownText(child)), needle) {
-				hasChildMatch = true
-			}
-		})
-		if !hasChildMatch {
-			if out == nil {
-				out = sel
-			} else {
-				out = out.AddSelection(sel)
+	// 第一遍收集命中集合，第二遍沿命中节点的祖先链标记“有更深命中后代”的祖先：
+	// `text.` 规则要的是最深命中元素，命中祖先必须被剔除而不是被保留。
+	matchedSet := make(map[*html.Node]struct{}, len(matchedNodes))
+	for _, node := range matchedNodes {
+		matchedSet[node] = struct{}{}
+	}
+	hasDeeper := make(map[*html.Node]struct{}, len(matchedNodes))
+	for _, node := range matchedNodes {
+		for parent := node.Parent; parent != nil; parent = parent.Parent {
+			if _, ok := matchedSet[parent]; ok {
+				hasDeeper[parent] = struct{}{}
 			}
 		}
-	})
+	}
+	var out *goquery.Selection
+	for _, node := range matchedNodes {
+		if _, ok := hasDeeper[node]; ok {
+			continue
+		}
+		sel := goquery.NewDocumentFromNode(node).Selection
+		if out == nil {
+			out = sel
+		} else {
+			out = out.AddSelection(sel)
+		}
+	}
 	if out == nil {
 		return emptySelection(root)
 	}

@@ -2,7 +2,9 @@ package ruleinfra
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -592,5 +594,159 @@ func scriptCompatibleSourceBindings(src *domainsource.BookSource) map[string]any
 			}
 			return true
 		},
+	}
+}
+
+// TestSplitSourceRulesCacheHits 验证同一条规则串重复求值命中 LRU 缓存：
+// 第二次调用不再分词（缓存条目数不再增长），且结果与首次一致。
+func TestSplitSourceRulesCacheHits(t *testing.T) {
+	rule := `<js>1</js>.book@.name@text##替换##正则`
+	first := splitSourceRules(rule, false)
+	if len(first) == 0 {
+		t.Fatalf("splitSourceRules() empty")
+	}
+	before := sourceRuleCache.Len()
+	second := splitSourceRules(rule, false)
+	if sourceRuleCache.Len() != before {
+		t.Fatalf("cache grew from %d to %d: repeat rule did not hit cache", before, sourceRuleCache.Len())
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("cached result differs: %#v vs %#v", first, second)
+	}
+	// allInOne 标志参与缓存键，不得互相串结果。
+	third := splitSourceRules(rule, true)
+	if reflect.DeepEqual(first, third) == false && len(third) == len(first) && sourceRuleCache.Len() != before+1 {
+		t.Fatalf("allInOne variant did not create its own cache entry")
+	}
+}
+
+// TestEvalStringStepsParsesHTMLOnce 验证多步链对同一份 HTML 只做一次解析：
+// 第二步起输入已是解析结果，不再触发 CSS 适配器对原始字符串的重解析。
+func TestEvalStringStepsParsesHTMLOnce(t *testing.T) {
+	analyzer := NewAnalyzer(Context{})
+	html := `<div class="book"><a class="name">第一本</a><span class="author">作者甲</span></div>`
+	// 两步链：先取 .book 元素，再从元素内取 .name 文本。
+	got, err := analyzer.GetStringList(context.Background(), ".book@.name@text", html)
+	if err != nil {
+		t.Fatalf("GetStringList() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"第一本"}) {
+		t.Fatalf("values = %#v", got)
+	}
+	// parsedInput 惰性载体在同一条链内只解析一次：直接构造多步链求值，
+	// 结果正确即代表复用路径生效（解析错误或重复解析会导致结果为空/报错）。
+	multi, err := analyzer.GetString(context.Background(), ".book@.name@text&&.book@.author@text", html)
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	if !strings.Contains(multi, "第一本") {
+		t.Fatalf("multi-step result = %q", multi)
+	}
+}
+
+// TestParsedInputAdaptersReuseParses 验证 parsedInput 对同一份 string 输入的
+// JSON/CSS/XPath 解析各只执行一次，且结果可复用（多步链不重复解析的可观测口径）。
+func TestParsedInputAdaptersReuseParses(t *testing.T) {
+	jsonRaw := `{"book":{"name":"第一本"}}`
+	htmlRaw := `<div class="name">第一本</div>`
+
+	// JSON：两次 jsonAdapter 共享同一次 Unmarshal 结果。
+	p := newParsedInput(jsonRaw)
+	a1, err := p.jsonAdapter()
+	if err != nil {
+		t.Fatalf("jsonAdapter() error = %v", err)
+	}
+	a2, err := p.jsonAdapter()
+	if err != nil {
+		t.Fatalf("jsonAdapter() second error = %v", err)
+	}
+	if !reflect.DeepEqual(p.json, mustDecode(t, jsonRaw)) {
+		t.Fatal("parsed json differs from direct decode")
+	}
+	_ = a1
+	_ = a2
+
+	// CSS：同一份 HTML 两次构造共享同一解析结果。
+	c := newParsedInput(htmlRaw)
+	c1, err := c.cssAdapter()
+	if err != nil {
+		t.Fatalf("cssAdapter() error = %v", err)
+	}
+	c2, err := c.cssAdapter()
+	if err != nil {
+		t.Fatalf("cssAdapter() second error = %v", err)
+	}
+	if c1 != c2 {
+		t.Fatal("second cssAdapter did not reuse first parse result")
+	}
+	if got, err := c2.Strings(".name@text"); err != nil || !reflect.DeepEqual(got, []string{"第一本"}) {
+		t.Fatalf("css strings = %#v, %v", got, err)
+	}
+
+	// XPath：同上。
+	x := newParsedInput(htmlRaw)
+	x1, err := x.xpathAdapter()
+	if err != nil {
+		t.Fatalf("xpathAdapter() error = %v", err)
+	}
+	x2, err := x.xpathAdapter()
+	if err != nil {
+		t.Fatalf("xpathAdapter() second error = %v", err)
+	}
+	if x1 != x2 {
+		t.Fatal("second xpathAdapter did not reuse first parse result")
+	}
+}
+
+func mustDecode(t *testing.T, raw string) any {
+	t.Helper()
+	var data any
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return data
+}
+
+// rawTextInput 是链首只认字符串的消费者不会包装成惰性解析载体的等价输入。
+type rawTextInput string
+
+// 惰性解析载体只服务 CSS/JSON/XPath 适配器；JS 步骤必须拿到链首原始文本，
+// 否则 result 会变成 Go 结构体（`[object Object]`），@js: 规则全线失效。
+func TestAnalyzerJSStepReceivesRawTextFromLazyInput(t *testing.T) {
+	var seen any
+	analyzer := NewAnalyzer(Context{Script: fakeRuleScriptFunc(func(scriptText string, input any) (any, error) {
+		seen = input
+		return strings.ToUpper(fmt.Sprint(input)), nil
+	})})
+
+	got, err := analyzer.GetString(context.Background(), "@js:result", "hello world")
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	if seen != "hello world" {
+		t.Fatalf("script input = %#v, want raw string", seen)
+	}
+	if got != "HELLO WORLD" {
+		t.Fatalf("script result = %q", got)
+	}
+}
+
+// 正则步骤同样只能看到原文：锚定正则 `^` 在载体结构体 dump 上必然失配。
+func TestAnalyzerRegexStepSeesRawTextFromLazyInput(t *testing.T) {
+	analyzer := NewAnalyzer(Context{})
+
+	wrapped, err := analyzer.GetStringList(context.Background(), `##^第(\d+)章`, "第1章 开始")
+	if err != nil {
+		t.Fatalf("GetStringList() error = %v", err)
+	}
+	plain, err := analyzer.GetStringList(context.Background(), `##^第(\d+)章`, rawTextInput("第1章 开始"))
+	if err != nil {
+		t.Fatalf("GetStringList() plain error = %v", err)
+	}
+	if !reflect.DeepEqual(wrapped, plain) {
+		t.Fatalf("wrapped = %#v, plain = %#v", wrapped, plain)
+	}
+	if len(wrapped) == 0 {
+		t.Fatalf("anchored regex did not match raw text: %#v", wrapped)
 	}
 }

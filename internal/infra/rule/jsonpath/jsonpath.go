@@ -58,6 +58,12 @@ func New(input string) (*Adapter, error) {
 	return &Adapter{data: data}, nil
 }
 
+// NewFromData 复用调用方已反序列化的 JSON 数据，避免同一步内对同一输入二次 Unmarshal。
+// data 仅被读取，不会修改。
+func NewFromData(data any) *Adapter {
+	return &Adapter{data: data}
+}
+
 func (a *Adapter) Object(rule string) (any, error) {
 	rule = strings.TrimSpace(strings.TrimPrefix(rule, "@Json:"))
 	rule = normalizeRule(rule)

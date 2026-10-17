@@ -484,3 +484,41 @@ func TestAdapterElementsTextPrefixIndexAndCommaOrder(t *testing.T) {
 		t.Fatalf("comma elements = %#v, want %#v", got, want)
 	}
 }
+
+// `text.` 规则要取 ownText 命中的最深元素：祖先后代同时命中时不能取到祖先。
+func TestSelectStepTextRuleKeepsDeepestMatch(t *testing.T) {
+	doc := `<div><p>查看更多章节<a href="/all">查看更多章节</a></p></div>`
+	adapter, err := New(doc)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	selected, err := adapter.Elements(`text.查看更多章节`)
+	if err != nil {
+		t.Fatalf("Elements() error = %v", err)
+	}
+	if selected.Length() != 1 {
+		t.Fatalf("selected length = %d, want 1", selected.Length())
+	}
+	if got := goquery.NodeName(selected); got != "a" {
+		t.Fatalf("selected = %q, want deepest match a", got)
+	}
+}
+
+// 只有祖先命中（无更深命中后代）时仍要保留祖先。
+func TestSelectStepTextRuleKeepsAncestorWithoutDeeperMatch(t *testing.T) {
+	doc := `<div><p>查看更多章节<span>其它</span></p></div>`
+	adapter, err := New(doc)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	selected, err := adapter.Elements(`text.查看更多章节`)
+	if err != nil {
+		t.Fatalf("Elements() error = %v", err)
+	}
+	if selected.Length() != 1 {
+		t.Fatalf("selected length = %d, want 1", selected.Length())
+	}
+	if got := goquery.NodeName(selected); got != "p" {
+		t.Fatalf("selected = %q, want ancestor p", got)
+	}
+}

@@ -19,7 +19,7 @@ const (
 	defaultCacheMaxValue    = 1 << 20
 	defaultLogMaxEntries    = 1000
 	defaultLogMaxBytes      = 256 << 10
-	defaultProgramCacheSize = 64
+	defaultProgramCacheSize = 1024
 )
 
 type cacheEntry struct {
@@ -212,6 +212,39 @@ func (c *programCache) compile(source string) (*goja.Program, error) {
 	}
 	c.mu.Unlock()
 	program, err := goja.Compile("jsLib", rewriteJavaCompatScript(source), false)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if elem, ok := c.entries[key]; ok {
+		c.order.MoveToBack(elem)
+		return elem.Value.(*programEntry).program, nil
+	}
+	c.entries[key] = c.order.PushBack(&programEntry{key: key, program: program})
+	for c.order.Len() > c.capacity {
+		oldest := c.order.Front()
+		delete(c.entries, oldest.Value.(*programEntry).key)
+		c.order.Remove(oldest)
+	}
+	return program, nil
+}
+
+// compileScript 缓存热点脚本（主脚本、loginCheck、@js: header、模板表达式）的编译结果。
+// 缓存键包含调用点 site 与 rewriteJavaCompatScript 之后的脚本文本：相同文本在不同调用点
+// 语义可能不同（绑定不同），不能误配；改写只执行一次，不会在缓存命中路径上重复跑正则。
+func (c *programCache) compileScript(site string, source string) (*goja.Program, error) {
+	rewritten := rewriteJavaCompatScript(source)
+	key := sha256.Sum256([]byte(site + "\x00" + rewritten))
+	c.mu.Lock()
+	if elem, ok := c.entries[key]; ok {
+		c.order.MoveToBack(elem)
+		program := elem.Value.(*programEntry).program
+		c.mu.Unlock()
+		return program, nil
+	}
+	c.mu.Unlock()
+	program, err := goja.Compile(site, rewritten, false)
 	if err != nil {
 		return nil, err
 	}

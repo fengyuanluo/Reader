@@ -25,6 +25,12 @@ func New(input string) (*Adapter, error) {
 	return &Adapter{doc: doc}, nil
 }
 
+// NewFromNode 复用调用方已解析的 HTML 文档，避免同一份输入在一次规则链内被重复解析。
+// node 仅被读取，不会修改。
+func NewFromNode(node *html.Node) *Adapter {
+	return &Adapter{doc: node}
+}
+
 func (a *Adapter) Nodes(rule string) ([]*html.Node, error) {
 	return selectNodes(a.doc, rule)
 }
@@ -72,8 +78,15 @@ func (a *Adapter) stringStep(rule string) ([]string, error) {
 	}
 	out := []string{}
 	for _, node := range nodes {
-		value := strings.TrimSpace(htmlquery.OutputHTML(node, false))
-		if node.Type == html.TextNode || node.FirstChild == nil {
+		// 仅元素节点才做 OutputHTML 序列化；文本/注释节点直接取内部文本，避免双重序列化。
+		var value string
+		if node.Type == html.ElementNode {
+			value = strings.TrimSpace(htmlquery.OutputHTML(node, false))
+			if node.FirstChild == nil {
+				value = ""
+			}
+		}
+		if value == "" {
 			value = strings.TrimSpace(htmlquery.InnerText(node))
 		}
 		if value != "" {

@@ -16,6 +16,7 @@ import (
 
 	domainrule "reader/internal/domain/rule"
 	"reader/internal/infra/rule/css"
+	"reader/internal/infra/rule/internal/lru"
 	"reader/internal/infra/rule/jsonpath"
 	"reader/internal/infra/rule/regex"
 	urlrule "reader/internal/infra/rule/url"
@@ -165,6 +166,12 @@ func (a *Analyzer) getStringList(ctx context.Context, rule string, input any, no
 func (a *Analyzer) evalStringSteps(ctx context.Context, rule string, input any, normalizeURLs bool) ([]string, error) {
 	steps := splitSourceRules(rule, false)
 	var current any = input
+	// 链首把 string 输入包成惰性解析载体，链内各步复用同一份解析结果。
+	if text, ok := input.(string); ok {
+		current = newParsedInput(text)
+	} else if raw, ok := input.([]byte); ok {
+		current = newParsedInput(string(raw))
+	}
 	for _, step := range steps {
 		value, err := a.evalStep(ctx, step, current, false)
 		if err != nil {
@@ -193,6 +200,12 @@ func (a *Analyzer) GetElements(ctx context.Context, rule string, input any) ([]a
 	}
 	steps := splitSourceRules(rule, true)
 	var current any = input
+	// 链首把 string 输入包成惰性解析载体，链内各步复用同一份解析结果。
+	if text, ok := input.(string); ok {
+		current = newParsedInput(text)
+	} else if raw, ok := input.([]byte); ok {
+		current = newParsedInput(string(raw))
+	}
 	for _, step := range steps {
 		value, err := a.evalStep(ctx, step, current, true)
 		if err != nil {
@@ -237,9 +250,11 @@ func (a *Analyzer) evalStep(ctx context.Context, step sourceRule, input any, wan
 		if a.ctx.Script == nil {
 			return nil, ErrScriptUnavailable
 		}
-		result, err = a.ctx.Script.Eval(ctx, step.rule, input)
+		// parsedInput 是链首 string 输入的惰性解析载体，只服务于 CSS/JSON/XPath 适配器；
+		// JS 脚本必须看到原始文本（旧行为是链首 string），否则 result 会变成 Go 结构体。
+		result, err = a.ctx.Script.Eval(ctx, step.rule, unwrapParsedInput(input))
 	case ModeJSON:
-		adapter, e := jsonpath.New(asString(input))
+		adapter, e := parsedJSONAdapter(input)
 		if e != nil {
 			return nil, e
 		}
@@ -250,7 +265,7 @@ func (a *Analyzer) evalStep(ctx context.Context, step sourceRule, input any, wan
 			result, err = adapter.Strings(step.rule)
 		}
 	case ModeXPath:
-		adapter, e := xpath.New(asString(input))
+		adapter, e := parsedXPathAdapter(input)
 		if e != nil {
 			return nil, e
 		}
@@ -281,7 +296,7 @@ func (a *Analyzer) evalStep(ctx context.Context, step sourceRule, input any, wan
 		}
 	default:
 		if isJSONInput(input) {
-			adapter, e := jsonpath.New(asString(input))
+			adapter, e := parsedJSONAdapter(input)
 			if e != nil {
 				return nil, e
 			}
@@ -347,22 +362,25 @@ func (a *Analyzer) expandRawString(ctx context.Context, text string, input any) 
 		return text, nil
 	}
 	text = getRulePattern.ReplaceAllStringFunc(text, func(token string) string {
-		match := getRulePattern.FindStringSubmatch(token)
-		if len(match) != 2 {
+		// ReplaceAllStringFunc 传入的 token 就是完整匹配，直接用位置切分避免二次 FindStringSubmatch。
+		loc := getRulePattern.FindStringIndex(token)
+		if loc == nil || loc[0] != 0 || loc[1] != len(token) {
 			return token
 		}
-		key := strings.TrimSpace(match[1])
+		key := strings.TrimSpace(strings.TrimPrefix(token[:loc[1]], "@get:{"))
+		key = strings.TrimSuffix(key, "}")
 		if value, ok := lookupInputField(input, key); ok {
 			return value
 		}
 		return a.lookupVariable(input, key)
 	})
 	text = jsRulePattern.ReplaceAllStringFunc(text, func(token string) string {
-		match := jsRulePattern.FindStringSubmatch(token)
-		if len(match) != 2 {
+		// ReplaceAllStringFunc 传入的 token 就是完整匹配，直接用位置切分避免二次 FindStringSubmatch。
+		loc := jsRulePattern.FindStringIndex(token)
+		if loc == nil || loc[0] != 0 || loc[1] != len(token) {
 			return token
 		}
-		expr := strings.TrimSpace(match[1])
+		expr := strings.TrimSpace(token[2 : len(token)-2])
 		if isRuleExpression(expr) {
 			value, err := a.GetString(ctx, expr, input)
 			if err != nil {
@@ -415,12 +433,13 @@ func (a *Analyzer) renderJSONPathTemplate(ctx context.Context, rule string, inpu
 		if err != nil {
 			return ""
 		}
-		match := jsonTplPattern.FindStringSubmatch(token)
-		if len(match) != 2 {
+		// ReplaceAllStringFunc 传入的 token 就是完整匹配，直接用位置切分避免二次 FindStringSubmatch。
+		loc := jsonTplPattern.FindStringIndex(token)
+		if loc == nil || loc[0] != 0 || loc[1] != len(token) {
 			return token
 		}
 		var value string
-		value, err = a.GetString(ctx, "$"+match[1], input)
+		value, err = a.GetString(ctx, "$"+token[2:len(token)-1], input)
 		return value
 	})
 	if err != nil {
@@ -483,7 +502,94 @@ func newCSSAdapter(input any) (*css.Adapter, error) {
 			return css.NewFromSelection(selection), nil
 		}
 	}
+	if parsed, ok := input.(*parsedInput); ok {
+		return parsed.cssAdapter()
+	}
 	return css.New(asString(input))
+}
+
+// parsedInput 是链首 string 输入的惰性解析载体：同一次规则链内 JSON/CSS/XPath 解析
+// 各最多执行一次，后续步骤复用结果，避免同一份 HTML/JSON 被反复解析。
+// 注意：该结构在同一条规则链内被多 goroutine 共享的前提不存在（链内串行求值），无需加锁。
+type parsedInput struct {
+	raw       string
+	json      any
+	jsonOK    bool
+	jsonErr   error
+	css       *css.Adapter
+	cssErr    error
+	cssDone   bool
+	xpath     *xpath.Adapter
+	xpathErr  error
+	xpathDone bool
+}
+
+func newParsedInput(raw string) *parsedInput {
+	return &parsedInput{raw: raw}
+}
+
+// unwrapParsedInput 把惰性解析载体还原成链首的原始文本，供 JS 脚本等只认字符串的消费者使用。
+func unwrapParsedInput(input any) any {
+	if parsed, ok := input.(*parsedInput); ok {
+		return parsed.raw
+	}
+	return input
+}
+
+func (p *parsedInput) jsonAdapter() (*jsonpath.Adapter, error) {
+	if !p.jsonOK {
+		var data any
+		p.jsonErr = json.Unmarshal([]byte(p.raw), &data)
+		p.json = data
+		p.jsonOK = true
+	}
+	if p.jsonErr != nil {
+		return nil, p.jsonErr
+	}
+	return jsonpath.NewFromData(p.json), nil
+}
+
+func (p *parsedInput) cssAdapter() (*css.Adapter, error) {
+	if !p.cssDone {
+		p.css, p.cssErr = css.New(p.raw)
+		p.cssDone = true
+	}
+	return p.css, p.cssErr
+}
+
+func (p *parsedInput) xpathAdapter() (*xpath.Adapter, error) {
+	if !p.xpathDone {
+		p.xpath, p.xpathErr = xpath.New(p.raw)
+		p.xpathDone = true
+	}
+	return p.xpath, p.xpathErr
+}
+
+// isJSONInputText 判断原始文本是否形如 JSON 对象/数组。
+func isJSONInputText(text string) bool {
+	text = strings.TrimSpace(text)
+	return (strings.HasPrefix(text, "{") && strings.HasSuffix(text, "}")) ||
+		(strings.HasPrefix(text, "[") && strings.HasSuffix(text, "]"))
+}
+
+// parsedJSONAdapter 求值 JSON 规则：string/parsedInput 输入惰性解析一次后复用；
+// 已是结构化 JSON 的输入直接构造适配器，不做二次反序列化。
+func parsedJSONAdapter(input any) (*jsonpath.Adapter, error) {
+	switch value := input.(type) {
+	case *parsedInput:
+		return value.jsonAdapter()
+	case map[string]any, []any:
+		return jsonpath.NewFromData(value), nil
+	}
+	return jsonpath.New(asString(input))
+}
+
+// parsedXPathAdapter 求值 XPath 规则：string/parsedInput 输入惰性解析一次后复用。
+func parsedXPathAdapter(input any) (*xpath.Adapter, error) {
+	if parsed, ok := input.(*parsedInput); ok {
+		return parsed.xpathAdapter()
+	}
+	return xpath.New(asString(input))
 }
 
 func containsScriptRule(rule string) bool {
@@ -571,7 +677,25 @@ var (
 	jsonTplPattern  = regexp.MustCompile(`(?s)\{\$(\.[^{}]+?)\}`)
 )
 
+// sourceRuleCache 缓存同一条规则串的分词结果：目录/正文逐元素求值时同一条规则串
+// 会被反复分词，分词结果是纯函数且只读共享（evalStep 内所有修改都作用于值拷贝）。
+const sourceRuleCacheSize = 1024
+
+var sourceRuleCache = lru.New[sourceRuleCacheKey, []sourceRule](sourceRuleCacheSize)
+
+type sourceRuleCacheKey struct {
+	rule     string
+	allInOne bool
+}
+
 func splitSourceRules(rule string, allInOne bool) []sourceRule {
+	return sourceRuleCache.GetOrCompute(sourceRuleCacheKey{rule: rule, allInOne: allInOne}, func() []sourceRule {
+		return parseSourceRules(rule, allInOne)
+	})
+}
+
+// parseSourceRules 是 splitSourceRules 的无缓存实现（对齐原逻辑）。
+func parseSourceRules(rule string, allInOne bool) []sourceRule {
 	rule = strings.TrimSpace(rule)
 	if rule == "" {
 		return nil
@@ -716,9 +840,11 @@ func parsePutRules(rule string) map[string]string {
 }
 
 func isJSONInput(input any) bool {
+	if parsed, ok := input.(*parsedInput); ok {
+		return isJSONInputText(parsed.raw)
+	}
 	text := strings.TrimSpace(asString(input))
-	return (strings.HasPrefix(text, "{") && strings.HasSuffix(text, "}")) ||
-		(strings.HasPrefix(text, "[") && strings.HasSuffix(text, "]"))
+	return isJSONInputText(text)
 }
 
 // isExplicitJSONPathRule 判断规则是否显式声明为 JSONPath（$ 开头或 @Json: 前缀）；
@@ -914,6 +1040,9 @@ func asString(input any) string {
 	switch value := input.(type) {
 	case nil:
 		return ""
+	case *parsedInput:
+		// 惰性解析载体对字符串消费者（正则步骤、替换、模板）等价于链首原始文本。
+		return value.raw
 	case string:
 		return value
 	case []byte:
