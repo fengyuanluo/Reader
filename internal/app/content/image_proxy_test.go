@@ -193,6 +193,7 @@ var errBrokenBookRepo = errors.New("book repository unavailable")
 type brokenImageBookRepo struct{}
 
 func (r *brokenImageBookRepo) Save(ctx context.Context, item *book.Book) error { return nil }
+func (r *brokenImageBookRepo) UpdateInfo(ctx context.Context, item *book.Book) error { return nil }
 func (r *brokenImageBookRepo) FindByID(ctx context.Context, id string) (*book.Book, error) {
 	return nil, errBrokenBookRepo
 }
@@ -297,6 +298,9 @@ type fakeImageBookRepo struct {
 }
 
 func (r *fakeImageBookRepo) Save(ctx context.Context, item *book.Book) error { return nil }
+
+// UpdateInfo 满足 book.BookRepository 接口：图片代理路径不刷新信息。
+func (r *fakeImageBookRepo) UpdateInfo(ctx context.Context, item *book.Book) error { return nil }
 func (r *fakeImageBookRepo) FindByID(ctx context.Context, id string) (*book.Book, error) {
 	if item, ok := r.byID[id]; ok {
 		return item, nil

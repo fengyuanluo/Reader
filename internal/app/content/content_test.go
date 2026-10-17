@@ -3,6 +3,8 @@ package contentapp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -790,11 +792,15 @@ type fakeContentFetcher struct {
 	calls   int
 	lastReq fetch.Request
 	match   func(req fetch.Request) (*fetch.Response, bool)
+	fail    map[string]error
 }
 
 func (f *fakeContentFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
 	f.calls++
 	f.lastReq = req
+	if err, ok := f.fail[req.URL]; ok {
+		return nil, err
+	}
 	if f.match != nil {
 		if resp, ok := f.match(req); ok {
 			return resp, nil
@@ -1102,5 +1108,60 @@ func TestBuildContentFetchRequestKeepsBodyWhenContentTypeSet(t *testing.T) {
 	}
 	if req.Headers["Content-Type"] != "text/plain" {
 		t.Fatalf("content-type = %q", req.Headers["Content-Type"])
+	}
+}
+
+// 回归（P2）：多页正文中单页 fetch 失败必须让整章失败且不写缓存，
+// 否则残缺正文被当作成功持久化，下次命中缓存后永远不会再重抓。
+func TestContentServicePageFetchFailureFailsChapterWithoutCache(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.ReplaceRegex = ""
+	chapter := testContentChapter()
+	chapters := &fakeChapterRepo{}
+	fetcher := &fakeContentFetcher{
+		pages: map[string]fetch.Response{
+			chapter.URL:                        {URL: chapter.URL, Body: []byte(`<div class="content">page1</div><a class="next" href="/c/1_p2">2</a>`)},
+			"https://site.example.test/c/1_p2": {URL: "https://site.example.test/c/1_p2", Body: []byte(`<div class="content">page2</div>`)},
+		},
+		fail: map[string]error{
+			"https://site.example.test/c/1_p2": errors.New("http 500"),
+		},
+	}
+	service := NewService(chapters, fetcher, nil)
+
+	_, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
+	if err == nil {
+		t.Fatalf("GetContent() error = nil, want page failure propagated")
+	}
+	if chapters.savedContent != "" {
+		t.Fatalf("incomplete chapter must not be cached, got %q", chapters.savedContent)
+	}
+}
+
+// 回归（P2）：分页超过 maxContentPages 上限时整章失败且不写缓存，
+// 截断的正文不能按成功持久化。
+func TestContentServicePaginationTruncationFailsWithoutCache(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.ReplaceRegex = ""
+	chapter := testContentChapter()
+	chapters := &fakeChapterRepo{}
+	pages := map[string]fetch.Response{
+		chapter.URL: {URL: chapter.URL, Body: []byte(`<div class="content">p0</div><a class="next" href="/c/p1">2</a>`)},
+	}
+	// 每页都带指向下一页的 next 链接，页数远超 maxContentPages。
+	for i := 1; i <= maxContentPages+2; i++ {
+		u := fmt.Sprintf("https://site.example.test/c/p%d", i)
+		next := fmt.Sprintf(`<a class="next" href="/c/p%d">2</a>`, i+1)
+		pages[u] = fetch.Response{URL: u, Body: []byte(`<div class="content">p` + strconv.Itoa(i) + `</div>` + next)}
+	}
+	fetcher := &fakeContentFetcher{pages: pages}
+	service := NewService(chapters, fetcher, nil)
+
+	_, err := service.GetContent(context.Background(), Input{Source: src, Book: testContentBook(), Chapter: chapter})
+	if !errors.Is(err, ErrPaginationTruncated) {
+		t.Fatalf("GetContent() error = %v, want ErrPaginationTruncated", err)
+	}
+	if chapters.savedContent != "" {
+		t.Fatalf("truncated chapter must not be cached, got %q", chapters.savedContent)
 	}
 }

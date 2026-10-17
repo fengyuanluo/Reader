@@ -297,3 +297,50 @@ func TestProcessorConvertsChineseConcurrently(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// 规则快照缓存：书籍/源变时失效，用户改规则后下次调用生效（C-012）。
+func TestProcessorRuleCacheInvalidatesOnDifferentScope(t *testing.T) {
+	repo := &fakeReplaceRepo{
+		content: []*replace.ReplaceRule{{ID: 1, Name: "ad", Pattern: "广告", Replacement: "", IsEnabled: true, ScopeContent: true}},
+	}
+	processor := NewProcessor(repo)
+	ctx := context.Background()
+	in := func(name, origin string) ProcessInput {
+		return ProcessInput{Book: book.Book{Name: name, Origin: origin}, Chapter: book.BookChapter{Title: "第一章"}, Content: "第一章\n广告正文"}
+	}
+	// 第一次：应用规则。
+	first, err := processor.Process(ctx, in("斗破苍穹", "source"))
+	if err != nil {
+		t.Fatalf("first Process() error = %v", err)
+	}
+	if strings.Contains(first.Content, "广告") {
+		t.Fatalf("first content = %q, want rule applied", first.Content)
+	}
+	// 不同 scope：必须重新读库，不能复用前一个 scope 的空规则。
+	repo.content = nil
+	second, err := processor.Process(ctx, in("凡人修仙传", "other"))
+	if err != nil {
+		t.Fatalf("second Process() error = %v", err)
+	}
+	if !strings.Contains(second.Content, "广告") {
+		t.Fatalf("second content = %q, want scope change to re-read rules", second.Content)
+	}
+	// 同 scope：缓存命中时规则改动不生效（快照语义），经 InvalidateRuleCache 才生效
+	//（用户改规则后下次命令生效）。
+	repo.content = []*replace.ReplaceRule{{ID: 2, Name: "ad2", Pattern: "正文", Replacement: "故事", IsEnabled: true, ScopeContent: true}}
+	third, err := processor.Process(ctx, in("凡人修仙传", "other"))
+	if err != nil {
+		t.Fatalf("third Process() error = %v", err)
+	}
+	if strings.Contains(third.Content, "故事") {
+		t.Fatalf("third content = %q, want cached (old) rules before invalidation", third.Content)
+	}
+	processor.InvalidateRuleCache()
+	fourth, err := processor.Process(ctx, in("凡人修仙传", "other"))
+	if err != nil {
+		t.Fatalf("fourth Process() error = %v", err)
+	}
+	if !strings.Contains(fourth.Content, "故事") || strings.Contains(fourth.Content, "正文") {
+		t.Fatalf("fourth content = %q, want InvalidateRuleCache to pick up new rules", fourth.Content)
+	}
+}

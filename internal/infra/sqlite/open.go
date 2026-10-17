@@ -13,7 +13,7 @@ import (
 // connPragmas 通过 DSN 的 _pragma 参数下发，驱动对连接池中每条新连接都会执行，
 // 避免连接级 PRAGMA 只在首条连接生效。busy_timeout 由驱动排在最前，
 // 保证切换 WAL 时遇锁等待而不是立即失败。
-const connPragmas = "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)"
+const connPragmas = "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-65536)"
 
 // Open 打开位于 path 的 SQLite 数据库文件：数据目录 0700、数据库文件 0600（库中含站点 Cookie 等会话凭证），
 // 并为每条连接开启外键约束、busy_timeout 与 WAL。path 必须是文件路径，不接受 URI 或 :memory:。

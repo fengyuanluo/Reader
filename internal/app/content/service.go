@@ -95,6 +95,23 @@ func (s *AppService) GetChapterContent(ctx context.Context, id string, index int
 	return result, b, nil
 }
 
+// GetChapterContentWith 用调用方已加载的 source/book/chapter 完成一次“缓存优先”的正文获取，
+// 不访问 books/chapters 表（下载与探测热路径专用）。nextChapterURL 为空表示无下一章。
+// 缓存命中时应用用户替换规则，未命中时抓取并写入缓存，与 GetChapterContent 语义一致。
+func (s *AppService) GetChapterContentWith(ctx context.Context, src *source.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (Result, error) {
+	bookID := book.IDFromURL(b.BookURL)
+	if cached, ok, err := s.Chapters.GetContent(ctx, bookID, chapter.Index); err != nil {
+		return Result{}, err
+	} else if ok {
+		content, err := s.processContent(ctx, b, chapter, cached)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Content: content, Chapter: chapter}, nil
+	}
+	return s.Content.GetContent(ctx, Input{Source: src, Book: b, Chapter: chapter, NextChapterURL: nextChapterURL, CacheLookupDone: true})
+}
+
 // ExportTXT writes a complete, ordered book export to w. The caller owns the
 // output lifecycle so it can discard partial data when a chapter fails.
 func (s *AppService) ExportTXT(ctx context.Context, id string, w io.Writer) (ExportStats, error) {

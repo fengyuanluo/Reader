@@ -81,7 +81,8 @@ func (s *InfoService) RefreshInfo(ctx context.Context, input InfoInput) (book.Bo
 		return book.Book{}, err
 	}
 	if s.books != nil {
-		if err := s.books.Save(ctx, &b); err != nil {
+		// 信息刷新只写信息列，避免整行写覆盖阅读进度（dur_*）等无关列。
+		if err := s.books.UpdateInfo(ctx, &b); err != nil {
 			return book.Book{}, err
 		}
 	}

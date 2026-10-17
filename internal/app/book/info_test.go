@@ -536,6 +536,11 @@ func (r *fakeBookRepo) Save(ctx context.Context, b *domainbook.Book) error {
 	r.saved = &copy
 	return nil
 }
+
+// UpdateInfo 与 Save 等价记录：fake 仓库不区分列级更新。
+func (r *fakeBookRepo) UpdateInfo(ctx context.Context, b *domainbook.Book) error {
+	return r.Save(ctx, b)
+}
 func (r *fakeBookRepo) FindByID(ctx context.Context, id string) (*domainbook.Book, error) {
 	return nil, nil
 }

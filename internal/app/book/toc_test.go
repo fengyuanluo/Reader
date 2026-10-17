@@ -3,6 +3,8 @@ package bookapp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -543,4 +545,112 @@ func (f *rendezvousTocFetcher) Fetch(ctx context.Context, req fetch.Request) (*f
 	}
 	copy := resp
 	return &copy, nil
+}
+
+// 目录多分页中单个分页失败时目录不完整，RefreshToc 返回错误，
+// 库内旧目录不会被残缺结果覆盖（C-016 同类修复）。
+func TestTocServiceFailsAndKeepsExistingChaptersWhenNextPageFails(t *testing.T) {
+	src := testTocSource()
+	book := testTocBook()
+	existing := []*domainbook.BookChapter{
+		{Index: 0, Title: "旧章节", URL: "https://site.example.test/c/old"},
+	}
+	repo := &fakeChapterRepo{saved: existing}
+	failing := &failingTocFetcher{pages: map[string]fetch.Response{
+		book.TocURL:                       {URL: book.TocURL, Body: []byte(`<html><body><ul><li class="chapter"><a class="name" href="/c/1">第一章</a></li></ul><a class="next" href="/toc/2">n</a><a class="next" href="/toc/3">n</a></body></html>`)},
+		"https://site.example.test/toc/2": {URL: "https://site.example.test/toc/2", Body: []byte(`<html><body><ul><li class="chapter"><a class="name" href="/c/2">第二章</a></li></ul></body></html>`)},
+	}, fail: "https://site.example.test/toc/3"}
+	service := NewTocService(repo, failing, nil)
+
+	got, err := service.RefreshToc(context.Background(), TocInput{Source: src, Book: book})
+	if err == nil {
+		t.Fatalf("RefreshToc() error = nil, want incomplete toc error; chapters = %#v", got)
+	}
+	var incomplete *incompleteTocError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("error = %v, want *incompleteTocError", err)
+	}
+	if len(repo.saved) != len(existing) {
+		t.Fatalf("saved chapters = %#v, want existing %d chapters kept", repo.saved, len(existing))
+	}
+}
+
+// 首页本身失败（如 HTTP 500）时目录不完整，RefreshToc 返回错误，
+// 库内旧目录不会被残缺结果覆盖（C-016 同类修复）。
+func TestTocServiceFailsAndKeepsExistingChaptersWhenFirstPageFails(t *testing.T) {
+	src := testTocSource()
+	book := testTocBook()
+	existing := []*domainbook.BookChapter{
+		{Index: 0, Title: "旧章节", URL: "https://site.example.test/c/old"},
+	}
+	repo := &fakeChapterRepo{saved: existing}
+	failing := &failingTocFetcher{pages: map[string]fetch.Response{}, fail: book.TocURL}
+	service := NewTocService(repo, failing, nil)
+
+	_, err := service.RefreshToc(context.Background(), TocInput{Source: src, Book: book})
+	if err == nil {
+		t.Fatalf("RefreshToc() error = nil, want error")
+	}
+	if len(repo.saved) != len(existing) {
+		t.Fatalf("saved chapters = %#v, want existing %d chapters kept", repo.saved, len(existing))
+	}
+}
+
+// 分页数超过 maxTocPages 上限被截断时目录不完整，RefreshToc 返回 ErrTocPaginationLimit，
+// 库内旧目录不会被残缺结果覆盖（C-016 同类修复）。
+func TestTocServiceFailsAndKeepsExistingChaptersWhenPaginationExceedsLimit(t *testing.T) {
+	src := testTocSource()
+	book := testTocBook()
+	existing := []*domainbook.BookChapter{
+		{Index: 0, Title: "旧章节", URL: "https://site.example.test/c/old"},
+	}
+	repo := &fakeChapterRepo{saved: existing}
+	// 每页都有指向下一页的 nextTocURL，页数远超 maxTocPages=100，触发截断。
+	pageHTML := func(n int) string {
+		return fmt.Sprintf(`<html><body><ul><li class="chapter"><a class="name" href="/c/%d">第%d章</a></li></ul><a class="next" href="/toc/%d">n</a></body></html>`, n, n, n+1)
+	}
+	fetcher := &selfReferencingTocFetcher{page: pageHTML}
+	service := NewTocService(repo, fetcher, nil)
+
+	_, err := service.RefreshToc(context.Background(), TocInput{Source: src, Book: book})
+	if !errors.Is(err, ErrTocPaginationLimit) {
+		t.Fatalf("error = %v, want ErrTocPaginationLimit", err)
+	}
+	if len(repo.saved) != len(existing) {
+		t.Fatalf("saved chapters = %#v, want existing %d chapters kept", repo.saved, len(existing))
+	}
+}
+
+// selfReferencingTocFetcher 对任意 /toc/<n> 返回带 next 链接的页面。
+type selfReferencingTocFetcher struct {
+	page func(n int) string
+}
+
+func (f *selfReferencingTocFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
+	const prefix = "https://site.example.test/toc/"
+	if !strings.HasPrefix(req.URL, prefix) {
+		return &fetch.Response{URL: req.URL}, nil
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(req.URL, prefix))
+	if err != nil {
+		return &fetch.Response{URL: req.URL}, nil
+	}
+	return &fetch.Response{URL: req.URL, Body: []byte(f.page(n))}, nil
+}
+
+// failingTocFetcher 对 fail 指定的 URL 返回错误，其余走 pages。
+type failingTocFetcher struct {
+	pages map[string]fetch.Response
+	fail  string
+}
+
+func (f *failingTocFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
+	if req.URL == f.fail {
+		return nil, errors.New("boom")
+	}
+	if resp, ok := f.pages[req.URL]; ok {
+		copy := resp
+		return &copy, nil
+	}
+	return &fetch.Response{URL: req.URL}, nil
 }

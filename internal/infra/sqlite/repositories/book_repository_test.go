@@ -207,3 +207,67 @@ func testBook(bookURL string) *book.Book {
 		LatestChapterTitle: "c1",
 	}
 }
+
+// UpdateInfo 只更新信息列：阅读进度（dur_*）与自定义列不被信息刷新覆盖（C-019）。
+func TestBookRepositoryUpdateInfoKeepsProgressColumns(t *testing.T) {
+	db := openRepoTestDB(t)
+	books := NewBookRepository(db)
+	ctx := context.Background()
+	b := &book.Book{BookURL: "https://site.example.test/book/1", TocURL: "https://site.example.test/book/1/toc", Name: "旧名", Author: "甲", Origin: "https://site.example.test/source"}
+	if err := books.Save(ctx, b); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if err := books.SaveProgress(ctx, bookIDFromURL(b.BookURL), book.BookProgress{DurChapterTitle: "第十章", DurChapterIndex: 9, DurChapterPos: 100, DurChapterTime: 123}); err != nil {
+		t.Fatalf("SaveProgress() error = %v", err)
+	}
+	updated := &book.Book{
+		BookURL: b.BookURL, Name: "新名", Author: "乙", Origin: b.Origin,
+		Intro: "新简介", TotalChapterNum: 1200, LatestChapterTitle: "终章",
+		InfoHTML: "<html>info</html>", TocHTML: "<html>toc</html>",
+	}
+	if err := books.UpdateInfo(ctx, updated); err != nil {
+		t.Fatalf("UpdateInfo() error = %v", err)
+	}
+	got, err := books.FindByID(ctx, bookIDFromURL(b.BookURL))
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if got.Name != "新名" || got.Intro != "新简介" || got.TotalChapterNum != 1200 || got.InfoHTML != "<html>info</html>" {
+		t.Fatalf("info columns not updated: %+v", got)
+	}
+	if got.DurChapterTitle != "第十章" || got.DurChapterIndex != 9 || got.DurChapterPos != 100 {
+		t.Fatalf("progress columns overwritten by UpdateInfo: %+v", got)
+	}
+}
+
+// 章节批量写失败时回滚：事务内 DELETE 不生效，旧章节保留（C-017）。
+func TestReplaceByBookRollsBackOnInvalidChapter(t *testing.T) {
+	ctx := context.Background()
+	db := openRepoTestDB(t)
+	books := NewBookRepository(db)
+	chapters := NewChapterRepository(db)
+	b := testBook("https://example.test/book/1")
+	if err := books.Save(ctx, b); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	bookID := bookIDFromURL(b.BookURL)
+	if err := chapters.ReplaceByBook(ctx, bookID, []*book.BookChapter{
+		{BookURL: "https://example.test/book/1", URL: "https://example.test/c/1", Title: "c1", Index: 0},
+	}); err != nil {
+		t.Fatalf("initial ReplaceByBook() error = %v", err)
+	}
+	// 无效章节（负 index）触发 Validate 失败，事务回滚。
+	err := chapters.ReplaceByBook(ctx, bookID, []*book.BookChapter{
+		{BookURL: b.BookURL, URL: "https://example.test/c/2", Title: "c2", Index: -1},
+	})
+	if err == nil {
+		t.Fatal("ReplaceByBook() error = nil, want validation failure")
+	}
+	list, err2 := chapters.ListByBook(ctx, bookID)
+	if err2 != nil {
+		t.Fatalf("ListByBook() error = %v", err2)
+	}
+	if len(list) != 1 || list[0].Title != "c1" {
+		t.Fatalf("chapters after rollback = %#v, want old chapter kept", list)
+	}
+}

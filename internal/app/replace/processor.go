@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 
 	"reader/internal/domain/book"
 	"reader/internal/domain/replace"
@@ -14,9 +15,31 @@ import (
 
 const paragraphIndent = "　　"
 
+// ruleSnapshot 是替换规则集的进程内快照缓存；Processor 为进程级共享实例，
+// 规则改动时失效，保证“用户改规则后下次命令生效”。
+type ruleSnapshot struct {
+	titleRules   []*replace.ReplaceRule
+	contentRules []*replace.ReplaceRule
+}
+
 type Processor struct {
 	repo    replace.ReplaceRuleRepository
 	options ProcessorOptions
+	cache   *sync.Map // map[replaceRuleScope]ruleSnapshot，进程生命周期内有效
+}
+
+// replaceRuleScope 是规则快照缓存键：规则集随书籍名称与来源变化。
+type replaceRuleScope struct {
+	bookName string
+	origin   string
+}
+
+// InvalidateRuleCache 清空规则快照缓存：规则增删改后调用，保证下次 Process 重新读库。
+func (p *Processor) InvalidateRuleCache() {
+	p.cache.Range(func(key, _ any) bool {
+		p.cache.Delete(key)
+		return true
+	})
 }
 
 type ProcessorOptions struct {
@@ -38,7 +61,7 @@ type ProcessResult struct {
 }
 
 func NewProcessor(repo replace.ReplaceRuleRepository) *Processor {
-	return &Processor{repo: repo}
+	return &Processor{repo: repo, cache: &sync.Map{}}
 }
 
 func (p *Processor) WithOptions(options ProcessorOptions) *Processor {
@@ -46,12 +69,27 @@ func (p *Processor) WithOptions(options ProcessorOptions) *Processor {
 	return p
 }
 
-func (p *Processor) Process(ctx context.Context, input ProcessInput) (ProcessResult, error) {
-	titleRules, err := p.repo.FindEnabledByTitleScope(ctx, input.Book.Name, input.Book.Origin)
-	if err != nil {
-		return ProcessResult{}, err
+// ruleSet 读取（带进程内快照缓存）指定 scope 的启用规则集；规则缓存命中时不访问仓库。
+func (p *Processor) ruleSet(ctx context.Context, scope replaceRuleScope) ([]*replace.ReplaceRule, []*replace.ReplaceRule, error) {
+	if cached, ok := p.cache.Load(scope); ok {
+		snapshot := cached.(ruleSnapshot)
+		return snapshot.titleRules, snapshot.contentRules, nil
 	}
-	contentRules, err := p.repo.FindEnabledByContentScope(ctx, input.Book.Name, input.Book.Origin)
+	titleRules, err := p.repo.FindEnabledByTitleScope(ctx, scope.bookName, scope.origin)
+	if err != nil {
+		return nil, nil, err
+	}
+	contentRules, err := p.repo.FindEnabledByContentScope(ctx, scope.bookName, scope.origin)
+	if err != nil {
+		return nil, nil, err
+	}
+	p.cache.Store(scope, ruleSnapshot{titleRules: titleRules, contentRules: contentRules})
+	return titleRules, contentRules, nil
+}
+
+func (p *Processor) Process(ctx context.Context, input ProcessInput) (ProcessResult, error) {
+	scope := replaceRuleScope{bookName: input.Book.Name, origin: input.Book.Origin}
+	titleRules, contentRules, err := p.ruleSet(ctx, scope)
 	if err != nil {
 		return ProcessResult{}, err
 	}
@@ -153,6 +191,7 @@ func removeRepeatedTitle(content string, bookName string, title string) (string,
 		return content, false
 	}
 	pattern := `^(\s|\p{P}|` + regexp.QuoteMeta(bookName) + `)*` + titlePattern(title) + `(\s)*`
+	// pattern 内嵌逐章唯一的标题，命中率≈0：直接编译，避免冲刷 infra/rule/regex 的共享 LRU。
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return content, false

@@ -24,6 +24,8 @@ var migrations = []migration{
 	{version: 6, name: "books legado metadata columns", apply: addBookLegadoColumns},
 	// 版本 7：补齐书源与校验条目的新增列；旧库只有版本 1 的建表结果，缺这些列。
 	{version: 7, name: "book source and check item columns", apply: addExtraColumns},
+	// 版本 8：cache_entries 按 owner（book）删除正文缓存走 owner 索引，避免全表扫描。
+	{version: 8, name: "cache entries owner index", apply: execSQL(`CREATE INDEX IF NOT EXISTS idx_cache_entries_owner ON cache_entries(owner_type, owner_id)`)},
 }
 
 // Migrate 把数据库升级到最新版本。连接级 PRAGMA（外键、busy_timeout、WAL）由 Open 通过 DSN 设置。

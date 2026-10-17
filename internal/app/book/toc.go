@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	sourceapp "reader/internal/app/source"
 	"reader/internal/domain/book"
@@ -22,9 +23,16 @@ import (
 // Reader 保守取 8，避免同时打满单个书源站点。
 const tocPageConcurrency = 8
 
+// maxTocPages 是单次目录刷新的分页抓取上限；异常书源的 nextTocURL 可能自引用，
+// 不加上限会静默无限抓取，超限时截断并记录 warning。
+const maxTocPages = 100
+
 var (
 	ErrTocRuleMissing = errors.New("ruleToc is required")
 	ErrTocEmpty       = errors.New("toc_empty")
+	// ErrTocPaginationLimit 表示单次目录刷新的分页数超过 maxTocPages 被截断；
+	// 此时目录不完整，调用方必须保留库内旧目录，不能用残缺结果整体替换。
+	ErrTocPaginationLimit = errors.New("toc pagination exceeded limit, keeping existing chapters")
 )
 
 type TocInput struct {
@@ -98,6 +106,14 @@ func (s *TocService) RefreshToc(ctx context.Context, input TocInput) ([]*book.Bo
 	return chapters, nil
 }
 
+// incompleteTocError 汇总并发分页阶段的失败；任何一个分页失败都意味着目录不完整，
+// 调用方必须保留库内旧目录，不能用残缺结果整体替换（C-016 同类修复）。
+type incompleteTocError struct{ failures []string }
+
+func (e *incompleteTocError) Error() string {
+	return "toc page(s) failed, keeping existing chapters: " + strings.Join(e.failures, "; ")
+}
+
 func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, b *book.Book, baseURL string, redirectURL string, body string) ([]*book.BookChapter, error) {
 	tocRule := src.RuleToc.Value
 	listRule, reverse := normalizeTocListRule(tocRule.ChapterList)
@@ -109,6 +125,10 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 	for len(nextURLs) == 1 {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if len(seenPages) >= maxTocPages {
+			slog.Warn("toc pagination exceeded limit, keeping existing chapters", "source", src.BookSourceURL, "limit", maxTocPages)
+			return nil, ErrTocPaginationLimit
 		}
 		next := nextURLs[0]
 		if next == "" {
@@ -153,27 +173,46 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 		}
 		// 对齐 Legado BookChapterList.kt:101-113：多分页并发抓取，章节按规则返回顺序拼接。
 		// 每个分页用 book 快照，避免脚本并发写书变量造成数据竞争。
+		// 分页失败会收集起来：目录不完整时不能覆盖库内目录（见 RefreshToc）。
+		var mu sync.Mutex
+		var failures []string
+		recordFailure := func(stage string, target string, err error) {
+			mu.Lock()
+			failures = append(failures, stage+" "+target+": "+err.Error())
+			mu.Unlock()
+			slog.Warn("toc page "+stage+" failed", "source", src.BookSourceURL, "url", target, "error", err)
+		}
 		pageChapters, err := concurrency.Map(ctx, tocPageConcurrency, targets, func(ctx context.Context, _ int, target string) ([]*book.BookChapter, error) {
 			req, err := buildBookFetchRequest(ctx, target, src, b, s.script)
 			if err != nil {
-				return nil, err
+				recordFailure("fetch", target, err)
+				return nil, nil
 			}
 			resp, err := executeBookFetchRequest(ctx, s.fetcher, req, src, b, s.script)
 			if err != nil {
-				return nil, err
+				recordFailure("fetch", target, err)
+				return nil, nil
 			}
 			if s.script != nil {
 				resp, err = sourceapp.NewScriptIntegration(s.script).LoginCheck(ctx, src, resp)
 				if err != nil {
-					return nil, err
+					recordFailure("login check", target, err)
+					return nil, nil
 				}
 			}
 			pageBook := *b
 			parsed, _, err := parseTocPage(ctx, src, &pageBook, target, resp.URL, string(resp.Body), listRule, false, s.script)
-			return parsed, err
+			if err != nil {
+				recordFailure("parse", target, err)
+				return nil, nil
+			}
+			return parsed, nil
 		})
 		if err != nil {
 			return nil, err
+		}
+		if len(failures) > 0 {
+			return nil, &incompleteTocError{failures: failures}
 		}
 		for _, page := range pageChapters {
 			chapters = append(chapters, page...)

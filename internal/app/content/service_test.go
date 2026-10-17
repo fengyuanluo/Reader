@@ -10,6 +10,7 @@ import (
 	replaceapp "reader/internal/app/replace"
 	"reader/internal/domain/book"
 	"reader/internal/domain/replace"
+	"reader/internal/domain/fetch"
 	"reader/internal/domain/rule"
 	"reader/internal/domain/source"
 	"reader/internal/infra/script"
@@ -141,4 +142,63 @@ func newTestProcessor() *replaceapp.Processor {
 	return replaceapp.NewProcessor(&fakeContentReplaceRepo{
 		content: []*replace.ReplaceRule{{ID: 10, Name: "ad", Pattern: "广告", Replacement: "", IsEnabled: true, ScopeContent: true}},
 	})
+}
+
+// GetChapterContentWith 不访问 books/chapters 表（C-009/C-010）：缓存命中时不抓网，
+// 未命中时抓取并落库；下载与探测热路径专用。
+func TestGetChapterContentWithCacheHitSkipsNetwork(t *testing.T) {
+	ctx := context.Background()
+	db := openContentTestDB(t)
+	books := repositories.NewBookRepository(db)
+	chapters := repositories.NewChapterRepository(db)
+	sources := repositories.NewBookSourceRepository(db)
+
+	src := &source.BookSource{
+		SourceID:       "src-content",
+		BookSourceURL:  "https://site.example.test/source",
+		BookSourceName: "Source",
+		Enabled:        true,
+		RuleContent:    rule.Flexible[rule.ContentRule]{Value: &rule.ContentRule{Content: ".content@text"}},
+	}
+	if err := sources.Save(ctx, src); err != nil {
+		t.Fatalf("save source: %v", err)
+	}
+	bookValue := book.Book{BookURL: "https://site.example.test/book/1", Origin: src.BookSourceURL, OriginName: src.BookSourceName, Name: "斗破苍穹"}
+	bookID := book.IDFromURL(bookValue.BookURL)
+	chapter := book.BookChapter{BookURL: bookValue.BookURL, URL: "https://site.example.test/c/1", Title: "第一章", BaseURL: "https://site.example.test/toc/1", Index: 0}
+	nextChapter := book.BookChapter{BookURL: bookValue.BookURL, URL: "https://site.example.test/c/2", Title: "第二章", BaseURL: "https://site.example.test/toc/1", Index: 1}
+
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		"https://site.example.test/c/1": {URL: "https://site.example.test/c/1", Body: []byte(`<html><body><h1>正文标题</h1><div class="content"><p>第一段</p><p>广告</p></div></body></html>`)},
+	}}
+	service := NewService(chapters, fetcher, nil)
+	app := NewAppService(books, chapters, sources, service)
+
+	// 未命中：抓取并写入缓存。
+	got, err := app.GetChapterContentWith(ctx, src, bookValue, chapter, nextChapter.URL)
+	if err != nil {
+		t.Fatalf("GetChapterContentWith() cache miss error = %v", err)
+	}
+	if fetcher.calls != 1 {
+		t.Fatalf("fetcher calls = %d, want 1 on cache miss", fetcher.calls)
+	}
+	if _, ok, err := chapters.GetContent(ctx, bookID, 0); err != nil || !ok {
+		t.Fatalf("content not cached after miss: ok=%v err=%v", ok, err)
+	}
+
+	// 命中：不再抓网。
+	got, err = app.GetChapterContentWith(ctx, src, bookValue, chapter, nextChapter.URL)
+	if err != nil {
+		t.Fatalf("GetChapterContentWith() cache hit error = %v", err)
+	}
+	if fetcher.calls != 1 {
+		t.Fatalf("fetcher calls = %d after cache hit, want 1 (no network)", fetcher.calls)
+	}
+	if got.Content == "" {
+		t.Fatal("cache hit returned empty content")
+	}
+	// 命中返回的章节与传入章节一致。
+	if got.Chapter.Index != chapter.Index {
+		t.Fatalf("chapter index = %d, want %d", got.Chapter.Index, chapter.Index)
+	}
 }

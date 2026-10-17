@@ -28,13 +28,19 @@ func (r *ChapterRepository) ReplaceByBook(ctx context.Context, bookID string, ch
 	if _, err := tx.ExecContext(ctx, `DELETE FROM chapters WHERE book_id = ?`, bookID); err != nil {
 		return err
 	}
+	// INSERT 在循环外 PrepareContext 一次，循环内复用；章节量上千时省去逐行编译开销。
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO chapters(book_id, book_url, url, title, is_volume, base_url, chapter_index, is_vip, is_pay, resource_url, tag, word_count, variable)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
 	for _, chapter := range chapters {
 		if err := chapter.Validate(); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO chapters(book_id, book_url, url, title, is_volume, base_url, chapter_index, is_vip, is_pay, resource_url, tag, word_count, variable)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		if _, err := stmt.ExecContext(ctx,
 			bookID, chapter.BookURL, chapter.URL, chapter.Title, boolInt(chapter.IsVolume), nullable(chapter.BaseURL), chapter.Index, boolInt(chapter.IsVIP), boolInt(chapter.IsPay), nullable(chapter.ResourceURL), nullable(chapter.Tag), nullable(chapter.WordCount), nullable(chapter.Variable)); err != nil {
 			return err
 		}

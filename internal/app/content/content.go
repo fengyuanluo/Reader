@@ -26,10 +26,17 @@ import (
 // Reader 保守取 8，避免同时打满单个书源站点。
 const pageConcurrency = 8
 
+// maxContentPages 是单章正文分页抓取的页数上限；异常书源的 nextTocURL 可能自引用，
+// 不加上限会静默无限抓取，超限时截断并记录 warning。
+const maxContentPages = 100
+
 var (
 	ErrContentRuleMissing            = errors.New("ruleContent is required")
 	ErrContentEmpty                  = errors.New("content_empty")
 	ErrUnsupportedContentBrowserFlow = errors.New("content sourceRegex requires unsupported browser flow")
+	// ErrPaginationTruncated 表示单章分页超过 maxContentPages 上限（异常书源自引用），
+	// 整章未完整抓取即失败：不写缓存，避免残缺正文被永久缓存。
+	ErrPaginationTruncated = errors.New("content pagination exceeded limit")
 )
 
 var (
@@ -53,6 +60,9 @@ type Input struct {
 	// SkipCache 为真时不写入正文缓存，对应 Legado WebBook.getContent(needSave=false)：
 	// 调试等一次性抓取不应污染真实阅读缓存。
 	SkipCache bool
+	// CacheLookupDone 为真表示调用方已确认缓存未命中，内部不再重复查缓存，
+	// 但抓取成功后仍照旧写入缓存；下载与探测热路径专用。
+	CacheLookupDone bool
 }
 
 type Result struct {
@@ -105,7 +115,7 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 	}
 	bookID := book.IDFromURL(bookValue.BookURL)
 	originalTitle := chapter.Title
-	if s.chapters != nil {
+	if s.chapters != nil && !input.CacheLookupDone {
 		if cached, ok, err := s.chapters.GetContent(ctx, bookID, chapter.Index); err != nil {
 			return Result{}, err
 		} else if ok {
@@ -214,6 +224,11 @@ func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *
 	pages := []string{content}
 	seen := map[string]struct{}{redirectURL: {}}
 	for len(nextURLs) == 1 {
+		if len(pages) >= maxContentPages {
+			slog.WarnContext(ctx, "content pagination exceeded limit, failing chapter",
+				"source_id", src.BookSourceURL, "limit", maxContentPages)
+			return "", ErrPaginationTruncated
+		}
 		next := strings.TrimSpace(nextURLs[0])
 		if next == "" {
 			break
@@ -254,15 +269,19 @@ func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *
 		}
 		// 对齐 Legado BookContent.kt:103-130：多页并发抓取，结果按规则返回顺序拼接。
 		// 每个分页用 book/chapter 快照，避免并发解析时脚本写变量造成数据竞争。
+		// 单个分页失败即整章失败：不写缓存、向上报错，避免残缺正文被当作成功持久化，
+		// 下次命中缓存后永远不会再重抓。首页失败同样由上方直接返回错误。
 		pageContents, err := concurrency.Map(ctx, pageConcurrency, targets, func(ctx context.Context, _ int, target string) (string, error) {
 			pageBook := *b
 			pageChapter := *chapter
 			resp, err := s.fetchPage(ctx, src, &pageBook, &pageChapter, target, nextChapterURL)
 			if err != nil {
+				slog.WarnContext(ctx, "content page fetch failed", "source_id", src.BookSourceURL, "url", target, "error", err)
 				return "", err
 			}
 			pageContent, _, err := s.parsePage(ctx, src, &pageBook, &pageChapter, target, resp.URL, string(resp.Body), false, nextChapterURL)
 			if err != nil {
+				slog.WarnContext(ctx, "content page parse failed", "source_id", src.BookSourceURL, "url", target, "error", err)
 				return "", err
 			}
 			return pageContent, nil

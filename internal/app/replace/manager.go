@@ -8,10 +8,24 @@ import (
 
 type Manager struct {
 	repo replace.ReplaceRuleRepository
+	// onChanged 在规则创建/更新/删除成功后触发，用于让进程内规则快照缓存失效。
+	onChanged func()
 }
 
 func NewManager(repo replace.ReplaceRuleRepository) *Manager {
 	return &Manager{repo: repo}
+}
+
+// WithChangedCallback 注册规则变更回调（见 InvalidateRuleCache）。
+func (m *Manager) WithChangedCallback(fn func()) *Manager {
+	m.onChanged = fn
+	return m
+}
+
+func (m *Manager) notifyChanged() {
+	if m.onChanged != nil {
+		m.onChanged()
+	}
 }
 
 func (m *Manager) List(ctx context.Context, filter replace.ReplaceRuleFilter) ([]*replace.ReplaceRule, int, error) {
@@ -35,6 +49,7 @@ func (m *Manager) Create(ctx context.Context, rule *replace.ReplaceRule) (*repla
 	if err := m.repo.Save(ctx, rule); err != nil {
 		return nil, err
 	}
+	m.notifyChanged()
 	return m.repo.FindByID(ctx, rule.ID)
 }
 
@@ -48,11 +63,16 @@ func (m *Manager) Update(ctx context.Context, id int64, rule *replace.ReplaceRul
 	if err := m.repo.Save(ctx, rule); err != nil {
 		return nil, err
 	}
+	m.notifyChanged()
 	return m.repo.FindByID(ctx, id)
 }
 
 func (m *Manager) Delete(ctx context.Context, id int64) error {
-	return m.repo.Delete(ctx, id)
+	if err := m.repo.Delete(ctx, id); err != nil {
+		return err
+	}
+	m.notifyChanged()
+	return nil
 }
 
 func (m *Manager) Test(ctx context.Context, rule replace.ReplaceRule, text string) (string, error) {

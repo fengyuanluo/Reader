@@ -45,7 +45,16 @@ ON CONFLICT(cache_key) DO UPDATE SET value = excluded.value, content_type = excl
 }
 
 // DeleteExpired 删除已过期的图片缓存；expires_at 为空的是引入 TTL 之前写入的旧条目，一并视为过期。
+// 先用 LIMIT 1 短路查询：无过期条目时避免执行 DELETE 的写事务开销（启动清理热路径）。
 func (r *ImageCacheRepository) DeleteExpired(ctx context.Context) (int64, error) {
+	var exists int
+	if err := r.db.QueryRowContext(ctx, `SELECT 1 FROM cache_entries
+WHERE namespace = 'image' AND (expires_at IS NULL OR expires_at <= datetime('now')) LIMIT 1`).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
 	res, err := r.db.ExecContext(ctx, `DELETE FROM cache_entries
 WHERE namespace = 'image' AND (expires_at IS NULL OR expires_at <= datetime('now'))`)
 	if err != nil {

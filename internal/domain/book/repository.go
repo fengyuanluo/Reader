@@ -19,6 +19,9 @@ type BookProgress struct {
 
 type BookRepository interface {
 	Save(ctx context.Context, book *Book) error
+	// UpdateInfo 只更新书籍信息刷新（RefreshInfo）需要写入的列，避免 RefreshInfo
+	// 路径上的重复整行写覆盖阅读进度等无关列。
+	UpdateInfo(ctx context.Context, book *Book) error
 	FindByID(ctx context.Context, id string) (*Book, error)
 	FindByURL(ctx context.Context, bookURL string) (*Book, error)
 	List(ctx context.Context, filter BookFilter) ([]*Book, int, error)

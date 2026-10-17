@@ -69,6 +69,32 @@ func (r *BookRepository) Save(ctx context.Context, b *book.Book) error {
 	return err
 }
 
+// UpdateInfo 只更新书籍信息刷新（RefreshInfo）需要写入的列，避免 RefreshInfo 路径上的
+// 重复整行写覆盖阅读进度等无关列；行不存在时不创建。
+func (r *BookRepository) UpdateInfo(ctx context.Context, b *book.Book) error {
+	result, err := r.db.ExecContext(ctx, `
+	UPDATE books SET
+	  toc_url = ?, origin = ?, origin_name = ?, name = ?, author = ?, kind = ?, cover_url = ?, intro = ?,
+	  type = ?, word_count = ?, latest_chapter_title = ?, total_chapter_num = ?, info_html = ?, toc_html = ?,
+	  download_urls = ?, origin_order = ?, variable = ?, updated_at = CURRENT_TIMESTAMP
+	WHERE book_url = ?`,
+		nullable(b.TocURL), nullable(b.Origin), nullable(b.OriginName), b.Name, b.Author, nullable(b.Kind),
+		nullable(b.CoverURL), nullable(b.Intro), b.Type, nullable(b.WordCount), nullable(b.LatestChapterTitle),
+		b.TotalChapterNum, nullable(b.InfoHTML), nullable(b.TocHTML), nullable(mustJSONString(b.DownloadURLs)),
+		b.OriginOrder, nullable(b.Variable), b.BookURL)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: %w", book.ErrNotFound, ErrNotFound)
+	}
+	return nil
+}
+
 func (r *BookRepository) FindByID(ctx context.Context, id string) (*book.Book, error) {
 	return scanBook(r.db.QueryRowContext(ctx, selectBookSQL+` WHERE book_id = ?`, id))
 }

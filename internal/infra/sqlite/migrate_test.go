@@ -210,3 +210,20 @@ func TestChapterIndexUniquePerBook(t *testing.T) {
 		t.Fatal("duplicate chapter index insert succeeded, want constraint error")
 	}
 }
+
+// 版本 8 迁移创建 idx_cache_entries_owner，且重复迁移幂等（C-022）。
+func TestMigrateCreatesCacheEntriesOwnerIndex(t *testing.T) {
+	db := openTestDB(t)
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	if !objectExists(t, db, "index", "idx_cache_entries_owner") {
+		t.Fatal("idx_cache_entries_owner missing")
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatalf("second Migrate() error = %v", err)
+	}
+	if !objectExists(t, db, "index", "idx_cache_entries_owner") {
+		t.Fatal("idx_cache_entries_owner missing after idempotent migrate")
+	}
+}

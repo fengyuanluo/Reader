@@ -29,6 +29,7 @@ func (s *Service) Save(ctx context.Context, b *book.Book) (*book.Book, error) {
 	if err := s.Books.Save(ctx, b); err != nil {
 		return nil, err
 	}
+	// Save 的 upsert 语义保证 book_url 不变，直接按 URL 反查 book_id 返回，省去一次读库。
 	return s.Books.FindByURL(ctx, b.BookURL)
 }
 
@@ -70,6 +71,7 @@ func (s *Service) RefreshInfo(ctx context.Context, id string) (book.Book, error)
 	if err != nil {
 		return book.Book{}, err
 	}
+	// 复用已加载的书与 source，InfoService 内部只写信息列，不再重复整行写。
 	return s.Info.RefreshInfo(ctx, InfoInput{Source: src, Book: *b, InfoHTML: b.InfoHTML, CanRename: true})
 }
 
