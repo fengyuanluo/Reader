@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	bookapp "reader/internal/app/book"
 	searchapp "reader/internal/app/search"
 	"reader/internal/bootstrap"
 	"reader/internal/domain/book"
@@ -30,9 +31,9 @@ type probeResult struct {
 	candidate fetchCandidate
 	bookID    string
 	chapters  []*book.BookChapter
-	// existed 表示这本书探测前已在书架上，未被采用时不删除。
-	existed bool
-	ok      bool
+	// book 为详情补全后的书（FetchInfo 返回值），下载阶段直接使用，不再重建。
+	book book.Book
+	ok   bool
 	// nonVolumeCount 为非卷章节数 C；contentLen 为首章正文 rune 数 L。
 	nonVolumeCount int
 	contentLen     int
@@ -152,7 +153,7 @@ func runFetch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 		if i >= *maxSources {
 			break
 		}
-		probeBook := probe.candidate.item.ToBook()
+		probeBook := probe.book
 		sections, summary := downloadChapters(ctx, rt, &probeBook, probe.bookID, probe.chapters, 0, len(probe.chapters)-1, *workers, stderr)
 		threshold := probe.nonVolumeCount * 5 / 100
 		if len(summary.Failed) <= threshold {
@@ -173,23 +174,12 @@ func runFetch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 		adoptedBookID, adoptedProbe, adoptedSect, adoptedSum = best.bookID, *best, bestSect, bestSum
 	}
 
-	// 探测时新建、最终未被采用的书删掉（按 bookID 比较，rankProbes 返回的是新切片）。
-	for i := range probes {
-		probe := &probes[i]
-		if probe.existed || probe.bookID == adoptedBookID {
-			continue
-		}
-		if err := rt.Books.Delete(ctx, probe.bookID); err != nil {
-			fmt.Fprintf(stderr, "warn: cleanup %s: %v\n", probe.bookID, err)
-		}
-	}
-
 	if ctx.Err() != nil {
 		fmt.Fprintln(stderr, "error: interrupted, export skipped")
 		return 2
 	}
 
-	b := adoptedProbe.candidate.item.ToBook()
+	b := adoptedProbe.book
 	exitCode := 0
 	if len(adoptedSum.Failed) > 0 {
 		exitCode = 2
@@ -398,47 +388,39 @@ func probeCandidates(ctx context.Context, rt *bootstrap.Runtime, candidates []fe
 	return probes
 }
 
-// probeOne 对单个候选源执行 Save → RefreshInfo → RefreshToc → 首个非卷章节正文。
+// probeOne 对单个候选源执行 FetchInfo → FetchToc → 首个非卷章节正文，全程不写书架。
 func probeOne(ctx context.Context, rt *bootstrap.Runtime, candidate fetchCandidate) probeResult {
 	start := time.Now()
 	probe := probeResult{candidate: candidate}
 	item := candidate.item
 	bookID := book.IDFromURL(item.BookURL)
 	probe.bookID = bookID
-	probe.existed = func() bool {
-		_, err := rt.Books.Get(ctx, bookID)
-		return err == nil
-	}()
 	fail := func(format string, args ...any) probeResult {
 		probe.err = fmt.Sprintf(format, args...)
 		probe.elapsed = time.Since(start)
 		return probe
 	}
-	target := item.ToBook()
-	if _, err := rt.Books.Save(ctx, &target); err != nil {
-		return fail("save: %v", err)
-	}
-	if _, err := rt.Books.RefreshInfo(ctx, bookID); err != nil {
+	src := candidate.source
+	info, err := rt.Books.FetchInfo(ctx, src, item.ToBook())
+	if err != nil {
 		return fail("refresh info: %v", err)
 	}
-	chapters, _, err := rt.Books.RefreshToc(ctx, bookID)
+	chapters, err := rt.Books.FetchToc(ctx, src, info)
 	if err != nil {
 		return fail("refresh toc: %v", err)
 	}
 	probe.chapters = chapters
-	nonVolumeIndex := -1
+	probe.book = info
 	for _, chapter := range chapters {
 		if !chapter.IsVolume {
 			probe.nonVolumeCount++
-			if nonVolumeIndex == -1 {
-				nonVolumeIndex = chapter.Index
-			}
 		}
 	}
 	if probe.nonVolumeCount == 0 {
 		return fail("no chapters")
 	}
-	result, _, err := rt.Content.GetChapterContent(ctx, bookID, nonVolumeIndex)
+	chapter, next, _ := bookapp.FirstContentChapter(chapters)
+	result, err := rt.Content.GetTransientContent(ctx, src, info, chapter, next)
 	if err != nil {
 		return fail("content: %v", err)
 	}

@@ -573,3 +573,43 @@ func TestPreviewSearchBookFromInfoWithNilSourceReturnsError(t *testing.T) {
 		t.Fatalf("PreviewSearchBookFromInfo() error = %v, want ErrBookInfoRuleMissing", err)
 	}
 }
+
+// SkipSave 对应 Legado CheckSource/Debug 的 needSave=false：详情可正常解析，但不得写 books 表。
+func TestInfoParserSkipSaveDoesNotTouchRepo(t *testing.T) {
+	src := testInfoSource()
+	repo := &fakeBookRepo{}
+	service := NewInfoService(repo, &fakeInfoFetcher{body: detailHTML(), url: "https://site.example.test/book/1"}, nil)
+
+	got, err := service.RefreshInfo(context.Background(), InfoInput{
+		Source:    src,
+		Book:      domainbook.Book{BookURL: "https://site.example.test/book/1", Origin: src.BookSourceURL, OriginName: src.BookSourceName},
+		CanRename: true,
+		SkipSave:  true,
+	})
+	if err != nil {
+		t.Fatalf("RefreshInfo() error = %v", err)
+	}
+	if got.Name != "斗破苍穹" {
+		t.Fatalf("book name = %q", got.Name)
+	}
+	if repo.saved != nil {
+		t.Fatalf("book was saved: %#v", repo.saved)
+	}
+}
+
+func TestBookServiceFetchInfoSkipsBooksTable(t *testing.T) {
+	src := testInfoSource()
+	repo := &fakeBookRepo{}
+	service := NewService(repo, nil, nil, NewInfoService(repo, &fakeInfoFetcher{body: detailHTML(), url: "https://site.example.test/book/1"}, nil), nil)
+
+	got, err := service.FetchInfo(context.Background(), src, domainbook.Book{BookURL: "https://site.example.test/book/1"})
+	if err != nil {
+		t.Fatalf("FetchInfo() error = %v", err)
+	}
+	if got.Name != "斗破苍穹" || got.TocURL != "https://site.example.test/toc/1" {
+		t.Fatalf("book = %#v", got)
+	}
+	if repo.saved != nil {
+		t.Fatalf("book was saved: %#v", repo.saved)
+	}
+}

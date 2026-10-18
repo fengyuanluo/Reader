@@ -762,6 +762,8 @@ resolve source scope
 并发与容错：
 
 - `READER_GLOBAL_CONCURRENCY` 是全局抓取并发上限，同时作为多源搜索与发现的并发度；`READER_SOURCE_CONCURRENCY` 是单源并发上限。
+- `READER_CHECK_CONCURRENCY` 是书源校验任务同时校验的书源数（默认 16）；校验使用独立的 `ratelimit.Limiter`（只保留单源上限），因此不被 `READER_GLOBAL_CONCURRENCY` 封顶。
+- 书源校验、调试与 CLI `fetch` 探测都走“只抓取解析、不落库”链路（`BookService.FetchInfo`/`FetchToc`、`contentapp.GetTransientContent`），不写 books/chapters/cache_entries。
 - 书源 `concurrentRate`（`n` 为同一源两次访问的最小毫秒间隔，`n/ms` 为窗口内次数）按 Legado `ConcurrentRateLimiter` 语义按源限流，统一由 fetcher 承担（由 `fetch.Request` 的 `SourceKey`/`ConcurrentRate`/`SkipRateLimit` 驱动），搜索、发现、详情、目录、正文与脚本请求共用同一实现，避免同一请求被双重限速；`internal/infra/ratelimit.Limiter` 只保留 `READER_GLOBAL_CONCURRENCY`/`READER_SOURCE_CONCURRENCY` 并发上限。
 - 每个源的 goroutine 有 panic 隔离：单源 panic 只转成该源的 Warning，其余源结果照常返回。
 - 无效 sourceId 转成 Warning（`source_unavailable`），不使整个请求 500。
@@ -1207,6 +1209,7 @@ READER_FETCH_MAX_REDIRECTS          默认 5
 READER_ALLOW_PRIVATE_NETWORK        默认 false
 READER_GLOBAL_CONCURRENCY           默认 8
 READER_SOURCE_CONCURRENCY           默认 2
+READER_CHECK_CONCURRENCY            默认 16
 READER_SCRIPT_TIMEOUT               默认 10s
 READER_DEBUG_BODY_LIMIT             默认 32768
 READER_CONTENT_RESEGMENT            默认 false

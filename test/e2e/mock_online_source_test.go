@@ -247,7 +247,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	contentService := contentapp.NewService(chapterRepo, httpFetcher, scriptRuntime).WithProcessor(replaceapp.NewProcessor(replaceRepo))
 	content := contentapp.NewAppService(bookRepo, chapterRepo, sourceRepo, contentService)
 	publisher := debugapp.NewPublisher(debugRepo)
-	debugFlow := debugapp.NewKeywordFlow(searcher, books, content, publisher).WithDiscovery(discovery)
+	debugFlow := debugapp.NewKeywordFlow(searcher, sourceRepo, books, content, publisher).WithDiscovery(discovery)
 	checker := checkapp.NewChecker(searcher, discovery, books, content)
 	checkRunner := checkworker.NewRunner(checkRepo, checker).WithDiagnostics(checkapp.NewDiagnosticsUpdater(sourceRepo))
 	return &e2eEnv{db: db, sources: sourceRepo, importer: importer, search: searcher, books: books, content: content, replace: replaceapp.NewManager(replaceRepo), debugRepo: debugRepo, debugFlow: debugFlow, checkRepo: checkRepo, checkRunner: checkRunner}

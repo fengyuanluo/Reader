@@ -310,7 +310,7 @@ type concurrencyTrackingContent struct {
 	peak    int
 }
 
-func (c *concurrencyTrackingContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
+func (c *concurrencyTrackingContent) GetTransientContent(ctx context.Context, src *source.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (contentapp.Result, error) {
 	c.mu.Lock()
 	c.current++
 	if c.current > c.peak {
@@ -321,7 +321,7 @@ func (c *concurrencyTrackingContent) GetChapterContent(ctx context.Context, id s
 	c.mu.Lock()
 	c.current--
 	c.mu.Unlock()
-	return contentapp.Result{Content: "正文", Chapter: book.BookChapter{Index: index}}, &book.Book{}, nil
+	return contentapp.Result{Content: "正文", Chapter: chapter}, nil
 }
 
 func (c *concurrencyTrackingContent) peakLoad() int {
@@ -352,28 +352,24 @@ func (runnerDiscovery) Categories(ctx context.Context, sourceID string) ([]disco
 
 type runnerBooks struct{}
 
-func (runnerBooks) Save(ctx context.Context, item *book.Book) (*book.Book, error) {
-	return item, nil
+func (runnerBooks) FetchInfo(ctx context.Context, src *source.BookSource, b book.Book) (book.Book, error) {
+	return book.Book{BookURL: b.BookURL, Name: b.Name, Author: b.Author}, nil
 }
 
-func (runnerBooks) RefreshInfo(ctx context.Context, id string) (book.Book, error) {
-	return book.Book{BookURL: "https://book.test/1", Name: "斗破苍穹", Author: "天蚕土豆"}, nil
-}
-
-func (runnerBooks) RefreshToc(ctx context.Context, id string) ([]*book.BookChapter, *book.Book, error) {
-	return []*book.BookChapter{{BookURL: "https://book.test/1", URL: "https://book.test/c/1", Title: "第一章", Index: 0}}, &book.Book{BookURL: "https://book.test/1"}, nil
+func (runnerBooks) FetchToc(ctx context.Context, src *source.BookSource, b book.Book) ([]*book.BookChapter, error) {
+	return []*book.BookChapter{{BookURL: b.BookURL, URL: "https://book.test/c/1", Title: "第一章", Index: 0}}, nil
 }
 
 type runnerContent struct{}
 
-func (runnerContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
-	return contentapp.Result{Content: "正文", Chapter: book.BookChapter{Index: index}}, &book.Book{}, nil
+func (runnerContent) GetTransientContent(ctx context.Context, src *source.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (contentapp.Result, error) {
+	return contentapp.Result{Content: "正文", Chapter: chapter}, nil
 }
 
 type failingRunnerContent struct{}
 
-func (failingRunnerContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
-	return contentapp.Result{}, nil, contentapp.ErrContentEmpty
+func (failingRunnerContent) GetTransientContent(ctx context.Context, src *source.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (contentapp.Result, error) {
+	return contentapp.Result{}, contentapp.ErrContentEmpty
 }
 
 type blockingRunnerContent struct {
@@ -381,11 +377,11 @@ type blockingRunnerContent struct {
 	released chan struct{}
 }
 
-func (c *blockingRunnerContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
+func (c *blockingRunnerContent) GetTransientContent(ctx context.Context, src *source.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (contentapp.Result, error) {
 	close(c.started)
 	<-ctx.Done()
 	close(c.released)
-	return contentapp.Result{}, nil, ctx.Err()
+	return contentapp.Result{}, ctx.Err()
 }
 
 type fakeCheckRepo struct {

@@ -39,6 +39,9 @@ type TocInput struct {
 	Source  *source.BookSource
 	Book    book.Book
 	TocHTML string
+	// SkipSave 为真时只抓取并解析目录，不写 chapters 表；
+	// 对应 Legado CheckSource / Debug 的 needSave=false 语义。
+	SkipSave bool
 }
 
 type TocService struct {
@@ -98,12 +101,50 @@ func (s *TocService) RefreshToc(ctx context.Context, input TocInput) ([]*book.Bo
 	if err := s.formatChapters(ctx, src, chapters); err != nil {
 		return nil, err
 	}
-	if s.chapters != nil {
+	if s.chapters != nil && !input.SkipSave {
 		if err := s.chapters.ReplaceByBook(ctx, book.IDFromURL(b.BookURL), chapters); err != nil {
 			return nil, err
 		}
 	}
 	return chapters, nil
+}
+
+// FirstContentChapter 返回第一个非卷章节及其 nextChapterURL；全是卷时取第 0 章。
+// nextChapterURL 取切片中下一章 URL，末章回退第 0 章 URL
+// （对齐 contentapp 的 GetChapterContent 与 Legado BookContent.kt:52-56）。
+func FirstContentChapter(chapters []*book.BookChapter) (book.BookChapter, string, bool) {
+	if len(chapters) == 0 {
+		return book.BookChapter{}, "", false
+	}
+	pos := -1
+	for i, chapter := range chapters {
+		if chapter == nil || chapter.IsVolume {
+			continue
+		}
+		pos = i
+		break
+	}
+	if pos == -1 {
+		// 全是卷（或全为 nil）时取第 0 章；第 0 个元素为 nil 视为无章节。
+		if chapters[0] == nil {
+			return book.BookChapter{}, "", false
+		}
+		return *chapters[0], nextChapterURLOf(chapters, 0), true
+	}
+	return *chapters[pos], nextChapterURLOf(chapters, pos), true
+}
+
+// nextChapterURLOf 取第 index 章的下一章 URL；index 越界或下一章为 nil 时回退第 0 章 URL，
+// 末章同样回退第 0 章（对齐 Legado BookContent.kt:52-56 的 nextChapterUrl 取值方式）。
+func nextChapterURLOf(chapters []*book.BookChapter, index int) string {
+	nextIndex := index + 1
+	if nextIndex < 0 || nextIndex >= len(chapters) || chapters[nextIndex] == nil {
+		nextIndex = 0
+	}
+	if chapters[nextIndex] == nil {
+		return ""
+	}
+	return chapters[nextIndex].URL
 }
 
 // incompleteTocError 汇总并发分页阶段的失败；任何一个分页失败都意味着目录不完整，

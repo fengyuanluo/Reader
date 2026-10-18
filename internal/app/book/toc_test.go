@@ -654,3 +654,122 @@ func (f *failingTocFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetc
 	}
 	return &fetch.Response{URL: req.URL}, nil
 }
+
+// SkipSave 对应 Legado CheckSource/Debug 的 needSave=false：目录可正常解析，但不得写 chapters 表。
+func TestTocServiceSkipSaveDoesNotWriteChapters(t *testing.T) {
+	src := testTocSource()
+	book := testTocBook()
+	repo := &fakeChapterRepo{}
+	service := NewTocService(repo, &fakeTocFetcher{pages: map[string]fetch.Response{
+		book.TocURL: {URL: book.TocURL, Body: []byte(tocHTML(false))},
+	}}, nil)
+
+	got, err := service.RefreshToc(context.Background(), TocInput{Source: src, Book: book, SkipSave: true})
+	if err != nil {
+		t.Fatalf("RefreshToc() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("chapters = %#v", got)
+	}
+	if len(repo.saved) != 0 || repo.bookURL != "" {
+		t.Fatalf("chapters were saved: %#v bookURL=%q", repo.saved, repo.bookURL)
+	}
+}
+
+func TestBookServiceFetchTocSkipsChaptersTable(t *testing.T) {
+	src := testTocSource()
+	book := testTocBook()
+	repo := &fakeChapterRepo{}
+	service := NewService(nil, repo, nil, nil, NewTocService(repo, &fakeTocFetcher{pages: map[string]fetch.Response{
+		book.TocURL: {URL: book.TocURL, Body: []byte(tocHTML(false))},
+	}}, nil))
+
+	got, err := service.FetchToc(context.Background(), src, book)
+	if err != nil {
+		t.Fatalf("FetchToc() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("chapters = %#v", got)
+	}
+	if len(repo.saved) != 0 {
+		t.Fatalf("chapters were saved: %#v", repo.saved)
+	}
+}
+
+func TestFirstContentChapter(t *testing.T) {
+	chapter := func(index int, url string, volume bool) *domainbook.BookChapter {
+		return &domainbook.BookChapter{Index: index, URL: url, IsVolume: volume}
+	}
+	cases := []struct {
+		name      string
+		chapters  []*domainbook.BookChapter
+		wantIndex int
+		wantNext  string
+		wantOK    bool
+	}{
+		{name: "empty", chapters: nil, wantOK: false},
+		{name: "all nil", chapters: []*domainbook.BookChapter{nil, nil}, wantOK: false},
+		{
+			name:      "first chapter is content",
+			chapters:  []*domainbook.BookChapter{chapter(0, "u0", false), chapter(1, "u1", false)},
+			wantIndex: 0,
+			wantNext:  "u1",
+			wantOK:    true,
+		},
+		{
+			name:      "skips volume chapters",
+			chapters:  []*domainbook.BookChapter{chapter(5, "v0", true), nil, chapter(6, "u6", false), chapter(7, "u7", false)},
+			wantIndex: 6,
+			wantNext:  "u7",
+			wantOK:    true,
+		},
+		{
+			name:      "only last chapter is content falls back to first url",
+			chapters:  []*domainbook.BookChapter{chapter(0, "v0", true), chapter(1, "v1", true), chapter(2, "u2", false)},
+			wantIndex: 2,
+			wantNext:  "v0",
+			wantOK:    true,
+		},
+		{
+			name:      "only volumes picks chapter zero",
+			chapters:  []*domainbook.BookChapter{chapter(0, "v0", true), chapter(1, "v1", true)},
+			wantIndex: 0,
+			wantNext:  "v1",
+			wantOK:    true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, next, ok := FirstContentChapter(tc.chapters)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if !tc.wantOK {
+				return
+			}
+			if got.Index != tc.wantIndex {
+				t.Fatalf("index = %d, want %d", got.Index, tc.wantIndex)
+			}
+			if next != tc.wantNext {
+				t.Fatalf("next = %q, want %q", next, tc.wantNext)
+			}
+		})
+	}
+}
+
+// 末章必须回退到第 0 章 URL（对齐 Legado BookContent.kt:52-56）。
+func TestFirstContentChapterLastChapterFallsBackToFirstURL(t *testing.T) {
+	chapters := []*domainbook.BookChapter{
+		{Index: 0, URL: "u0"},
+		{Index: 1, URL: "u1"},
+		{Index: 2, URL: "u2"},
+	}
+	// 把最后一章挪到首位，确保选中它时越界回退到切片第 0 个元素。
+	got, next, ok := FirstContentChapter([]*domainbook.BookChapter{chapters[2], chapters[0], chapters[1]})
+	if !ok || got.URL != "u2" {
+		t.Fatalf("ok=%v url=%q", ok, got.URL)
+	}
+	if next != "u0" {
+		t.Fatalf("next = %q, want %q", next, "u0")
+	}
+}

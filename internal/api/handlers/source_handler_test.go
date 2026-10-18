@@ -1077,13 +1077,11 @@ func TestCheckTaskEventsStreamPushesLiveEvents(t *testing.T) {
 	db := openHandlerTestDB(t)
 	sourceRepo := repositories.NewBookSourceRepository(db)
 	checkRepo := repositories.NewCheckRepository(db)
-	bookRepo := repositories.NewBookRepository(db)
-	chapterRepo := repositories.NewChapterRepository(db)
 	content := &blockingHandlerContent{started: make(chan struct{}), released: make(chan struct{})}
 	checker := checkapp.NewChecker(
 		&fakeAPISearcher{result: searchapp.MultiSearchResult{Items: []book.SearchBook{{BookURL: "https://book.test/1", Origin: "https://check.example.test", OriginName: "Check", Name: "斗破苍穹", Author: "天蚕土豆"}}}},
 		&fakeAPIDiscovery{},
-		&fakeCheckAPIBooks{bookRepo: bookRepo, chapterRepo: chapterRepo},
+		&fakeCheckAPIBooks{},
 		content,
 	)
 	events := checkapp.NewPublisher()
@@ -1279,14 +1277,14 @@ type blockingHandlerContent struct {
 	released chan struct{}
 }
 
-func (c *blockingHandlerContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
+func (c *blockingHandlerContent) GetTransientContent(ctx context.Context, src *domainsource.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (contentapp.Result, error) {
 	c.once.Do(func() { close(c.started) })
 	select {
 	case <-c.released:
 	case <-ctx.Done():
-		return contentapp.Result{}, nil, ctx.Err()
+		return contentapp.Result{}, ctx.Err()
 	}
-	return contentapp.Result{Content: "正文", Chapter: book.BookChapter{Index: index}}, &book.Book{}, nil
+	return contentapp.Result{Content: "正文", Chapter: chapter}, nil
 }
 
 func TestCheckTaskHandlersValidateAndRequireAuth(t *testing.T) {
@@ -1438,11 +1436,9 @@ func newCheckHandlerTestRouter(t *testing.T) (http.Handler, *repositories.BookSo
 	t.Helper()
 	db := openHandlerTestDB(t)
 	sourceRepo := repositories.NewBookSourceRepository(db)
-	bookRepo := repositories.NewBookRepository(db)
-	chapterRepo := repositories.NewChapterRepository(db)
 	checkRepo := repositories.NewCheckRepository(db)
 	manager := sourceapp.NewManager(sourceRepo)
-	checker := checkapp.NewChecker(&fakeAPISearcher{result: searchapp.MultiSearchResult{Items: []book.SearchBook{{BookURL: "https://book.test/1", Origin: "https://check.example.test", OriginName: "Check", Name: "斗破苍穹", Author: "天蚕土豆"}}}}, &fakeAPIDiscovery{}, &fakeCheckAPIBooks{bookRepo: bookRepo, chapterRepo: chapterRepo}, &fakeCheckAPIContent{})
+	checker := checkapp.NewChecker(&fakeAPISearcher{result: searchapp.MultiSearchResult{Items: []book.SearchBook{{BookURL: "https://book.test/1", Origin: "https://check.example.test", OriginName: "Check", Name: "斗破苍穹", Author: "天蚕土豆"}}}}, &fakeAPIDiscovery{}, &fakeCheckAPIBooks{}, &fakeCheckAPIContent{})
 	events := checkapp.NewPublisher()
 	runner := checkworker.NewRunner(checkRepo, checker).WithDiagnostics(checkapp.NewDiagnosticsUpdater(sourceRepo)).WithEvents(events)
 	checkManager := checkapp.NewManager(checkRepo, sourceRepo, runner).WithEvents(events)
@@ -1501,42 +1497,39 @@ func (s *fakeAPIDiscovery) Categories(ctx context.Context, sourceID string) ([]d
 	return []discoveryapp.Category{{Title: "玄幻", URL: "https://source.test/discovery"}}, nil
 }
 
+// fakeCheckAPIBooks 内存版书源校验书籍 fake：只抓取解析，不落库（对应 checkapp.BookService）。
 type fakeCheckAPIBooks struct {
-	bookRepo    *repositories.BookRepository
-	chapterRepo *repositories.ChapterRepository
+	info     book.Book
+	chapters []*book.BookChapter
+	infoErr  error
+	tocErr   error
 }
 
-func (b *fakeCheckAPIBooks) Save(ctx context.Context, item *book.Book) (*book.Book, error) {
-	if err := b.bookRepo.Save(ctx, item); err != nil {
-		return nil, err
+func (b *fakeCheckAPIBooks) FetchInfo(ctx context.Context, src *domainsource.BookSource, input book.Book) (book.Book, error) {
+	if b.infoErr != nil {
+		return book.Book{}, b.infoErr
 	}
-	return b.bookRepo.FindByURL(ctx, item.BookURL)
+	if b.info.Name != "" || b.info.BookURL != "" {
+		return b.info, nil
+	}
+	return book.Book{BookURL: input.BookURL, Name: input.Name, Author: input.Author}, nil
 }
 
-func (b *fakeCheckAPIBooks) RefreshInfo(ctx context.Context, id string) (book.Book, error) {
-	got, err := b.bookRepo.FindByID(ctx, id)
-	if err != nil {
-		return book.Book{}, err
+func (b *fakeCheckAPIBooks) FetchToc(ctx context.Context, src *domainsource.BookSource, input book.Book) ([]*book.BookChapter, error) {
+	if b.tocErr != nil {
+		return nil, b.tocErr
 	}
-	return *got, nil
+	if len(b.chapters) > 0 {
+		return b.chapters, nil
+	}
+	return []*book.BookChapter{{BookURL: input.BookURL, URL: "https://book.test/c/1", Title: "第一章", Index: 0}}, nil
 }
 
-func (b *fakeCheckAPIBooks) RefreshToc(ctx context.Context, id string) ([]*book.BookChapter, *book.Book, error) {
-	got, err := b.bookRepo.FindByID(ctx, id)
-	if err != nil {
-		return nil, nil, err
-	}
-	chapters := []*book.BookChapter{{BookURL: got.BookURL, URL: "https://book.test/c/1", Title: "第一章", Index: 0}}
-	if err := b.chapterRepo.ReplaceByBook(ctx, id, chapters); err != nil {
-		return nil, nil, err
-	}
-	return chapters, got, nil
-}
-
+// fakeCheckAPIContent 不落库的正文 fake：直接回显传入的章节（对应 checkapp.ContentService）。
 type fakeCheckAPIContent struct{}
 
-func (fakeCheckAPIContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
-	return contentapp.Result{Content: "正文", Chapter: book.BookChapter{Index: index}}, &book.Book{}, nil
+func (fakeCheckAPIContent) GetTransientContent(ctx context.Context, src *domainsource.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (contentapp.Result, error) {
+	return contentapp.Result{Content: "正文", Chapter: chapter}, nil
 }
 
 type fakeImageProxyFetcher struct {

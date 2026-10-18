@@ -124,6 +124,27 @@ func TestLoadReadsConcurrencyAndDropsRegexTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadReadsCheckConcurrency(t *testing.T) {
+	cfg, err := Load(FromMap(map[string]string{
+		"READER_ENV":               "test",
+		"READER_CHECK_CONCURRENCY": "24",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.CheckConcurrency != 24 {
+		t.Fatalf("CheckConcurrency = %d, want 24", cfg.CheckConcurrency)
+	}
+
+	defaultCfg, err := Load(FromMap(map[string]string{"READER_ENV": "test"}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if defaultCfg.CheckConcurrency != 16 {
+		t.Fatalf("default CheckConcurrency = %d, want 16", defaultCfg.CheckConcurrency)
+	}
+}
+
 func TestRedactedDoesNotExposeToken(t *testing.T) {
 	cfg, err := Load(FromMap(map[string]string{
 		"READER_ENV":   "production",

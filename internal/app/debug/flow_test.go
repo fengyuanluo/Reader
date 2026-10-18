@@ -10,6 +10,7 @@ import (
 	discoveryapp "reader/internal/app/discovery"
 	searchapp "reader/internal/app/search"
 	"reader/internal/domain/book"
+	"reader/internal/domain/source"
 	"reader/internal/domain/task"
 )
 
@@ -18,6 +19,7 @@ func TestKeywordFlowPublishesSearchInfoTocContentStages(t *testing.T) {
 	publisher := NewPublisher(repo)
 	flow := NewKeywordFlow(
 		&fakeDebugSearch{result: searchapp.MultiSearchResult{Items: []book.SearchBook{{BookURL: "https://book.test/1", Origin: "https://source.test", OriginName: "Source", Name: "斗破苍穹", Author: "天蚕土豆"}}}},
+		&fakeDebugSources{},
 		&fakeDebugBooks{chapters: []*book.BookChapter{{BookURL: "https://book.test/1", URL: "https://book.test/c/1", Title: "第一章", Index: 0}}},
 		&fakeDebugContent{},
 		publisher,
@@ -54,7 +56,7 @@ func TestKeywordFlowPublishesSearchInfoTocContentStages(t *testing.T) {
 
 func TestKeywordFlowPublishesFailedSearch(t *testing.T) {
 	repo := &fakeDebugRepo{}
-	flow := NewKeywordFlow(&fakeDebugSearch{}, &fakeDebugBooks{}, &fakeDebugContent{}, NewPublisher(repo))
+	flow := NewKeywordFlow(&fakeDebugSearch{}, &fakeDebugSources{}, &fakeDebugBooks{}, &fakeDebugContent{}, NewPublisher(repo))
 	err := flow.RunKeyword(context.Background(), &task.DebugSession{SessionID: "debug-empty", SourceID: "source-id"}, "missing")
 	if !errors.Is(err, ErrDebugNoSearchResult) {
 		t.Fatalf("err = %v", err)
@@ -72,7 +74,7 @@ func TestKeywordFlowPublishesFailedSearch(t *testing.T) {
 
 func TestURLFlowStartsAtContentStage(t *testing.T) {
 	repo := &fakeDebugRepo{}
-	flow := NewKeywordFlow(&fakeDebugSearch{}, &fakeDebugBooks{}, &fakeDebugContent{}, NewPublisher(repo))
+	flow := NewKeywordFlow(&fakeDebugSearch{}, &fakeDebugSources{}, &fakeDebugBooks{}, &fakeDebugContent{}, NewPublisher(repo))
 	err := flow.RunURL(context.Background(), &task.DebugSession{SessionID: "debug-content", SourceID: "source-id", Mode: task.DebugModeContentURL, URL: "https://book.test/c/1"})
 	if err != nil {
 		t.Fatalf("RunURL() error = %v", err)
@@ -91,6 +93,7 @@ func TestURLFlowRunsDiscoveryThenBookStages(t *testing.T) {
 	repo := &fakeDebugRepo{}
 	flow := NewKeywordFlow(
 		&fakeDebugSearch{},
+		&fakeDebugSources{},
 		&fakeDebugBooks{chapters: []*book.BookChapter{{BookURL: "https://book.test/2", URL: "https://book.test/c/1", Title: "第一章", Index: 0}}},
 		&fakeDebugContent{},
 		NewPublisher(repo),
@@ -110,7 +113,7 @@ func TestURLFlowContentModeUsesInMemoryChapter(t *testing.T) {
 	repo := &fakeDebugRepo{}
 	content := &fakeDebugContent{}
 	books := &fakeDebugBooks{}
-	flow := NewKeywordFlow(&fakeDebugSearch{}, books, content, NewPublisher(repo))
+	flow := NewKeywordFlow(&fakeDebugSearch{}, &fakeDebugSources{}, books, content, NewPublisher(repo))
 	err := flow.RunURL(context.Background(), &task.DebugSession{SessionID: "debug-content-memory", SourceID: "source-id", Mode: task.DebugModeContentURL, URL: "https://book.test/new-book/c/1"})
 	if err != nil {
 		t.Fatalf("RunURL() error = %v", err)
@@ -122,11 +125,8 @@ func TestURLFlowContentModeUsesInMemoryChapter(t *testing.T) {
 	if chapter.URL != "https://book.test/new-book/c/1" || chapter.Title != "调试" {
 		t.Fatalf("chapter = %#v", chapter)
 	}
-	if books.saved != 0 {
-		t.Fatalf("content_url mode saved %d books, want 0", books.saved)
-	}
-	if content.chapterQueried {
-		t.Fatalf("content_url mode queried the chapter table")
+	if len(books.fetchedInfo) != 0 || len(books.fetchedToc) != 0 {
+		t.Fatalf("content_url mode fetched info/toc: info=%d toc=%d, want 0", len(books.fetchedInfo), len(books.fetchedToc))
 	}
 }
 
@@ -136,14 +136,56 @@ func TestURLFlowContentStageSkipsVolumeChapters(t *testing.T) {
 	books := &fakeDebugBooks{chapters: []*book.BookChapter{
 		{BookURL: "https://book.test/1", URL: "第一卷", Title: "第一卷", Index: 0, IsVolume: true},
 		{BookURL: "https://book.test/1", URL: "https://book.test/c/1", Title: "第一章", Index: 1},
+		{BookURL: "https://book.test/1", URL: "https://book.test/c/2", Title: "第二章", Index: 2},
 	}}
-	flow := NewKeywordFlow(&fakeDebugSearch{}, books, content, NewPublisher(repo))
+	flow := NewKeywordFlow(&fakeDebugSearch{}, &fakeDebugSources{}, books, content, NewPublisher(repo))
 	err := flow.RunURL(context.Background(), &task.DebugSession{SessionID: "debug-toc", SourceID: "source-id", Mode: task.DebugModeTocURL, URL: "https://book.test/1"})
 	if err != nil {
 		t.Fatalf("RunURL() error = %v", err)
 	}
-	if !content.chapterQueried || content.lastIndex != 1 {
-		t.Fatalf("content index = %d, want 1 (first non-volume chapter)", content.lastIndex)
+	if len(content.transient) != 1 {
+		t.Fatalf("GetTransientContent calls = %d, want 1", len(content.transient))
+	}
+	call := content.transient[0]
+	if call.chapter.Index != 1 || call.chapter.URL != "https://book.test/c/1" {
+		t.Fatalf("chapter = %#v, want first non-volume chapter", call.chapter)
+	}
+	if call.nextChapterURL != "https://book.test/c/2" {
+		t.Fatalf("nextChapterURL = %q, want https://book.test/c/2", call.nextChapterURL)
+	}
+	if len(books.fetchedInfo) != 0 {
+		t.Fatalf("toc_url mode fetched info %d times, want 0", len(books.fetchedInfo))
+	}
+}
+
+func TestKeywordFlowContentUsesFirstNonVolumeChapter(t *testing.T) {
+	// 关键字调试成功时，content 阶段必须收到第一个非卷章节及其下一章 URL。
+	repo := &fakeDebugRepo{}
+	content := &fakeDebugContent{}
+	books := &fakeDebugBooks{chapters: []*book.BookChapter{
+		{BookURL: "https://book.test/1", URL: "第一卷", Title: "第一卷", Index: 0, IsVolume: true},
+		{BookURL: "https://book.test/1", URL: "https://book.test/c/1", Title: "第一章", Index: 1},
+		{BookURL: "https://book.test/1", URL: "https://book.test/c/2", Title: "第二章", Index: 2},
+	}}
+	flow := NewKeywordFlow(
+		&fakeDebugSearch{result: searchapp.MultiSearchResult{Items: []book.SearchBook{{BookURL: "https://book.test/1", Origin: "https://source.test", OriginName: "Source", Name: "斗破苍穹", Author: "天蚕土豆"}}}},
+		&fakeDebugSources{},
+		books,
+		content,
+		NewPublisher(repo),
+	)
+	if err := flow.RunKeyword(context.Background(), &task.DebugSession{SessionID: "debug-keyword-content", SourceID: "source-id"}, "斗破"); err != nil {
+		t.Fatalf("RunKeyword() error = %v", err)
+	}
+	if len(content.transient) != 1 {
+		t.Fatalf("GetTransientContent calls = %d, want 1", len(content.transient))
+	}
+	call := content.transient[0]
+	if call.chapter.Index != 1 || call.chapter.URL != "https://book.test/c/1" || call.chapter.IsVolume {
+		t.Fatalf("chapter = %#v, want first non-volume chapter", call.chapter)
+	}
+	if call.nextChapterURL != "https://book.test/c/2" {
+		t.Fatalf("nextChapterURL = %q, want https://book.test/c/2", call.nextChapterURL)
 	}
 }
 
@@ -162,43 +204,64 @@ func (s *fakeDebugSearch) Search(ctx context.Context, input searchapp.MultiSearc
 type fakeDebugBooks struct {
 	chapters []*book.BookChapter
 	err      error
-	saved    int
+	// fetchedInfo/fetchedToc 记录 FetchInfo/FetchToc 收到的书，供各模式断言。
+	fetchedInfo []book.Book
+	fetchedToc  []book.Book
 }
 
-func (b *fakeDebugBooks) Save(ctx context.Context, item *book.Book) (*book.Book, error) {
+func (b *fakeDebugBooks) FetchInfo(ctx context.Context, src *source.BookSource, item book.Book) (book.Book, error) {
+	b.fetchedInfo = append(b.fetchedInfo, item)
 	if b.err != nil {
-		return nil, b.err
+		return book.Book{}, b.err
 	}
-	b.saved++
 	return item, nil
 }
 
-func (b *fakeDebugBooks) RefreshInfo(ctx context.Context, id string) (book.Book, error) {
-	return book.Book{BookURL: "https://book.test/1", Name: "斗破苍穹", Author: "天蚕土豆"}, b.err
-}
-
-func (b *fakeDebugBooks) RefreshToc(ctx context.Context, id string) ([]*book.BookChapter, *book.Book, error) {
-	return b.chapters, &book.Book{BookURL: "https://book.test/1", Name: "斗破苍穹", Author: "天蚕土豆"}, b.err
+func (b *fakeDebugBooks) FetchToc(ctx context.Context, src *source.BookSource, item book.Book) ([]*book.BookChapter, error) {
+	b.fetchedToc = append(b.fetchedToc, item)
+	if b.err != nil {
+		return nil, b.err
+	}
+	return b.chapters, nil
 }
 
 type fakeDebugContent struct {
 	err error
 	// fromChapter 记录 GetContentFromChapter 收到的内存章节，供 content_url 模式断言。
 	fromChapter []book.BookChapter
-	// chapterQueried 标记是否走了需要落库章节的 GetChapterContent 路径。
-	chapterQueried bool
-	lastIndex      int
+	// transient 记录 GetTransientContent 收到的章节与 nextChapterURL，供调试链路断言。
+	transient []transientContentCall
 }
 
-func (c *fakeDebugContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
-	c.chapterQueried = true
-	c.lastIndex = index
-	return contentapp.Result{Content: "正文", Chapter: book.BookChapter{Index: index}}, &book.Book{}, c.err
+// transientContentCall 记录一次 GetTransientContent 调用的入参。
+type transientContentCall struct {
+	chapter        book.BookChapter
+	nextChapterURL string
+}
+
+func (c *fakeDebugContent) GetTransientContent(ctx context.Context, src *source.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (contentapp.Result, error) {
+	c.transient = append(c.transient, transientContentCall{chapter: chapter, nextChapterURL: nextChapterURL})
+	return contentapp.Result{Content: "正文", Chapter: chapter}, c.err
 }
 
 func (c *fakeDebugContent) GetContentFromChapter(ctx context.Context, sourceID string, b book.Book, chapter book.BookChapter) (contentapp.Result, error) {
 	c.fromChapter = append(c.fromChapter, chapter)
 	return contentapp.Result{Content: "正文", Chapter: chapter}, c.err
+}
+
+type fakeDebugSources struct {
+	src *source.BookSource
+	err error
+}
+
+func (s *fakeDebugSources) FindByID(ctx context.Context, id string) (*source.BookSource, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.src != nil {
+		return s.src, nil
+	}
+	return &source.BookSource{SourceID: id, BookSourceURL: "https://source.test", BookSourceName: "Source"}, nil
 }
 
 type fakeDebugDiscovery struct {

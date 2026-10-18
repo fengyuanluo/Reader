@@ -257,9 +257,9 @@ func TestDownloadChaptersMissingSourceFailsAll(t *testing.T) {
 	}
 }
 
-// TestFetchCleanupKeepsAdoptedNewBook 验证探测新建、最终被采用的书不被清理，
-// 未被采用的候选书被删除（C-050a 回归：rankProbes 返回新切片，指针比较永 false）。
-func TestFetchCleanupKeepsAdoptedNewBook(t *testing.T) {
+// TestFetchLeavesBookshelfUntouched 验证 fetch 全流程（探测 → 下载 → 导出）
+// 只抓取解析、不写书架：books 表保持为空，TXT 正常导出。
+func TestFetchLeavesBookshelfUntouched(t *testing.T) {
 	env := newTestEnv(t)
 	longContent := strings.Repeat("长", 250)
 	mux := http.NewServeMux()
@@ -267,7 +267,7 @@ func TestFetchCleanupKeepsAdoptedNewBook(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		src := map[string]any{
 			"bookSourceUrl":  "http://" + r.Host,
-			"bookSourceName": "Cleanup Mock Source",
+			"bookSourceName": "Transient Mock Source",
 			"bookSourceType": 0,
 			"enabled":        true,
 			"searchUrl":      "http://" + r.Host + "/search?key={{key}}&page={{page}}",
@@ -303,10 +303,10 @@ func TestFetchCleanupKeepsAdoptedNewBook(t *testing.T) {
 	env.globalConcurrency = 4
 	importMockURL(t, env, server.URL)
 
-	// 预先向搜索结果里塞一个干扰候选不可行；直接验证：fetch 全流程后，
-	// 被采用的 mock 书仍在书架，探测新建的书没有被误删。
+	// fetch 全流程（探测 → 下载 → 导出）只抓取解析，书架应零变化。
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	code := runFetch(env, []string{"斗破苍穹", "--author", "天蚕土豆", "--search-workers", "4", "--probe", "1", "--workers", "4", "--json", "--export", filepath.Join(t.TempDir(), "out.txt")}, stdout, stderr)
+	exportPath := filepath.Join(t.TempDir(), "out.txt")
+	code := runFetch(env, []string{"斗破苍穹", "--author", "天蚕土豆", "--search-workers", "4", "--probe", "1", "--workers", "4", "--json", "--export", exportPath}, stdout, stderr)
 	if code != 0 {
 		t.Fatalf("runFetch() = %d, stderr: %s", code, stderr.String())
 	}
@@ -316,8 +316,15 @@ func TestFetchCleanupKeepsAdoptedNewBook(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
 		t.Fatalf("fetch --json invalid: %v\n%s", err, stdout.String())
 	}
-	if _, err := env.rt.Books.Get(env.ctx, out.BookID); err != nil {
-		t.Fatalf("adopted book deleted: %v", err)
+	_, total, err := env.rt.Books.List(env.ctx, book.BookFilter{})
+	if err != nil {
+		t.Fatalf("Books.List: %v", err)
+	}
+	if total != 0 {
+		t.Fatalf("books total = %d, want 0 (fetch must not touch bookshelf)", total)
+	}
+	if _, err := os.Stat(exportPath); err != nil {
+		t.Fatalf("exported file missing: %v", err)
 	}
 }
 

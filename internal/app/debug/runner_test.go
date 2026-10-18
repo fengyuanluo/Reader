@@ -8,6 +8,7 @@ import (
 
 	contentapp "reader/internal/app/content"
 	"reader/internal/domain/book"
+	"reader/internal/domain/source"
 	"reader/internal/domain/task"
 )
 
@@ -98,7 +99,7 @@ func TestRunnerKeepsNewerRunCancelHandleWhenSameSessionRestarts(t *testing.T) {
 func newRunnerSession(t *testing.T, sessionID string, content ContentService, status task.DebugSessionStatus) (*fakeDebugRepo, *Runner, *task.DebugSession) {
 	t.Helper()
 	repo := &fakeDebugRepo{}
-	flow := NewKeywordFlow(&fakeDebugSearch{}, &fakeDebugBooks{}, content, NewPublisher(repo))
+	flow := NewKeywordFlow(&fakeDebugSearch{}, &fakeDebugSources{}, &fakeDebugBooks{}, content, NewPublisher(repo))
 	runner := NewRunner(flow, repo)
 	session := &task.DebugSession{SessionID: sessionID, SourceID: "source-id", Mode: task.DebugModeContentURL, Status: status, URL: "https://book.test/c/1", CreatedAt: time.Now().UTC()}
 	if err := repo.CreateSession(context.Background(), session); err != nil {
@@ -144,8 +145,8 @@ func (c *sequencedDebugContent) started(index int) chan struct{} { return c.star
 // released 返回第 index 次运行观察到上下文取消的信号通道。
 func (c *sequencedDebugContent) released(index int) chan struct{} { return c.releasedCh[index] }
 
-func (c *sequencedDebugContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
-	return contentapp.Result{}, nil, c.block(ctx)
+func (c *sequencedDebugContent) GetTransientContent(ctx context.Context, src *source.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (contentapp.Result, error) {
+	return contentapp.Result{}, c.block(ctx)
 }
 
 func (c *sequencedDebugContent) GetContentFromChapter(ctx context.Context, sourceID string, b book.Book, chapter book.BookChapter) (contentapp.Result, error) {

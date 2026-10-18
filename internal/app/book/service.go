@@ -62,6 +62,17 @@ func (s *Service) SaveProgress(ctx context.Context, id string, progress book.Boo
 	return s.Books.FindByID(ctx, id)
 }
 
+// FetchInfo 只抓取并解析详情，不读也不写 books 表（书源校验 / 调试 / fetch 探测专用，
+// 对应 Legado CheckSourceService 与 Debug 的 needSave=false）。
+func (s *Service) FetchInfo(ctx context.Context, src *source.BookSource, b book.Book) (book.Book, error) {
+	return s.Info.RefreshInfo(ctx, InfoInput{Source: src, Book: b, InfoHTML: b.InfoHTML, CanRename: true, SkipSave: true})
+}
+
+// FetchToc 只抓取并解析目录，不读也不写 chapters 表。
+func (s *Service) FetchToc(ctx context.Context, src *source.BookSource, b book.Book) ([]*book.BookChapter, error) {
+	return s.Toc.RefreshToc(ctx, TocInput{Source: src, Book: b, TocHTML: b.TocHTML, SkipSave: true})
+}
+
 func (s *Service) RefreshInfo(ctx context.Context, id string) (book.Book, error) {
 	b, err := s.Books.FindByID(ctx, id)
 	if err != nil {

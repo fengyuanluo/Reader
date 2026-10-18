@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	bookapp "reader/internal/app/book"
 	contentapp "reader/internal/app/content"
 	diagnosticapp "reader/internal/app/diagnostic"
 	discoveryapp "reader/internal/app/discovery"
@@ -51,13 +52,15 @@ type DiscoveryService interface {
 }
 
 type BookService interface {
-	Save(ctx context.Context, b *book.Book) (*book.Book, error)
-	RefreshInfo(ctx context.Context, id string) (book.Book, error)
-	RefreshToc(ctx context.Context, id string) ([]*book.BookChapter, *book.Book, error)
+	// FetchInfo / FetchToc 只抓取解析，不读写书架与章节表
+	// （对齐 Legado CheckSourceService.checkBook 的 needSave=false）。
+	FetchInfo(ctx context.Context, src *source.BookSource, b book.Book) (book.Book, error)
+	FetchToc(ctx context.Context, src *source.BookSource, b book.Book) ([]*book.BookChapter, error)
 }
 
 type ContentService interface {
-	GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error)
+	// GetTransientContent 用内存中的书/章节抓正文，不读也不写正文缓存。
+	GetTransientContent(ctx context.Context, src *source.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (contentapp.Result, error)
 }
 
 type Options struct {
@@ -144,7 +147,7 @@ func (c *Checker) CheckSource(ctx context.Context, src *source.BookSource, opts 
 				appendSkippedBookStages(item, task.CheckFlowSearch, opts, src.BookSourceType, "search returned no books")
 			} else {
 				item.Stages = append(item.Stages, passedStage(task.CheckFlowSearch, task.CheckStageSearch, stageStart))
-				_ = c.checkBook(ctx, result.Items[0].ToBook(), src.BookSourceType, task.CheckFlowSearch, opts, item)
+				_ = c.checkBook(ctx, result.Items[0].ToBook(), src, task.CheckFlowSearch, opts, item)
 			}
 		}
 	}
@@ -180,7 +183,7 @@ func (c *Checker) CheckSource(ctx context.Context, src *source.BookSource, opts 
 				appendSkippedBookStages(item, task.CheckFlowDiscovery, opts, src.BookSourceType, "discovery returned no books")
 			} else {
 				item.Stages = append(item.Stages, passedStage(task.CheckFlowDiscovery, task.CheckStageDiscovery, stageStart))
-				_ = c.checkBook(ctx, result.Items[0].ToBook(), src.BookSourceType, task.CheckFlowDiscovery, opts, item)
+				_ = c.checkBook(ctx, result.Items[0].ToBook(), src, task.CheckFlowDiscovery, opts, item)
 			}
 		}
 	}
@@ -193,31 +196,34 @@ func (c *Checker) CheckSource(ctx context.Context, src *source.BookSource, opts 
 	return item, firstErr
 }
 
-func (c *Checker) checkBook(ctx context.Context, b book.Book, sourceType int, flow task.CheckStageFlow, opts Options, item *task.CheckTaskItem) error {
+func (c *Checker) checkBook(ctx context.Context, b book.Book, src *source.BookSource, flow task.CheckStageFlow, opts Options, item *task.CheckTaskItem) error {
 	// 条目仍带链路标记：诊断分组按 Legado 语义区分“搜索目录失效”与“发现目录失效”。
 	item.Path = checkItemPath(flow)
-	saved, err := c.books.Save(ctx, &b)
-	if err != nil {
-		item.Stages = append(item.Stages, failedStage(flow, task.CheckStageInfo, time.Now(), err, FailureInfoFailed))
-		appendSkippedAfterInfo(item, flow, opts, sourceType, "book save failed")
-		return err
-	}
-	bookID := book.IDFromURL(saved.BookURL)
+	// 全链路只读：不 Save 入书架、不写章节表与正文缓存（对齐 Legado CheckSourceService.checkBook），
+	// 详情补全后的书在内存中向后传递。
+	sourceType := src.BookSourceType
+	current := b
 	if opts.CheckInfo {
 		stageStart := time.Now()
-		info, err := c.books.RefreshInfo(ctx, bookID)
-		if err != nil {
-			item.Stages = append(item.Stages, failedStage(flow, task.CheckStageInfo, stageStart, err, FailureInfoFailed))
-			appendSkippedAfterInfo(item, flow, opts, sourceType, "info failed")
-			return err
+		if strings.TrimSpace(b.TocURL) != "" && sourceType != fileSourceType {
+			// 搜索结果已带 tocUrl 时无需再抓详情（对齐 CheckSourceService.kt:207 `if (book.tocUrl.isBlank())`）。
+			item.Stages = append(item.Stages, skippedStage(flow, task.CheckStageInfo, "tocUrl provided by search result"))
+		} else {
+			info, err := c.books.FetchInfo(ctx, src, b)
+			if err != nil {
+				item.Stages = append(item.Stages, failedStage(flow, task.CheckStageInfo, stageStart, err, FailureInfoFailed))
+				appendSkippedAfterInfo(item, flow, opts, sourceType, "info failed")
+				return err
+			}
+			current = info
+			if sourceType == fileSourceType && len(info.DownloadURLs) == 0 {
+				err := errors.New("empty download urls")
+				item.Stages = append(item.Stages, failedStage(flow, task.CheckStageInfo, stageStart, err, FailureInfoFailed))
+				appendSkippedAfterInfo(item, flow, opts, sourceType, "download urls are empty")
+				return nil
+			}
+			item.Stages = append(item.Stages, passedStage(flow, task.CheckStageInfo, stageStart))
 		}
-		if sourceType == fileSourceType && len(info.DownloadURLs) == 0 {
-			err := errors.New("empty download urls")
-			item.Stages = append(item.Stages, failedStage(flow, task.CheckStageInfo, stageStart, err, FailureInfoFailed))
-			appendSkippedAfterInfo(item, flow, opts, sourceType, "download urls are empty")
-			return nil
-		}
-		item.Stages = append(item.Stages, passedStage(flow, task.CheckStageInfo, stageStart))
 	} else {
 		item.Stages = append(item.Stages, skippedStage(flow, task.CheckStageInfo, "disabled"))
 	}
@@ -232,7 +238,7 @@ func (c *Checker) checkBook(ctx context.Context, b book.Book, sourceType int, fl
 	}
 	if opts.CheckToc {
 		stageStart := time.Now()
-		chapters, _, err := c.books.RefreshToc(ctx, bookID)
+		chapters, err := c.books.FetchToc(ctx, src, current)
 		if err != nil {
 			item.Stages = append(item.Stages, failedStage(flow, task.CheckStageToc, stageStart, err, FailureTocFailed))
 			if opts.CheckContent {
@@ -251,8 +257,13 @@ func (c *Checker) checkBook(ctx context.Context, b book.Book, sourceType int, fl
 		item.Stages = append(item.Stages, passedStage(flow, task.CheckStageToc, stageStart))
 		if opts.CheckContent {
 			stageStart := time.Now()
-			index := firstContentIndex(chapters)
-			if _, _, err := c.content.GetChapterContent(ctx, bookID, index); err != nil {
+			chapter, nextChapterURL, ok := bookapp.FirstContentChapter(chapters)
+			if !ok {
+				err := errors.New("empty toc")
+				item.Stages = append(item.Stages, failedStage(flow, task.CheckStageContent, stageStart, err, FailureContentFailed))
+				return nil
+			}
+			if _, err := c.content.GetTransientContent(ctx, src, current, chapter, nextChapterURL); err != nil {
 				item.Stages = append(item.Stages, failedStage(flow, task.CheckStageContent, stageStart, err, FailureContentFailed))
 				return err
 			}
@@ -370,13 +381,4 @@ func applyStageFailures(item *task.CheckTaskItem) {
 		item.Message = stage.Message
 		return
 	}
-}
-
-func firstContentIndex(chapters []*book.BookChapter) int {
-	for _, chapter := range chapters {
-		if chapter != nil && !chapter.IsVolume {
-			return chapter.Index
-		}
-	}
-	return 0
 }

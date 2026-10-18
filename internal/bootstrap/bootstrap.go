@@ -120,8 +120,12 @@ func Open(cfg config.Config) (*Runtime, func(), error) {
 	singleSearcher := searchapp.NewSingleSourceSearcher(httpFetcher, scriptRuntime).WithLimiter(limiter)
 	multiSearcher := searchapp.NewMultiSourceSearcher(repo, singleSearcher).WithLimiter(limiter)
 	discoveryService := discoveryapp.NewService(repo, httpFetcher, scriptRuntime).WithLimiter(limiter)
-	// 书源导入/覆盖后失效探索分类缓存，避免继续返回旧分类。
-	importer.WithSavedCallback(discoveryService.InvalidateExploreKinds)
+	// 校验专用：取消全局并发上限（并发由 READER_CHECK_CONCURRENCY 控制），保留单源上限保护目标站点。
+	checkLimiter := ratelimit.New(ratelimit.Options{Source: cfg.SourceConcurrency})
+	checkSearcher := searchapp.NewMultiSourceSearcher(repo, searchapp.NewSingleSourceSearcher(httpFetcher, scriptRuntime).WithLimiter(checkLimiter)).WithLimiter(checkLimiter)
+	checkDiscovery := discoveryapp.NewService(repo, httpFetcher, scriptRuntime).WithLimiter(checkLimiter)
+	// 书源导入/覆盖后失效两份探索分类缓存（搜索/发现共用与校验专用各一份），避免继续返回旧分类。
+	importer.WithSavedCallback(func(u string) { discoveryService.InvalidateExploreKinds(u); checkDiscovery.InvalidateExploreKinds(u) })
 	infoService := bookapp.NewInfoService(bookRepo, httpFetcher, scriptRuntime)
 	tocService := bookapp.NewTocService(chapterRepo, httpFetcher, scriptRuntime)
 	bookService := bookapp.NewService(bookRepo, chapterRepo, repo, infoService, tocService)
@@ -134,10 +138,10 @@ func Open(cfg config.Config) (*Runtime, func(), error) {
 	imageProxy := contentapp.NewImageProxy(httpFetcher, repo, bookRepo, scriptRuntime).WithCache(imageCacheRepo)
 	replaceManager := replaceapp.NewManager(replaceRepo).WithChangedCallback(contentProcessor.InvalidateRuleCache)
 	debugPublisher := debugapp.NewPublisher(debugRepo)
-	debugFlow := debugapp.NewKeywordFlow(multiSearcher, bookService, contentApp, debugPublisher).WithDiscovery(discoveryService)
+	debugFlow := debugapp.NewKeywordFlow(multiSearcher, repo, bookService, contentApp, debugPublisher).WithDiscovery(discoveryService)
 	debugRunner := debugapp.NewRunner(debugFlow, debugRepo)
 	debugService := debugapp.NewService(debugRepo).WithRunner(debugRunner).WithPublisher(debugPublisher)
-	checker := checkapp.NewChecker(multiSearcher, discoveryService, bookService, contentApp)
+	checker := checkapp.NewChecker(checkSearcher, checkDiscovery, bookService, contentApp)
 	checkEvents := checkapp.NewPublisher()
 	checkRunner := checkworker.NewRunner(checkRepo, checker).WithDiagnostics(checkapp.NewDiagnosticsUpdater(repo)).WithEvents(checkEvents)
 	checkManager := checkapp.NewManager(checkRepo, repo, checkRunner).WithEvents(checkEvents)

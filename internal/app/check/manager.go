@@ -14,8 +14,8 @@ type Runner interface {
 }
 
 // DefaultConcurrency 是校验任务的默认并发上限（同时校验的书源数），
-// 装配时用 config.SourceConcurrency（READER_SOURCE_CONCURRENCY）覆盖。
-const DefaultConcurrency = 4
+// 装配时用 config.CheckConcurrency（READER_CHECK_CONCURRENCY）覆盖。
+const DefaultConcurrency = 16
 
 type Manager struct {
 	repo    task.CheckRepository

@@ -32,6 +32,7 @@ type Config struct {
 	AllowPrivateNetwork         bool
 	GlobalConcurrency           int
 	SourceConcurrency           int
+	CheckConcurrency            int
 	ScriptTimeout               time.Duration
 	DebugBodyLimit              int64
 	ContentReSegment            bool
@@ -71,6 +72,7 @@ func Load(source Source) (Config, error) {
 		AllowPrivateNetwork:         false,
 		GlobalConcurrency:           8,
 		SourceConcurrency:           2,
+		CheckConcurrency:            16,
 		ScriptTimeout:               10 * time.Second,
 		DebugBodyLimit:              32 * 1024,
 		ContentReSegment:            false,
@@ -105,6 +107,10 @@ func Load(source Source) (Config, error) {
 		return Config{}, err
 	}
 	cfg.SourceConcurrency, err = intValue(source, "READER_SOURCE_CONCURRENCY", cfg.SourceConcurrency, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.CheckConcurrency, err = intValue(source, "READER_CHECK_CONCURRENCY", cfg.CheckConcurrency, 1)
 	if err != nil {
 		return Config{}, err
 	}
@@ -152,6 +158,7 @@ func (cfg Config) Redacted() map[string]any {
 		"allowPrivateNetwork":         cfg.AllowPrivateNetwork,
 		"globalConcurrency":           cfg.GlobalConcurrency,
 		"sourceConcurrency":           cfg.SourceConcurrency,
+		"checkConcurrency":            cfg.CheckConcurrency,
 		"scriptTimeout":               cfg.ScriptTimeout.String(),
 		"debugBodyLimit":              cfg.DebugBodyLimit,
 		"contentReSegment":            cfg.ContentReSegment,

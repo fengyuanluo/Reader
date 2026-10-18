@@ -27,6 +27,9 @@ type InfoInput struct {
 	Book      book.Book
 	InfoHTML  string
 	CanRename bool
+	// SkipSave 为真时只抓取并解析详情，不写 books 表；
+	// 对应 Legado CheckSource / Debug 的 needSave=false 语义。
+	SkipSave bool
 }
 
 type InfoService struct {
@@ -80,7 +83,7 @@ func (s *InfoService) RefreshInfo(ctx context.Context, input InfoInput) (book.Bo
 	if err := parseInfo(ctx, src, &b, b.BookURL, redirectURL, body, input.CanRename, s.script); err != nil {
 		return book.Book{}, err
 	}
-	if s.books != nil {
+	if s.books != nil && !input.SkipSave {
 		// 信息刷新只写信息列，避免整行写覆盖阅读进度（dur_*）等无关列。
 		if err := s.books.UpdateInfo(ctx, &b); err != nil {
 			return book.Book{}, err

@@ -368,8 +368,11 @@ func TestDownloadExportAndCache(t *testing.T) {
 	if strings.Contains(text, "第一卷") {
 		t.Fatalf("export must not contain volume chapter:\n%s", text)
 	}
-	if !strings.Contains(stderr.String(), "[1/3] 0 第一章") {
-		t.Fatalf("progress stderr = %q", stderr.String())
+	// 进度行按完成顺序输出（并发下载），只断言每章都打印过，不锚定计数顺序。
+	for _, want := range []string{"0 第一章", "2 第二章"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("progress stderr missing %q: %q", want, stderr.String())
+		}
 	}
 
 	// 重跑：全部命中缓存，不再抓取。

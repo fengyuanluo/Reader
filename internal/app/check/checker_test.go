@@ -509,41 +509,41 @@ func (d *fakeCheckDiscovery) Categories(ctx context.Context, sourceID string) ([
 type fakeCheckBooks struct {
 	chapters  []*book.BookChapter
 	infoBook  book.Book
-	saveErr   error
 	infoErr   error
 	tocErr    error
 	infoCalls int
 	tocCalls  int
+	// 记录最后一次收到的 source/book，用于断言内存链路不再走书架。
+	gotSource *source.BookSource
+	gotBook   book.Book
 }
 
-func (b *fakeCheckBooks) Save(ctx context.Context, item *book.Book) (*book.Book, error) {
-	if b.saveErr != nil {
-		return nil, b.saveErr
-	}
-	return item, nil
-}
-
-func (b *fakeCheckBooks) RefreshInfo(ctx context.Context, id string) (book.Book, error) {
+func (b *fakeCheckBooks) FetchInfo(ctx context.Context, src *source.BookSource, item book.Book) (book.Book, error) {
 	b.infoCalls++
+	b.gotSource, b.gotBook = src, item
 	if b.infoBook.BookURL == "" {
 		b.infoBook = book.Book{BookURL: "https://book.test/1", Name: "斗破苍穹", Author: "天蚕土豆"}
 	}
 	return b.infoBook, b.infoErr
 }
 
-func (b *fakeCheckBooks) RefreshToc(ctx context.Context, id string) ([]*book.BookChapter, *book.Book, error) {
+func (b *fakeCheckBooks) FetchToc(ctx context.Context, src *source.BookSource, item book.Book) ([]*book.BookChapter, error) {
 	b.tocCalls++
-	return b.chapters, &book.Book{BookURL: "https://book.test/1", Name: "斗破苍穹", Author: "天蚕土豆"}, b.tocErr
+	b.gotSource, b.gotBook = src, item
+	return b.chapters, b.tocErr
 }
 
 type fakeCheckContent struct {
-	err   error
-	calls int
+	err         error
+	calls       int
+	chapter     book.BookChapter
+	nextChapter string
 }
 
-func (c *fakeCheckContent) GetChapterContent(ctx context.Context, id string, index int) (contentapp.Result, *book.Book, error) {
+func (c *fakeCheckContent) GetTransientContent(ctx context.Context, src *source.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (contentapp.Result, error) {
 	c.calls++
-	return contentapp.Result{Content: "正文", Chapter: book.BookChapter{Index: index}}, &book.Book{}, c.err
+	c.chapter, c.nextChapter = chapter, nextChapterURL
+	return contentapp.Result{Content: "正文", Chapter: chapter}, c.err
 }
 
 func stageStatus(stages []task.CheckStageResult, flow task.CheckStageFlow, stage task.CheckStageName) task.CheckTaskItemStatus {
@@ -553,4 +553,79 @@ func stageStatus(stages []task.CheckStageResult, flow task.CheckStageFlow, stage
 		}
 	}
 	return ""
+}
+
+// 搜索结果已带 tocUrl 时跳过详情抓取（对齐 Legado CheckSourceService.kt:207），
+// 目录与正文仍按内存链路执行。
+func TestCheckerSkipsInfoWhenSearchResultHasTocURL(t *testing.T) {
+	checker := newTestChecker()
+	checker.search.result = searchapp.MultiSearchResult{Items: []book.SearchBook{{
+		BookURL: "https://book.test/1",
+		TocURL:  "https://book.test/toc/1",
+		Origin:  "https://source.test",
+		Name:    "斗破苍穹",
+		Author:  "天蚕土豆",
+	}}}
+
+	item, err := checker.CheckSource(context.Background(), testCheckSource(), defaultCheckOptions())
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if item.Status != task.CheckItemPassed {
+		t.Fatalf("item = %#v", item)
+	}
+	if status := stageStatus(item.Stages, task.CheckFlowSearch, task.CheckStageInfo); status != task.CheckItemSkipped {
+		t.Fatalf("info stage = %q, want skipped", status)
+	}
+	if checker.books.infoCalls != 0 {
+		t.Fatalf("infoFetches = %d, want 0", checker.books.infoCalls)
+	}
+	if checker.books.tocCalls != 1 || checker.content.calls != 1 {
+		t.Fatalf("toc=%d content=%d", checker.books.tocCalls, checker.content.calls)
+	}
+}
+
+// 文件源的 tocUrl 不是目录入口，仍必须抓详情校验下载链接。
+func TestCheckerFetchesInfoForFileSourceEvenWithTocURL(t *testing.T) {
+	checker := newTestChecker()
+	checker.search.result = searchapp.MultiSearchResult{Items: []book.SearchBook{{
+		BookURL: "https://book.test/1",
+		TocURL:  "https://book.test/toc/1",
+		Origin:  "https://source.test",
+		Name:    "斗破苍穹",
+		Author:  "天蚕土豆",
+	}}}
+	checker.books.infoBook = book.Book{BookURL: "https://book.test/1", DownloadURLs: []string{"https://files.test/book.txt"}}
+	src := testCheckSource()
+	src.BookSourceType = fileSourceType
+
+	if _, err := checker.CheckSource(context.Background(), src, defaultCheckOptions()); err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if checker.books.infoCalls != 1 {
+		t.Fatalf("infoFetches = %d, want 1", checker.books.infoCalls)
+	}
+}
+
+// 正文校验用内存章节：第一个非卷章节 + 下一章 URL，全程不触碰章节表与正文缓存。
+func TestCheckerContentUsesFirstNonVolumeChapterInMemory(t *testing.T) {
+	checker := newTestChecker()
+	checker.books.chapters = []*book.BookChapter{
+		{BookURL: "https://book.test/1", Title: "第一卷", URL: "https://book.test/volume", Index: 0, IsVolume: true},
+		{BookURL: "https://book.test/1", Title: "第一章", URL: "https://book.test/c/1", Index: 1},
+		{BookURL: "https://book.test/1", Title: "第二章", URL: "https://book.test/c/2", Index: 2},
+	}
+
+	if _, err := checker.CheckSource(context.Background(), testCheckSource(), defaultCheckOptions()); err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if checker.content.calls != 1 {
+		t.Fatalf("contentCalls = %d", checker.content.calls)
+	}
+	if checker.content.chapter.Index != 1 || checker.content.chapter.URL != "https://book.test/c/1" {
+		t.Fatalf("chapter = %#v", checker.content.chapter)
+	}
+	if checker.content.nextChapter != "https://book.test/c/2" {
+		t.Fatalf("nextChapterURL = %q", checker.content.nextChapter)
+	}
 }

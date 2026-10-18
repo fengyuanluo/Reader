@@ -48,6 +48,12 @@ func (s *AppService) GetContentFromChapter(ctx context.Context, sourceID string,
 	return s.Content.GetContent(ctx, Input{Source: src, Book: b, Chapter: chapter, NextChapterURL: nextChapterURL, SkipCache: true})
 }
 
+// GetTransientContent 用内存中的 source/book/chapter 抓正文，既不读也不写正文缓存与章节表；
+// 供书源校验、调试与 fetch 探测复用（对应 Legado WebBook.getContent(needSave=false)）。
+func (s *AppService) GetTransientContent(ctx context.Context, src *source.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (Result, error) {
+	return s.Content.GetContent(ctx, Input{Source: src, Book: b, Chapter: chapter, NextChapterURL: nextChapterURL, SkipCache: true, CacheLookupDone: true})
+}
+
 // processContent 应用用户替换规则、重新分段与简繁转换；未装配内容服务时返回原文，
 // 使仅依赖缓存正文的调用方（如 TXT 导出）在无净化链时仍可用。
 func (s *AppService) processContent(ctx context.Context, b book.Book, chapter book.BookChapter, content string) (string, error) {
