@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"reader/internal/domain/replace"
+	"reader/internal/domain/source"
 )
 
 type ReplaceRuleRepository struct {
@@ -96,15 +97,45 @@ func (r *ReplaceRuleRepository) FindEnabledByContentScope(ctx context.Context, b
 }
 
 func (r *ReplaceRuleRepository) findEnabledByScope(ctx context.Context, column string, bookName, origin string) ([]*replace.ReplaceRule, error) {
+	// 只在 SQL 里筛启用与 scope 开关（可用索引缩小扫描面），scope/exclude_scope 的
+	// 项匹配移到应用层按分隔符精确匹配（S11-05）：SQL LIKE '%' || ? || '%' 的子串
+	// 语义会误命中包含关系（书名 "斗" 命中 scope "斗破"），对齐 Legado 按项精确匹配。
 	rows, err := r.db.QueryContext(ctx, selectReplaceRuleSQL+` WHERE is_enabled = 1 AND `+column+` = 1
-AND (scope LIKE '%' || ? || '%' OR scope LIKE '%' || ? || '%' OR scope IS NULL OR scope = '')
-AND (exclude_scope IS NULL OR (exclude_scope NOT LIKE '%' || ? || '%' AND exclude_scope NOT LIKE '%' || ? || '%'))
-ORDER BY sort_order ASC`, bookName, origin, bookName, origin)
+ORDER BY sort_order ASC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanReplaceRuleRows(rows)
+	all, err := scanReplaceRuleRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]*replace.ReplaceRule, 0, len(all))
+	for _, r := range all {
+		if !matchesScope(r.Scope, bookName, origin) {
+			continue
+		}
+		if r.ExcludeScope != "" && matchesScope(r.ExcludeScope, bookName, origin) {
+			continue
+		}
+		items = append(items, r)
+	}
+	return items, nil
+}
+
+// matchesScope 判断书名/源名是否命中 scope 项列表：空 scope 表示不限制（全部命中）；
+// 非空时按 SplitGroups 同样的分隔符（[,;，；]）拆项，任一项与 bookName 或 origin
+// 精确相等才命中，消除 SQL LIKE 子串的包含误匹配（S11-05）。
+func matchesScope(scope, bookName, origin string) bool {
+	if scope == "" {
+		return true
+	}
+	for _, item := range source.SplitGroups(scope) {
+		if item == bookName || item == origin {
+			return true
+		}
+	}
+	return false
 }
 
 const selectReplaceRuleSQL = `SELECT id, name, coalesce(rule_group, ''), pattern, replacement, coalesce(scope, ''),

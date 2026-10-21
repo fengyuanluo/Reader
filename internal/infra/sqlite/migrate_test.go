@@ -3,6 +3,8 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -225,5 +227,41 @@ func TestMigrateCreatesCacheEntriesOwnerIndex(t *testing.T) {
 	}
 	if !objectExists(t, db, "index", "idx_cache_entries_owner") {
 		t.Fatal("idx_cache_entries_owner missing after idempotent migrate")
+	}
+}
+
+// TestMigrateConcurrentProcesses 覆盖 S11-09：两个进程（两个 *sql.DB 指向同一文件）
+// 并发 Migrate 同一库，双 open（真实文件库走 Open 的 WAL/busy_timeout）下均成功。
+func TestMigrateConcurrentProcesses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent.db")
+	// 用生产同款 Open（文件库 + busy_timeout/WAL）模拟两个独立进程。
+	open := func() *sql.DB {
+		t.Helper()
+		db, err := sql.Open("sqlite", path+"?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+		if err != nil {
+			t.Fatalf("open sqlite: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+	first, second := open(), open()
+	const workers = 2
+	var wg sync.WaitGroup
+	errs := make([]error, workers)
+	for i := range workers {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			errs[index] = Migrate([]*sql.DB{first, second}[index])
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("process %d Migrate() error = %v", i, err)
+		}
+	}
+	if got := schemaVersion(t, first); got != latestVersion() {
+		t.Fatalf("schema version = %d, want %d", got, latestVersion())
 	}
 }

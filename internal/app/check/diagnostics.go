@@ -2,30 +2,56 @@ package checkapp
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
 
 	"reader/internal/domain/source"
 	"reader/internal/domain/task"
 )
 
-type SourceRepository interface {
-	FindByID(ctx context.Context, id string) (*source.BookSource, error)
-	Save(ctx context.Context, src *source.BookSource) error
+// SourceDiagnosticsWriter 按 sourceId 窄列更新书源诊断字段（S03-02/S03-03），
+// 由支持窄列更新的仓储实现（如 SQLite 的 CheckRepository）。
+type SourceDiagnosticsWriter interface {
+	UpdateSourceDiagnostics(ctx context.Context, sourceID string, respondTime int64, transform func(group, comment string) (string, string)) error
 }
 
 type DiagnosticsUpdater struct {
-	repo SourceRepository
+	// writer 是窄列更新仓储：诊断只写 respond_time/分组/注释三列，
+	// 不整行读改写书源（S03-02）。装配侧应传入 CheckRepository。
+	writer SourceDiagnosticsWriter
+	// applyMu 序列化同一进程内对书源诊断行的读改写：多任务并行校验同一源时，
+	// 诊断分组的读-改-写不会互相交错覆盖（S03-03）。
+	applyMu sync.Mutex
 }
 
-func NewDiagnosticsUpdater(repo SourceRepository) *DiagnosticsUpdater {
-	return &DiagnosticsUpdater{repo: repo}
+func NewDiagnosticsUpdater(writer SourceDiagnosticsWriter) *DiagnosticsUpdater {
+	return &DiagnosticsUpdater{writer: writer}
 }
 
 func (u *DiagnosticsUpdater) Apply(ctx context.Context, item *task.CheckTaskItem) error {
-	src, err := u.repo.FindByID(ctx, item.SourceID)
-	if err != nil {
-		return err
+	if u.writer == nil {
+		return errors.New("诊断更新器未配置窄列写入仓储")
 	}
+	u.applyMu.Lock()
+	defer u.applyMu.Unlock()
+	// 窄列更新路径：只写 respond_time/分组/注释三列，
+	// 不整行重写，也不会覆盖并发修改的其他列（S03-02/S03-03）。
+	return u.applyNarrow(ctx, u.writer, item)
+}
+
+// applyNarrow 是窄列更新路径：变换在 SQL 侧读出的当前值上完成，回调给出新的分组与注释。
+func (u *DiagnosticsUpdater) applyNarrow(ctx context.Context, writer SourceDiagnosticsWriter, item *task.CheckTaskItem) error {
+	transform := func(group, comment string) (string, string) {
+		src := &source.BookSource{BookSourceGroup: group, BookSourceComment: comment}
+		u.applyToSource(src, item)
+		return src.BookSourceGroup, src.BookSourceComment
+	}
+	return writer.UpdateSourceDiagnostics(ctx, item.SourceID, item.RespondTime, transform)
+}
+
+// applyToSource 把条目结果变换到书源诊断字段；窄列路径与整行路径共用同一套变换规则。
+func (u *DiagnosticsUpdater) applyToSource(src *source.BookSource, item *task.CheckTaskItem) {
 	src.RespondTime = item.RespondTime
 	if item.Status == task.CheckItemPassed {
 		src.BookSourceComment = removeErrorComment(src.BookSourceComment)
@@ -39,7 +65,6 @@ func (u *DiagnosticsUpdater) Apply(ctx context.Context, item *task.CheckTaskItem
 			src.BookSourceComment = addErrorComment(src.BookSourceComment, formatFailureComment(item))
 		}
 	}
-	return u.repo.Save(ctx, src)
 }
 
 // groupForFailure 按 Legado CheckSourceService 的分组命名生成书源分组：

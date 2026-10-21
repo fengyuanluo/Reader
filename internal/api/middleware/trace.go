@@ -15,12 +15,30 @@ type traceIDKey struct{}
 func Trace(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		traceID := r.Header.Get(TraceHeader)
-		if traceID == "" {
+		// 客户端提供的 traceId 必须是合法格式（16~64 位小写十六进制）；
+		// 伪造/超长/含控制字符的值一律丢弃并生成新 ID，避免污染网关与内部日志。
+		if !validTraceID(traceID) {
 			traceID = newTraceID()
 		}
 		w.Header().Set(TraceHeader, traceID)
 		next.ServeHTTP(w, r.WithContext(ContextWithTraceID(r.Context(), traceID)))
 	})
+}
+
+// ValidTraceID 暴露入站 traceId 格式校验，供测试与其他包复用。
+func ValidTraceID(traceID string) bool { return validTraceID(traceID) }
+
+// validTraceID 校验入站 traceId 格式：16~64 位小写十六进制。
+func validTraceID(traceID string) bool {
+	if len(traceID) < 16 || len(traceID) > 64 {
+		return false
+	}
+	for _, r := range traceID {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func ContextWithTraceID(ctx context.Context, traceID string) context.Context {

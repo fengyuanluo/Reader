@@ -49,6 +49,8 @@ func newFileSandbox(root string) *fileSandbox {
 }
 
 // resolve 对齐 JsExtensions.getFile：相对路径（可带前导分隔符）拼到根目录下，Clean 后必须仍在根内。
+// 已存在组件中的符号链接会被 EvalSymlinks 解析，真实路径逃出沙箱根时报非法路径（S04-01 纵深防御）。
+// 目标（或根目录自身）不存在时，只校验最近一个已存在祖先的真实路径仍在 root 内。
 func (s *fileSandbox) resolve(rel string) (string, error) {
 	if s.root == "" {
 		return "", errFileSandboxDisabled
@@ -57,7 +59,39 @@ func (s *fileSandbox) resolve(rel string) (string, error) {
 	if cleaned != s.root && !strings.HasPrefix(cleaned, s.root+string(filepath.Separator)) {
 		return "", fmt.Errorf("%w: %s", errIllegalPath, rel)
 	}
+	real, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		// 目标不存在：从最近一个已存在祖先向下校验（祖先不存在说明词法路径未创建，
+		// WriteFile/MkdirAll 的落点仍在词法路径内）。
+		real = s.resolveExistingAncestor(cleaned)
+	}
+	if real != s.root && !strings.HasPrefix(real, s.root+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: %s", errIllegalPath, rel)
+	}
 	return cleaned, nil
+}
+
+// resolveExistingAncestor 返回 target 最近一个已存在祖先经 EvalSymlinks 解析的真实路径
+// 与 target 未存在尾段的拼接；没有已存在祖先时返回词法 target。
+func (s *fileSandbox) resolveExistingAncestor(target string) string {
+	probe := filepath.Dir(target)
+	missing := filepath.Base(target)
+	for probe != target {
+		resolved, err := filepath.EvalSymlinks(probe)
+		if err == nil {
+			return filepath.Clean(filepath.Join(resolved, missing))
+		}
+		missing = filepath.Join(filepath.Base(probe), missing)
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			break
+		}
+		probe = parent
+	}
+	return target
 }
 
 // relative 返回以 "/" 开头的根内相对路径，与 Legado downloadFile 返回值形式一致。
@@ -124,6 +158,13 @@ func (s *fileSandbox) delete(rel string) (bool, error) {
 	if abs == s.root {
 		return false, fmt.Errorf("%w: %s", errIllegalPath, rel)
 	}
+	// 目录符号链接只 unlink 链接本身，不得 RemoveAll 链接目标整棵树（S04-01）。
+	if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(abs); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	if err := os.RemoveAll(abs); err != nil {
 		return false, err
 	}
@@ -157,6 +198,10 @@ func (s *fileSandbox) unzip(rel string) (string, error) {
 	}
 	var total int64
 	for _, entry := range reader.File {
+		// 拒绝 zip 内符号链接条目：解压后可被后续文件 API 读取放大逃逸面（S04-01）。
+		if entry.FileInfo().Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("%w: 压缩包内符号链接条目 %s", errIllegalPath, entry.Name)
+		}
 		target, err := s.resolve(path.Join(destRel, entry.Name))
 		if err != nil {
 			return "", err
@@ -291,13 +336,20 @@ func (r *Runtime) fetchBytes(runCtx evalContext, vm *goja.Runtime, raw string) (
 	return resp.Body, strings.TrimSpace(fileType), nil
 }
 
+// maxHexArchiveChars 是十六进制字符串输入的最大字符数（128MB 字符 → 64MB 字节），防止超长解码一次性分配。
+const maxHexArchiveChars = 128 << 20
+
 // archiveBytes 对齐 getZipByteArrayContent 的输入：绝对 URL 时下载，否则视为十六进制字符串。
 func (r *Runtime) archiveBytes(runCtx evalContext, vm *goja.Runtime, raw string) ([]byte, error) {
 	if isAbsURL(raw) {
 		data, _, err := r.fetchBytes(runCtx, vm, raw)
 		return data, err
 	}
-	return hex.DecodeString(strings.TrimSpace(raw))
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) > maxHexArchiveChars {
+		return nil, fmt.Errorf("%w: hex input exceeds %d characters", ErrScriptFailed, maxHexArchiveChars)
+	}
+	return hex.DecodeString(trimmed)
 }
 
 func newFileObject(vm *goja.Runtime, sandbox *fileSandbox, abs string) *goja.Object {
@@ -385,6 +437,9 @@ func (r *Runtime) fileBindings(runCtx evalContext, vm *goja.Runtime) map[string]
 				fileType, _ := parseCustomURL(target).Attribute["type"].(string)
 				if strings.TrimSpace(fileType) == "" {
 					return vm.ToValue("")
+				}
+				if len(content) > maxHexArchiveChars {
+					throwJS(vm, fmt.Errorf("%w: hex input exceeds %d characters", ErrScriptFailed, maxHexArchiveChars))
 				}
 				data, err := hex.DecodeString(content)
 				must(err)

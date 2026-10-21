@@ -24,7 +24,13 @@ type Limiter struct {
 	mu          sync.Mutex
 	sourceLimit int
 	sources     map[string]chan struct{}
+	// sourceOrder 记录 key 的首次出现顺序，用于在超过 maxSourceChans 时淘汰最早空闲的 chan（S01-07）。
+	sourceOrder []string
 }
+
+// maxSourceChans 限制单源信号量缓存条目数：长期运行进程随源数线性增长，超限后淘汰最早出现且
+// 当前空闲的 chan；正在使用的 chan 不淘汰（容量即使用计数，缓冲满时必有等待者）。
+const maxSourceChans = 4096
 
 // New 创建限流器。
 func New(opts Options) *Limiter {
@@ -102,6 +108,7 @@ func (l *Limiter) Acquire(ctx context.Context, key string) (func(), error) {
 }
 
 // sourceChan 返回 key 对应的单源并发信号量；未配置单源上限时返回 nil。
+// 缓存超过 maxSourceChans 时淘汰最早出现且空闲的 chan，保证 map 大小有界（S01-07/S09-02）。
 func (l *Limiter) sourceChan(key string) chan struct{} {
 	if l.sourceLimit <= 0 {
 		return nil
@@ -112,6 +119,62 @@ func (l *Limiter) sourceChan(key string) chan struct{} {
 	if ch == nil {
 		ch = make(chan struct{}, l.sourceLimit)
 		l.sources[key] = ch
+		l.sourceOrder = append(l.sourceOrder, key)
+		l.evictLocked()
 	}
 	return ch
+}
+
+// evictLocked 在超过 maxSourceChans 时淘汰最早出现且当前空闲（缓冲未满）的 chan。
+// 持有 l.mu 时调用。
+func (l *Limiter) evictLocked() {
+	if len(l.sourceOrder) <= maxSourceChans {
+		return
+	}
+	kept := l.sourceOrder[:0]
+	for _, key := range l.sourceOrder {
+		ch, ok := l.sources[key]
+		if ok && len(l.sourceOrder)-len(kept) > len(l.sourceOrder)-maxSourceChans && len(ch) < cap(ch) {
+			// 空闲 chan（无持有许可）可安全删除；正在使用的 chan 继续保留。
+			delete(l.sources, key)
+			continue
+		}
+		kept = append(kept, key)
+	}
+	l.sourceOrder = kept
+}
+
+// RemoveSource 在书源删除/改名时移除对应的单源信号量，避免旧键残留（S09-02）。
+// key 为 bookSourceUrl。
+func (l *Limiter) RemoveSource(key string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	ch, ok := l.sources[key]
+	if !ok {
+		return
+	}
+	// 正在使用的 chan（许可被持有）不能删除，否则持有者释放时回收失败。
+	if len(ch) > 0 {
+		return
+	}
+	delete(l.sources, key)
+	for i, existing := range l.sourceOrder {
+		if existing == key {
+			l.sourceOrder = append(l.sourceOrder[:i], l.sourceOrder[i+1:]...)
+			break
+		}
+	}
+}
+
+// SourceCount 返回当前缓存的单源信号量数量，供测试与观测断言 map 有界。
+func (l *Limiter) SourceCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.sources)
 }

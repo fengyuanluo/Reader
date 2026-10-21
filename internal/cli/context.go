@@ -46,6 +46,9 @@ func (e *cmdEnv) close() {
 }
 
 // openRuntime 装配 CLI 运行时；globalConcurrency > 0 时在 config.Load 后覆盖全局并发上限。
+// StartupCleanup=false：3 条全表扫描清理语句（FailInterruptedTasks/FailInterruptedSessions/
+// DeleteExpired）只对 serve 有意义（进程内取消句柄/会话随重启丢失、过期缓存定时清理），
+// CLI 短命令一律跳过，避免每条子命令都付出全表扫描延迟（AuditReport S16-07）。
 // 失败输出 error 并返回 2。
 func openRuntime(stderr io.Writer, globalConcurrency int) (*bootstrap.Runtime, func(), int) {
 	cfg, err := config.Load(config.SourceFunc(func(key string) (string, bool) {
@@ -64,7 +67,7 @@ func openRuntime(stderr io.Writer, globalConcurrency int) (*bootstrap.Runtime, f
 	if globalConcurrency > 0 {
 		cfg.GlobalConcurrency = globalConcurrency
 	}
-	rt, cleanup, err := bootstrap.Open(cfg)
+	rt, cleanup, err := bootstrap.OpenWithOptions(cfg, bootstrap.Options{StartupCleanup: false})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return nil, nil, 2

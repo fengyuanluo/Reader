@@ -85,7 +85,7 @@ func (f *KeywordFlow) RunKeyword(ctx context.Context, session *task.DebugSession
 	}
 
 	// 关键字调试与 runFromBook(info/toc/content 全开) 等价：只抓取解析，不写书架。
-	return f.runFromBook(ctx, session, searchResult.Items[0].ToBook(), start, true, true, true)
+	return f.runFromBook(ctx, session, searchResult.Items[0].ToBook(), start, true, true, true, "info")
 }
 
 func (f *KeywordFlow) RunURL(ctx context.Context, session *task.DebugSession) error {
@@ -96,10 +96,10 @@ func (f *KeywordFlow) RunURL(ctx context.Context, session *task.DebugSession) er
 	switch session.Mode {
 	case task.DebugModeInfoURL:
 		b := book.Book{BookURL: session.URL, Origin: session.SourceID, Name: "debug", Author: "debug"}
-		return f.runFromBook(ctx, session, b, start, true, true, true)
+		return f.runFromBook(ctx, session, b, start, true, true, true, "info")
 	case task.DebugModeTocURL:
 		b := book.Book{BookURL: session.URL, TocURL: session.URL, Origin: session.SourceID, Name: "debug", Author: "debug"}
-		return f.runFromBook(ctx, session, b, start, false, true, true)
+		return f.runFromBook(ctx, session, b, start, false, true, true, "toc")
 	case task.DebugModeContentURL:
 		// Legado Debug.startDebug 的 "--" 分支：直接构造 BookChapter 抓正文，不落库、
 		// 不查章节表，因此对还没抓取过目录的新书同样可用。
@@ -132,17 +132,19 @@ func (f *KeywordFlow) RunURL(ctx context.Context, session *task.DebugSession) er
 		if err := f.publish(ctx, session, task.DebugEventStageCompleted, "discovery", task.DebugLevelInfo, "discovery completed", start); err != nil {
 			return err
 		}
-		return f.runFromBook(ctx, session, result.Items[0].ToBook(), start, true, true, true)
+		return f.runFromBook(ctx, session, result.Items[0].ToBook(), start, true, true, true, "info")
 	default:
 		return f.RunKeyword(ctx, session, session.Keyword)
 	}
 }
 
-func (f *KeywordFlow) runFromBook(ctx context.Context, session *task.DebugSession, b book.Book, start time.Time, doInfo bool, doToc bool, doContent bool) error {
+func (f *KeywordFlow) runFromBook(ctx context.Context, session *task.DebugSession, b book.Book, start time.Time, doInfo bool, doToc bool, doContent bool, firstStage string) error {
 	// 调试全程不写书架：按 ID 取书源后只抓取解析，不落库（对应 Legado needSave=false）。
 	src, err := f.sources.FindByID(ctx, session.SourceID)
 	if err != nil {
-		_ = f.publishFailure(ctx, session, "info", err, diagnosticapp.FailureWebsiteFailed, start)
+		// FindByID 失败发生在首个阶段之前，按首阶段归属发布，避免 toc/content
+		// 模式下失败事件被错误挂在 info 阶段。
+		_ = f.publishFailure(ctx, session, firstStage, err, fallbackFailureCodeForStage(firstStage), start)
 		return err
 	}
 	current := b

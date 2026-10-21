@@ -92,7 +92,8 @@ func writeLoginError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, sourceapp.ErrLoginRuntimeUnavailable):
 		middleware.WriteError(w, r, http.StatusNotImplemented, "not_configured", err.Error(), nil)
 	case errors.Is(err, script.ErrScriptFailed), errors.Is(err, script.ErrScriptTimeout):
-		middleware.WriteError(w, r, http.StatusBadGateway, "script_failed", err.Error(), nil)
+		// 脚本错误含书源脚本片段，不回显内部原文（S10-03）。
+		middleware.WriteError(w, r, http.StatusBadGateway, "script_failed", "book source script failed", nil)
 	default:
 		middleware.WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal error", nil)
 	}

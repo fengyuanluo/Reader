@@ -3,16 +3,20 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	checkapp "reader/internal/app/check"
+	searchapp "reader/internal/app/search"
 	sourceapp "reader/internal/app/source"
 	"reader/internal/domain/book"
+	rulepkg "reader/internal/domain/rule"
 	"reader/internal/domain/source"
 	"reader/internal/domain/task"
 	"reader/internal/infra/config"
@@ -193,7 +197,7 @@ func TestCheckDoesNotTouchBookshelf(t *testing.T) {
 	}
 
 	checkTask := &task.CheckTask{TaskID: "check-transient"}
-	if _, err := rt.Check.Start(ctx, checkTask, []string{imported.Items[0].SourceID}, checkapp.Options{
+	if err := rt.Check.Start(ctx, checkTask, []string{imported.Items[0].SourceID}, checkapp.Options{
 		Keyword:      "斗破苍穹",
 		CheckSearch:  true,
 		CheckInfo:    true,
@@ -220,15 +224,20 @@ func TestCheckDoesNotTouchBookshelf(t *testing.T) {
 	}
 
 	if got.Status != task.CheckTaskSucceeded {
-		t.Fatalf("task status = %q, items = %+v", got.Status, got.Items)
+		t.Fatalf("task status = %q", got.Status)
 	}
-	if len(got.Items) != 1 || got.Items[0].Status != task.CheckItemPassed {
-		t.Fatalf("items = %+v", got.Items)
+	// FindTask 不再内联条目（S03-06）：条目走 ListItemsPage 按页读取。
+	items, _, err := rt.Check.ListItems(ctx, "check-transient", nil, 1, 100)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	if len(items) != 1 || items[0].Status != task.CheckItemPassed {
+		t.Fatalf("items = %+v", items)
 	}
 	// 四个阶段都必须真实执行（passed），否则“零写入”可能只是链路被跳过。
 	for _, want := range []task.CheckStageName{task.CheckStageSearch, task.CheckStageInfo, task.CheckStageToc, task.CheckStageContent} {
 		status := task.CheckTaskItemStatus("")
-		for _, stage := range got.Items[0].Stages {
+		for _, stage := range items[0].Stages {
 			if stage.Stage == want {
 				status = stage.Status
 			}
@@ -253,5 +262,223 @@ func TestCheckDoesNotTouchBookshelf(t *testing.T) {
 		if count != 0 {
 			t.Fatalf("%s has %d rows, want 0", table, count)
 		}
+	}
+}
+
+// S11-03：WAL 读写分离连接池——读连接并发放开（>1），写并发由 WAL + busy_timeout 兜底。
+// 并发读与并发写同时压测，任何一方都不应把另一方完全阻塞到超时。
+func TestOpenEnablesConcurrentReadsAndWrites(t *testing.T) {
+	cfg := newTestConfig(t)
+	rt, cleanup, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cleanup()
+
+	ctx := context.Background()
+	if err := rt.SourceRepo.Save(ctx, &source.BookSource{
+		SourceID:       "s1",
+		BookSourceURL:  "https://example.test",
+		BookSourceName: "示例源",
+		Enabled:        true,
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	done := make(chan error, 2)
+	go func() { // 并发读
+		for range 50 {
+			qCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			_, err := rt.DB.QueryContext(qCtx, "SELECT count(*) FROM book_sources")
+			cancel()
+			if err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	go func() { // 并发写
+		for i := range 50 {
+			wCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := rt.SourceRepo.Save(wCtx, &source.BookSource{
+				SourceID:       fmt.Sprintf("w%d", i),
+				BookSourceURL:  fmt.Sprintf("https://w%d.example.test", i),
+				BookSourceName: "并发写",
+				Enabled:        true,
+			})
+			cancel()
+			if err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	// 带截止的等待：读/写任一方若被完全阻塞（WAL 并行能力失效）则超时失败而非挂起。
+	deadline := time.Now().Add(10 * time.Second)
+	for range 2 {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("并发读/写失败: %v", err)
+			}
+		case <-time.After(time.Until(deadline)):
+			t.Fatalf("并发读/写在 10s 内未完成，WAL 并行能力未生效")
+		}
+	}
+	var count int
+	if err := rt.DB.QueryRow("SELECT count(*) FROM book_sources").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 51 {
+		t.Fatalf("book_sources = %d rows, want 51", count)
+	}
+}
+
+// S16-07：StartupCleanup=false 时 3 条全表扫描清理语句不执行——遗留未完成任务保持原状、
+// 过期缓存行不被删除；StartupCleanup=true（Open 默认）时收敛/删除照常执行。
+func TestStartupCleanupGating(t *testing.T) {
+	build := func(t *testing.T) (*Runtime, func()) {
+		cfg := newTestConfig(t)
+		rt, cleanup, err := Open(cfg)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		return rt, cleanup
+	}
+	seed := func(t *testing.T, rt *Runtime) {
+		t.Helper()
+		ctx := context.Background()
+		now := time.Now().UTC().Add(-time.Hour)
+		if _, err := rt.DB.ExecContext(ctx,
+			"INSERT INTO check_tasks (task_id, status, created_at) VALUES ('stale', 'running', ?)", now); err != nil {
+			t.Fatalf("seed check_tasks: %v", err)
+		}
+		if _, err := rt.DB.ExecContext(ctx,
+			"INSERT INTO cache_entries (cache_key, namespace, value, created_at) VALUES ('k', 'image', ?, ?)", []byte("x"), now); err != nil {
+			t.Fatalf("seed cache_entries: %v", err)
+		}
+	}
+
+	// 关闭清理：在同库重开（StartupCleanup=false），遗留 running 任务与过期缓存行保持原状。
+	rt, cleanup := build(t)
+	seed(t, rt)
+	cleanup()
+
+	reopened, cleanup3, err := OpenWithOptions(cfgForSameDB(t, rt.Cfg.SQLiteDSN), Options{})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer cleanup3()
+	var status string
+	if err := reopened.DB.QueryRow("SELECT status FROM check_tasks WHERE task_id='stale'").Scan(&status); err != nil {
+		t.Fatalf("query check_tasks: %v", err)
+	}
+	if status != "running" {
+		t.Fatalf("status = %q, want running（清理应被跳过）", status)
+	}
+	var cacheCount int
+	if err := reopened.DB.QueryRow("SELECT count(*) FROM cache_entries WHERE cache_key='k'").Scan(&cacheCount); err != nil {
+		t.Fatalf("query cache_entries: %v", err)
+	}
+	if cacheCount != 1 {
+		t.Fatalf("cache_entries = %d rows, want 1（清理应被跳过）", cacheCount)
+	}
+	cleanup()
+
+	// 开启清理（Open 默认）：running 任务收敛为 failed、过期缓存被删除。
+	rt4, cleanup4, err := OpenWithOptions(cfgForSameDB(t, rt.Cfg.SQLiteDSN), Options{StartupCleanup: true})
+	if err != nil {
+		t.Fatalf("OpenWithOptions(StartupCleanup=true): %v", err)
+	}
+	defer cleanup4()
+	if err := rt4.DB.QueryRow("SELECT status FROM check_tasks WHERE task_id='stale'").Scan(&status); err != nil {
+		t.Fatalf("query check_tasks: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("status = %q, want failed（清理应执行）", status)
+	}
+	if err := rt4.DB.QueryRow("SELECT count(*) FROM cache_entries WHERE cache_key='k'").Scan(&cacheCount); err != nil {
+		t.Fatalf("query cache_entries: %v", err)
+	}
+	if cacheCount != 0 {
+		t.Fatalf("cache_entries = %d rows, want 0（清理应执行）", cacheCount)
+	}
+}
+
+// cfgForSameDB 构造指向同一 SQLite 文件的最小配置。
+func cfgForSameDB(t *testing.T, dsn string) config.Config {
+	t.Helper()
+	cfg, err := config.Load(config.FromMap(map[string]string{
+		"READER_DATA_DIR":   filepath.Dir(dsn),
+		"READER_SQLITE_DSN": dsn,
+		"READER_ENV":        config.EnvTest,
+	}))
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	return cfg
+}
+
+// 契约 3：Open 装配时把 cfg.SearchSourceTimeout 接到两份 MultiSourceSearcher。
+// 多源搜索在单源 fetcher 挂起时应在每源超时内收到 search_timeout warning，而非等到整体截止。
+func TestSearcherUsesConfiguredSourceTimeout(t *testing.T) {
+	block := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
+		<-block // 挂起直到测试结束，触发每源超时而非 fetcher 超时
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(block) })
+
+	dir := filepath.Join(t.TempDir(), "data")
+	cfg, err := config.Load(config.FromMap(map[string]string{
+		"READER_DATA_DIR":              dir,
+		"READER_SQLITE_DSN":            filepath.Join(dir, "reader.db"),
+		"READER_ENV":                   config.EnvTest,
+		"READER_SEARCH_SOURCE_TIMEOUT": "300ms",
+		"READER_FETCH_TIMEOUT":         "30s",
+		"READER_ALLOW_PRIVATE_NETWORK": "true",
+	}))
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	rt, cleanup, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cleanup()
+
+	ctx := context.Background()
+	if err := rt.SourceRepo.Save(ctx, &source.BookSource{
+		SourceID:       "s1",
+		BookSourceURL:  server.URL,
+		BookSourceName: "挂起源",
+		Enabled:        true,
+		SearchURL:      server.URL + "/search?key={{key}}",
+		RuleSearch:     rulepkg.Flexible[rulepkg.SearchRule]{Value: &rulepkg.SearchRule{BookList: ".item"}},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	start := time.Now()
+	result, err := rt.Searcher.Search(ctx, searchapp.MultiSearchInput{Keyword: "x"})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if elapsed >= 5*time.Second {
+		t.Fatalf("Search elapsed = %s, 每源超时未生效（应为 ~300ms）", elapsed)
+	}
+	found := false
+	for _, w := range result.Warnings {
+		if w.Code == "search_timeout" || strings.Contains(w.Message, "timeout") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %v, want search_timeout warning", result.Warnings)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	sourceapp "reader/internal/app/source"
 	"reader/internal/domain/book"
@@ -46,12 +47,21 @@ type TocInput struct {
 
 type TocService struct {
 	chapters book.ChapterRepository
+	books    book.BookRepository
 	fetcher  fetch.Fetcher
 	script   *script.Runtime
 }
 
 func NewTocService(chapters book.ChapterRepository, fetcher fetch.Fetcher, scriptRuntime *script.Runtime) *TocService {
 	return &TocService{chapters: chapters, fetcher: fetcher, script: scriptRuntime}
+}
+
+// WithBooks 注入 books 仓库（可选能力，类型断言/方法链注入）；目录刷新成功后
+// 按其 UpdateTocStats 写回 total_chapter_num/last_check_*/latest_chapter_*/variable/dur_*，
+// 对齐 Legado BookChapterList.kt:152-161 的书籍元数据更新。
+func (s *TocService) WithBooks(books book.BookRepository) *TocService {
+	s.books = books
+	return s
 }
 
 func (s *TocService) RefreshToc(ctx context.Context, input TocInput) ([]*book.BookChapter, error) {
@@ -94,7 +104,16 @@ func (s *TocService) RefreshToc(ctx context.Context, input TocInput) ([]*book.Bo
 	if len(chapters) == 0 {
 		return nil, ErrTocEmpty
 	}
+	// 对齐 Legado BookChapterList.kt:113-119：非倒序目录先整体 reverse，再按完整键去重
+	// （LinkedHashSet 保留最后一次出现），最后按目标方向反回。
+	_, reverse := normalizeTocListRule(src.RuleToc.Value.ChapterList)
+	if !reverse {
+		reverseChapters(chapters)
+	}
 	chapters = dedupeChapters(chapters)
+	if !reverse {
+		reverseChapters(chapters)
+	}
 	for i, chapter := range chapters {
 		chapter.Index = i
 	}
@@ -102,11 +121,65 @@ func (s *TocService) RefreshToc(ctx context.Context, input TocInput) ([]*book.Bo
 		return nil, err
 	}
 	if s.chapters != nil && !input.SkipSave {
-		if err := s.chapters.ReplaceByBook(ctx, book.IDFromURL(b.BookURL), chapters); err != nil {
+		bookID := book.IDFromURL(b.BookURL)
+		if err := s.chapters.ReplaceByBook(ctx, bookID, chapters); err != nil {
 			return nil, err
 		}
+		s.writeBackBookStats(ctx, input, b, chapters)
 	}
 	return chapters, nil
+}
+
+// tocStatsUpdate 是目录刷新后写回 books 表的可选仓库能力（类型断言注入）。
+// 语义要求与 SqliteFix 的 BookRepository.UpdateTocStats 一致：只更新目录刷新相关列，
+// Variable 仅在 VariableChanged 时写入，dur_* 仅在 DurChapterChanged 时写入，行不存在不创建。
+// domain 接口由 SqliteFix 负责扩展；这里用本地接口解耦编译顺序。
+type tocStatsUpdate interface {
+	UpdateTocStats(ctx context.Context, bookID string, stats book.TocStats) error
+}
+
+// writeBackBookStats 在 ReplaceByBook 成功后写回书籍元数据（对齐 Legado
+// BookChapterList.kt:152-161）：totalChapterNum、lastCheckTime、新增章数>0 时的
+// lastCheckCount/latestChapterTime；preUpdateJS 修改的 variable（S12-05）与
+// getDurChapter 重映射后的阅读进度（S12-01）同样随该更新持久化。
+// 仓库不支持 UpdateTocStats（fake/旧实现）时静默跳过，不影响目录刷新结果。
+func (s *TocService) writeBackBookStats(ctx context.Context, input TocInput, b book.Book, chapters []*book.BookChapter) {
+	updater, ok := s.books.(tocStatsUpdate)
+	if !ok {
+		return
+	}
+	now := time.Now().UnixMilli()
+	stats := book.TocStats{
+		TotalChapterNum: len(chapters),
+		LastCheckTime:   now,
+	}
+	if len(chapters) > b.TotalChapterNum {
+		stats.LastCheckCount = len(chapters) - b.TotalChapterNum
+		stats.LatestChapterTime = now
+	}
+	if len(chapters) > 0 {
+		// 对齐 Legado BookChapterList.kt:150：durChapterTitle 取刷新后当前进度指向的章节标题。
+		index := b.DurChapterIndex
+		if index >= len(chapters) {
+			index = len(chapters) - 1
+		}
+		if index < 0 {
+			index = 0
+		}
+		stats.DurChapterTitle = chapters[index].Title
+		stats.DurChapterIndex = getDurChapter(b.DurChapterIndex, b.DurChapterTitle, chapters, b.TotalChapterNum)
+		stats.DurChapterPos = b.DurChapterPos
+		stats.DurChapterTime = b.DurChapterTime
+		stats.DurChapterChanged = stats.DurChapterIndex != b.DurChapterIndex || stats.DurChapterTitle != b.DurChapterTitle
+	}
+	if b.Variable != input.Book.Variable {
+		stats.Variable = b.Variable
+		stats.VariableChanged = true
+	}
+	if err := updater.UpdateTocStats(ctx, book.IDFromURL(b.BookURL), stats); err != nil {
+		// 元数据写回失败不影响目录刷新结果；Legado 同样只记日志继续（BookChapterList.kt 的 upsertBook 容错）。
+		slog.Warn("toc stats writeback failed", "source", input.Source.BookSourceURL, "book", b.BookURL, "error", err)
+	}
 }
 
 // FirstContentChapter 返回第一个非卷章节及其 nextChapterURL；全是卷时取第 0 章。
@@ -212,8 +285,15 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 			seenPages[next] = struct{}{}
 			targets = append(targets, next)
 		}
+		// 对齐串行链（C-015/C-016）：并发分支同样受 maxTocPages 截断，异常规则一次返回
+		// 数百个 nextURL 时不加限制会长时间占用抓取与内存（S12-07）；目录不完整则不覆盖。
+		if len(seenPages) > maxTocPages {
+			slog.Warn("toc pagination exceeded limit, keeping existing chapters", "source", src.BookSourceURL, "limit", maxTocPages)
+			return nil, ErrTocPaginationLimit
+		}
 		// 对齐 Legado BookChapterList.kt:101-113：多分页并发抓取，章节按规则返回顺序拼接。
-		// 每个分页用 book 快照，避免脚本并发写书变量造成数据竞争。
+		// 每个分页从请求构建到解析全程用 book 快照（S12-08），避免 URL 选项 JS 通过 book
+		// 绑定并发写同一 Go 结构体造成数据竞争。
 		// 分页失败会收集起来：目录不完整时不能覆盖库内目录（见 RefreshToc）。
 		var mu sync.Mutex
 		var failures []string
@@ -224,12 +304,13 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 			slog.Warn("toc page "+stage+" failed", "source", src.BookSourceURL, "url", target, "error", err)
 		}
 		pageChapters, err := concurrency.Map(ctx, tocPageConcurrency, targets, func(ctx context.Context, _ int, target string) ([]*book.BookChapter, error) {
-			req, err := buildBookFetchRequest(ctx, target, src, b, s.script)
+			pageBook := *b
+			req, err := buildBookFetchRequest(ctx, target, src, &pageBook, s.script)
 			if err != nil {
 				recordFailure("fetch", target, err)
 				return nil, nil
 			}
-			resp, err := executeBookFetchRequest(ctx, s.fetcher, req, src, b, s.script)
+			resp, err := executeBookFetchRequest(ctx, s.fetcher, req, src, &pageBook, s.script)
 			if err != nil {
 				recordFailure("fetch", target, err)
 				return nil, nil
@@ -241,7 +322,6 @@ func (s *TocService) parseAllPages(ctx context.Context, src *source.BookSource, 
 					return nil, nil
 				}
 			}
-			pageBook := *b
 			parsed, _, err := parseTocPage(ctx, src, &pageBook, target, resp.URL, string(resp.Body), listRule, false, s.script)
 			if err != nil {
 				recordFailure("parse", target, err)
@@ -293,22 +373,28 @@ func parseTocPage(ctx context.Context, src *source.BookSource, b *book.Book, bas
 	}
 	out := []*book.BookChapter{}
 	baseVars := analyzer.Variables()
+	// 对齐 Legado BookChapterList.kt:216-230：每页只建一个 analyzeRule，逐章 setContent(item)。
+	// Analyzer 在章节间仅替换 Chapter 载体（S12-06）；Source 绑定与顶层 baseVars 每页构建一次，
+	// 不再逐章重建十几项的 map（万章目录 = 万次 Analyzer 分配 + 2 万次 map 构建 → 每页 2 次）。
+	itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
+		RedirectURL: redirectURL,
+		SourceURL:   src.BookSourceURL,
+		// 对齐 Legado BookChapterList.kt:220-224：逐章先 setChapter 再解析标题/链接等规则，
+		// 脚本里的 chapter 与顶层 title 绑定取当前章节（title 在标题规则解析后即可用）。
+		Script: sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL, Source: src, Book: b, Src: body},
+		Book:   b,
+		Source: scriptRuntime.SourceBindings(ctx, src),
+	})
+	itemAnalyzer.SetVariables(baseVars)
 	for index, element := range elements {
 		chapter := &book.BookChapter{
 			BaseURL: redirectURL,
 			BookURL: b.BookURL,
 		}
-		itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
-			RedirectURL: redirectURL,
-			SourceURL:   src.BookSourceURL,
-			// 对齐 Legado BookChapterList.kt:220-224：逐章先 setChapter 再解析标题/链接等规则，
-			// 脚本里的 chapter 与顶层 title 绑定取当前章节（title 在标题规则解析后即可用）。
-			Script:  sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL, Source: src, Book: b, Chapter: chapter, Src: body},
-			Chapter: chapter,
-			Book:    b,
-			Source:  scriptRuntime.SourceBindings(ctx, src),
-		})
-		itemAnalyzer.SetVariables(baseVars)
+		// 对齐 Legado BookChapterList.kt:216-230 的 analyzeRule.setChapter(item)：
+		// 每页复用同一 Analyzer，逐章仅替换 Chapter 载体与脚本适配器（S12-06）；
+		// 基线变量恢复由 SetChapter 内部完成，chapter 级 @put 不跨章泄漏。
+		itemAnalyzer.SetChapter(chapter, sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL, Source: src, Book: b, Chapter: chapter, Src: body})
 		title, _ := itemAnalyzer.GetString(ctx, tocRule.ChapterName, element)
 		title = strings.TrimSpace(title)
 		if title == "" {
@@ -380,13 +466,31 @@ func (s *TocService) formatChapters(ctx context.Context, src *source.BookSource,
 	return nil
 }
 
+// dedupeChapters 对齐 Legado LinkedHashSet(chapterList) 的 data class equals 语义：
+// 键为完整可比较字段（url+title+tag+isVolume/isVip/isPay），同 URL 但附加信息
+// （tag/VIP/卷标）不同的两条都会保留，不再按 URL 单字段误删。
 func dedupeChapters(chapters []*book.BookChapter) []*book.BookChapter {
 	out := []*book.BookChapter{}
-	seen := map[string]struct{}{}
+	type dedupeKey struct {
+		url      string
+		title    string
+		tag      string
+		isVolume bool
+		isVIP    bool
+		isPay    bool
+	}
+	seen := map[dedupeKey]struct{}{}
 	for _, chapter := range chapters {
-		key := chapter.URL
-		if key == "" {
-			key = chapter.Title
+		if chapter == nil {
+			continue
+		}
+		key := dedupeKey{
+			url:      chapter.URL,
+			title:    chapter.Title,
+			tag:      chapter.Tag,
+			isVolume: chapter.IsVolume,
+			isVIP:    chapter.IsVIP,
+			isPay:    chapter.IsPay,
 		}
 		if _, ok := seen[key]; ok {
 			continue

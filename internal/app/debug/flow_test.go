@@ -279,3 +279,27 @@ func (d *fakeDebugDiscovery) Discover(ctx context.Context, input discoveryapp.In
 func discoveryResultWithBook(bookURL string) discoveryapp.Result {
 	return discoveryapp.Result{Items: []book.SearchBook{{BookURL: bookURL, Origin: "https://source.test", OriginName: "Source", Name: "发现书", Author: "作者"}}}
 }
+
+// TestRunFromBookFindByIDFailureUsesFirstStage 验证 runFromBook 中 FindByID 失败的失败事件
+// 按首阶段归属发布：toc 模式下 stage 应为 "toc" 而非 "info"（S15-08）。
+func TestRunFromBookFindByIDFailureUsesFirstStage(t *testing.T) {
+	repo := &fakeDebugRepo{}
+	flow := NewKeywordFlow(&fakeDebugSearch{}, &fakeDebugSources{err: errors.New("source missing")}, &fakeDebugBooks{}, &fakeDebugContent{}, NewPublisher(repo))
+	session := &task.DebugSession{SessionID: "debug-toc-missing", SourceID: "missing-id", Mode: task.DebugModeTocURL, URL: "https://book.test/1"}
+	err := flow.RunURL(context.Background(), session)
+	if err == nil {
+		t.Fatal("RunURL() error = nil, want error")
+	}
+	var failedEvent *task.DebugEvent
+	for _, event := range repo.events {
+		if event.Type == task.DebugEventStageFailed {
+			failedEvent = event
+		}
+	}
+	if failedEvent == nil {
+		t.Fatalf("no failed event in %#v", repo.events)
+	}
+	if failedEvent.Stage != "toc" {
+		t.Fatalf("stage = %q, want toc", failedEvent.Stage)
+	}
+}

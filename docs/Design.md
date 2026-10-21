@@ -545,8 +545,8 @@ Legado 规则支持复杂切分，`RuleAnalyzer.kt` 和 `RuleAnalyzer.kt` 中的
 
 - `##regex##replacement###` 中的末尾 `###` 是 replaceFirst：只替换首个匹配片段，无匹配时返回空串；空替换写作 `##regex#####`；非法正则降级为字面量替换。
 - `@get:{...}` / `{{...}}` 模板支持混合与 `@put:{...}`，按 Legado `makeUpRule` 在完整规则上一次展开后再拆分。
-- JSONPath 过滤支持 `> < >= <= && || !`。
-- CSS 支持 `text.关键词.N` / `[N]`、`children.xxx`、逗号选择器按文档序求并集、属性值去重。
+- JSONPath 过滤支持 `> < >= <= && || !`，并支持 jayway（Legado）的 `=~` 正则匹配运算符（如 `[?(@.t=~/a.c/)]`，`/.../` 包裹与裸正则两种写法均可）。
+- CSS 支持 `text.关键词.N` / `[N]`、`children.xxx`、逗号选择器按文档序求并集、属性值去重；支持小写 `@css:` 与 `class.xxx` / `tag.xxx` 语法糖（`class.foo bar` 多 class 归一为 `.foo.bar`，末尾数字索引如 `a.0`、`tag.a.-1` 选择第 N 个匹配）；descendants 为空时对当前节点做一次自匹配兜底。
 - `@get:{bookName}` / `@get:{title}` 分别取当前书名与章节标题。
 - 正则编译、JSONPath `Evaluable`、CSS 选择器解析都有进程内 LRU 缓存。
 
@@ -598,7 +598,7 @@ Fetcher 必须支持：
 - GET/HEAD 不发送请求体（对齐 Legado `AnalyzeUrl`：忽略 body 选项）。
 - 响应无 `Content-Type` 时，按 BOM 与前 4 KiB 内 `<meta charset>` 嗅探编码（不做 Legado 的统计式编码探测）；有 `Content-Type` 时按 charset 把文本响应解码为 UTF-8。
 - `webView:true` 使用普通 HTTP 降级并写告警日志，不做真实渲染。
-- URL 选项 `serverID`、`webJs`、`webViewDelayTime` 接受但不生效；未知 URL option 键只有零值才放行，非零值返回明确错误。
+- URL 选项 `serverID`、`webViewDelayTime` 接受但不生效；`webJs` 仅在声明 `webView`（truthy）时生效——此时按 Legado `AnalyzeUrl` 的 WebView 分支把 `webJs` 脚本作为 BodyJS 执行（配合远端 `WebViewFallback`）；未声明 `webView` 时 `webJs` 被完全丢弃（不执行）。未知 URL option 键只有零值才放行，非零值返回明确错误。
 
 ### 10.2 安全策略
 
@@ -624,7 +624,7 @@ SSRF 校验在**拨号阶段**执行：每次建立连接只解析一次域名�
 
 参考 `CookieStore.kt`：
 
-- Cookie 按域保存。
+- Cookie 按域保存：session Cookie 以当前 host 为归属域；Set-Cookie 的 `Domain` 与请求 host 不满足 RFC 6265 domain-match 时被拒绝，读取时按 domain-match 合并，父域请求不会带出子域的会话 Cookie。
 - 持久 Cookie 和 session Cookie 合并。
 - Cookie 长度过大时必须有清理策略。
 - 调试日志不得打印 Cookie 原文。

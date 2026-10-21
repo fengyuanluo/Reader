@@ -17,11 +17,30 @@ type BookProgress struct {
 	DurChapterTime  int64
 }
 
+// TocStats 是目录刷新（RefreshToc）后需要写回 books 表的元数据（S12-01/S12-03/S12-05）。
+type TocStats struct {
+	TotalChapterNum    int
+	LastCheckTime      int64
+	LastCheckCount     int
+	LatestChapterTime  int64
+	LatestChapterTitle string
+	Variable           string
+	VariableChanged    bool
+	DurChapterTitle    string
+	DurChapterIndex    int
+	DurChapterPos      int
+	DurChapterTime     int64
+	DurChapterChanged  bool
+}
+
 type BookRepository interface {
 	Save(ctx context.Context, book *Book) error
 	// UpdateInfo 只更新书籍信息刷新（RefreshInfo）需要写入的列，避免 RefreshInfo
 	// 路径上的重复整行写覆盖阅读进度等无关列。
 	UpdateInfo(ctx context.Context, book *Book) error
+	// UpdateTocStats 只更新目录刷新（RefreshToc）相关列：Variable 仅在 VariableChanged
+	// 时写入，dur_* 仅在 DurChapterChanged 时写入；行不存在时不创建（与 UpdateInfo 同语义）。
+	UpdateTocStats(ctx context.Context, bookID string, stats TocStats) error
 	FindByID(ctx context.Context, id string) (*Book, error)
 	FindByURL(ctx context.Context, bookURL string) (*Book, error)
 	List(ctx context.Context, filter BookFilter) ([]*Book, int, error)

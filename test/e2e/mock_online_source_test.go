@@ -21,7 +21,6 @@ import (
 	sourceapp "reader/internal/app/source"
 	"reader/internal/domain/book"
 	"reader/internal/domain/replace"
-	domainsource "reader/internal/domain/source"
 	"reader/internal/domain/task"
 	"reader/internal/infra/fetcher"
 	"reader/internal/infra/script"
@@ -131,11 +130,12 @@ func TestMockOnlineSourceFullFlow(t *testing.T) {
 	}
 
 	checkTask := &task.CheckTask{TaskID: "check-e2e", Status: task.CheckTaskPending, CreatedAt: time.Now().UTC()}
-	src, err := env.sources.FindByID(ctx, imported.Items[0].SourceID)
-	if err != nil {
+	sourceID := imported.Items[0].SourceID
+	if _, err := env.sources.FindByID(ctx, sourceID); err != nil {
 		t.Fatalf("find imported source: %v", err)
 	}
-	if err := env.checkRunner.Start(ctx, checkTask, []*domainsource.BookSource{src}, checkapp.Options{Keyword: "斗破", CheckSearch: true, CheckInfo: true, CheckToc: true, CheckContent: true}, 1); err != nil {
+	// Runner.Start 只接收 sourceID 列表（S00-02）：书源由 runner 在并发槽内惰性加载。
+	if err := env.checkRunner.Start(ctx, checkTask, []string{sourceID}, checkapp.Options{Keyword: "斗破", CheckSearch: true, CheckInfo: true, CheckToc: true, CheckContent: true}, 1); err != nil {
 		t.Fatalf("start check: %v", err)
 	}
 	waitForCheckTask(t, env.checkRepo, checkTask.TaskID)
@@ -249,7 +249,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	publisher := debugapp.NewPublisher(debugRepo)
 	debugFlow := debugapp.NewKeywordFlow(searcher, sourceRepo, books, content, publisher).WithDiscovery(discovery)
 	checker := checkapp.NewChecker(searcher, discovery, books, content)
-	checkRunner := checkworker.NewRunner(checkRepo, checker).WithDiagnostics(checkapp.NewDiagnosticsUpdater(sourceRepo))
+	checkRunner := checkworker.NewRunner(checkRepo, checker).WithSourceLoader(sourceRepo).WithDiagnostics(checkapp.NewDiagnosticsUpdater(checkRepo))
 	return &e2eEnv{db: db, sources: sourceRepo, importer: importer, search: searcher, books: books, content: content, replace: replaceapp.NewManager(replaceRepo), debugRepo: debugRepo, debugFlow: debugFlow, checkRepo: checkRepo, checkRunner: checkRunner}
 }
 

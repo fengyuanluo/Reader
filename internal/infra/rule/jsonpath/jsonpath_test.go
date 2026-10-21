@@ -158,6 +158,30 @@ func TestAdapterReturnsRuleParseFailedForInvalidJSONPath(t *testing.T) {
 	}
 }
 
+// R-012/S07-03：jayway JsonPath 的 `=~` 正则过滤运算符（`/.../` 包裹与裸正则两种写法）。
+func TestAdapterSupportsRegexFilterOperator(t *testing.T) {
+	adapter, err := New(`{"list":[{"t":"abc"},{"t":"xyz"}]}`)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	for _, tt := range []struct {
+		rule string
+		want []string
+	}{
+		{rule: `$.list[?(@.t=~/a.c/)].t`, want: []string{"abc"}},
+		{rule: `$.list[?(@.t=~/a.c/)].t`, want: []string{"abc"}},
+		{rule: `$.list[?(@.t=~/^x/)].t`, want: []string{"xyz"}},
+	} {
+		got, err := adapter.Strings(tt.rule)
+		if err != nil {
+			t.Fatalf("Strings(%q) error = %v", tt.rule, err)
+		}
+		if !reflect.DeepEqual(got, tt.want) {
+			t.Fatalf("Strings(%q) = %#v, want %#v", tt.rule, got, tt.want)
+		}
+	}
+}
+
 // R-011：在数值/布尔/字符串标量上继续取子路径时容错返回空，而不是 rule_parse_failed。
 func TestAdapterScalarTraversalReturnsEmpty(t *testing.T) {
 	adapter, err := New(`{"x":1,"b":true,"s":"text","n":null}`)

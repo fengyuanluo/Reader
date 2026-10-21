@@ -1,6 +1,7 @@
 package script
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/dop251/goja"
 )
@@ -295,6 +297,58 @@ func replaceFont(text string, errorFont *ttfFont, correctFont *ttfFont, filter b
 
 const ttfHandleProperty = "__ttf"
 
+// defaultTTFCacheSize 是 Runtime 内 TTF 解析结果缓存的容量（S05-04）。
+const defaultTTFCacheSize = 16
+
+// ttfCache 按字体数据 SHA-256 缓存解析结果；*ttfFont 解析后只读，可跨 Eval 并发共享。
+type ttfCache struct {
+	mu       sync.Mutex
+	capacity int
+	order    []byte
+	entries  map[[sha256.Size]byte]*ttfFont
+}
+
+func newTTFCache(capacity int) *ttfCache {
+	return &ttfCache{capacity: capacity, entries: map[[sha256.Size]byte]*ttfFont{}}
+}
+
+func (c *ttfCache) get(data []byte) (*ttfFont, bool) {
+	key := sha256.Sum256(data)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	font, ok := c.entries[key]
+	return font, ok
+}
+
+func (c *ttfCache) put(data []byte, font *ttfFont) {
+	key := sha256.Sum256(data)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.entries[key]; ok {
+		return
+	}
+	if len(c.order) >= c.capacity {
+		oldest := c.order[:sha256.Size]
+		c.order = c.order[sha256.Size:]
+		delete(c.entries, [sha256.Size]byte(oldest))
+	}
+	c.entries[key] = font
+	c.order = append(c.order, key[:]...)
+}
+
+// parseTTFCached 带缓存的 TTF 解析：同一字体数据（URL/base64 相同）只全量解析一次（S05-04）。
+func (r *Runtime) parseTTFCached(data []byte) (*ttfFont, error) {
+	if font, ok := r.ttfCache.get(data); ok {
+		return font, nil
+	}
+	font, err := parseTTF(data)
+	if err != nil {
+		return nil, err
+	}
+	r.ttfCache.put(data, font)
+	return font, nil
+}
+
 // queryTTFValue 对齐 JsExtensions.queryTTF：接受 URL、base64 或字节数组，返回字体查询对象；null 输入返回 null。
 func (r *Runtime) queryTTFValue(runCtx evalContext, vm *goja.Runtime, value goja.Value) goja.Value {
 	if goja.IsUndefined(value) || goja.IsNull(value) {
@@ -317,7 +371,7 @@ func (r *Runtime) queryTTFValue(runCtx evalContext, vm *goja.Runtime, value goja
 	if len(data) == 0 {
 		return goja.Null()
 	}
-	font, err := parseTTF(data)
+	font, err := r.parseTTFCached(data)
 	if err != nil {
 		throwJS(vm, err)
 	}

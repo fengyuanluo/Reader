@@ -28,6 +28,11 @@ func (r *ChapterRepository) ReplaceByBook(ctx context.Context, bookID string, ch
 	if _, err := tx.ExecContext(ctx, `DELETE FROM chapters WHERE book_id = ?`, bookID); err != nil {
 		return err
 	}
+	// S12-03：章节重排后按旧索引缓存的正文会错位命中，与 BookRepository.Delete 同款
+	// 清理该书全部正文缓存，防止目录刷新后 GetContent 按 chapter_index 命中错误内容。
+	if _, err := tx.ExecContext(ctx, `DELETE FROM cache_entries WHERE namespace = 'content' AND owner_type = 'book' AND owner_id = ?`, bookID); err != nil {
+		return err
+	}
 	// INSERT 在循环外 PrepareContext 一次，循环内复用；章节量上千时省去逐行编译开销。
 	stmt, err := tx.PrepareContext(ctx, `
 INSERT INTO chapters(book_id, book_url, url, title, is_volume, base_url, chapter_index, is_vip, is_pay, resource_url, tag, word_count, variable)
@@ -94,6 +99,17 @@ func (r *ChapterRepository) GetContent(ctx context.Context, bookID string, chapt
 		return "", false, err
 	}
 	return string(raw), true, nil
+}
+
+// DeleteContentByOwner 删除某 bookID 的全部章节正文缓存（S16-01）：cache_entries 中
+// namespace='content' 且 owner_type='book'、owner_id=bookID 的行，返回删除行数。
+// fetch 换源后清理被淘汰源的缓存，防止孤儿缓存无限膨胀（AuditReport S16-01）。
+func (r *ChapterRepository) DeleteContentByOwner(ctx context.Context, bookID string) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM cache_entries WHERE namespace = 'content' AND owner_type = 'book' AND owner_id = ?`, bookID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 const selectChapterSQL = `SELECT url, title, is_volume, coalesce(base_url, ''), book_url, chapter_index, is_vip, is_pay,

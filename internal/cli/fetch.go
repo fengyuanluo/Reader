@@ -41,6 +41,15 @@ type probeResult struct {
 	err            string
 }
 
+// fetch 参数上限：--probe/--workers/--search-workers 越界报用法错（S16-03 防自我 DOS），
+// 其余数值参数同样给出上限，越界退出码 1。
+const (
+	maxProbeCount    = 32
+	maxWorkers       = 64
+	maxSearchWorkers = 128
+	maxFetchSources  = 16
+)
+
 // runFetch 实现 `reader fetch <书名>`：多源搜索 → 候选筛选 → 并发探测 →
 // 选最佳源 → 并发下载 → 导出 TXT。
 func runFetch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
@@ -62,20 +71,20 @@ func runFetch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "error: fetch requires exactly one <name> argument")
 		return 1
 	}
-	if *searchWorkers < 1 {
-		fmt.Fprintf(stderr, "error: --search-workers must be >= 1, got %d\n", *searchWorkers)
+	if *searchWorkers < 1 || *searchWorkers > maxSearchWorkers {
+		fmt.Fprintf(stderr, "error: --search-workers must be between 1 and %d, got %d\n", maxSearchWorkers, *searchWorkers)
 		return 1
 	}
-	if *probeCount < 1 {
-		fmt.Fprintf(stderr, "error: --probe must be >= 1, got %d\n", *probeCount)
+	if *probeCount < 1 || *probeCount > maxProbeCount {
+		fmt.Fprintf(stderr, "error: --probe must be between 1 and %d, got %d\n", maxProbeCount, *probeCount)
 		return 1
 	}
-	if *workers < 1 {
-		fmt.Fprintf(stderr, "error: --workers must be >= 1, got %d\n", *workers)
+	if *workers < 1 || *workers > maxWorkers {
+		fmt.Fprintf(stderr, "error: --workers must be between 1 and %d, got %d\n", maxWorkers, *workers)
 		return 1
 	}
-	if *maxSources < 1 {
-		fmt.Fprintf(stderr, "error: --max-sources must be >= 1, got %d\n", *maxSources)
+	if *maxSources < 1 || *maxSources > maxFetchSources {
+		fmt.Fprintf(stderr, "error: --max-sources must be between 1 and %d, got %d\n", maxFetchSources, *maxSources)
 		return 1
 	}
 	if *searchTimeout <= 0 {
@@ -160,6 +169,15 @@ func runFetch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 			adoptedBookID, adoptedProbe, adoptedSect, adoptedSum = probe.bookID, probe, sections, summary
 			break
 		}
+		// 换源：清掉被淘汰源的章节正文缓存，防止孤儿缓存无限膨胀（S16-01）；
+		// 采纳源的缓存保留。ChapterRepo 未提供删除能力时跳过（downgrade 为警告）。
+		if cleaner, ok := rt.ChapterRepo.(interface {
+			DeleteContentByOwner(context.Context, string) (int64, error)
+		}); ok {
+			if _, err := cleaner.DeleteContentByOwner(ctx, probe.bookID); err != nil {
+				fmt.Fprintf(stderr, "warn: cleanup cache for %s: %v\n", probe.bookID, err)
+			}
+		}
 		fmt.Fprintf(stderr, "warn: %s failed %d chapters, switching source\n", probe.candidate.source.BookSourceName, len(summary.Failed))
 		if best == nil || len(summary.Failed) < len(bestSum.Failed) {
 			best, bestSect, bestSum = &ranked[i], sections, summary
@@ -205,6 +223,10 @@ func runFetch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: %d chapters failed\n", len(adoptedSum.Failed))
 	}
 	if *asJSON {
+		if adoptedSum.Failed == nil {
+			// JSON 输出 "failed": [] 而非 null（S16-04）。
+			adoptedSum.Failed = []downloadFailureJSON{}
+		}
 		type probeJSON struct {
 			OriginName string `json:"originName"`
 			Chapters   int    `json:"chapters"`

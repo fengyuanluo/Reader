@@ -1,11 +1,11 @@
 package replaceapp
 
 import (
-	"hash/fnv"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const (
@@ -31,8 +31,6 @@ var (
 	reSegmentQuoteEnd           = regexp.MustCompile(`["”“]+(？。！?!~)["”“]+`)
 	reSegmentQuoteTail          = regexp.MustCompile(`["”“]+(？。！?!~)([^"”“])`)
 	reSegmentSaidDot            = regexp.MustCompile(`([问说喊唱叫骂道着答])[\\.。]`)
-	reSegmentQuoteNarrationCut  = regexp.MustCompile(`([。！？?!~]["”])([^“"\n]{1,24}(?:问|说|喊|唱|叫|骂|道|着|答)[^“"\n]{0,12}[:：]["“])`)
-	reSegmentQuoteAfterNarrator = regexp.MustCompile(`([。！？?!~][”"])([^“"\n]{1,24})`)
 	reSegmentTrimStart          = regexp.MustCompile(`^\s+`)
 	reSegmentFinalQuoteSplit    = regexp.MustCompile(`\s*["”“]+\s*["”“][\s"”“]*`)
 	reSegmentFinalColonQuote    = regexp.MustCompile(`[:：][”“"\s]+`)
@@ -69,11 +67,22 @@ func reSegment(content string, chapterTitle string) string {
 	if first != strings.TrimSpace(chapterTitle) {
 		merged.WriteString(reSegmentInnerSpace.ReplaceAllString(first, ""))
 	}
+	// 对齐 Legado ContentHelp.kt:59-70 直接访问 buffer.last()（O(1)）：在合段循环内维护
+	// 最后写入的 1-2 个 rune，避免每段整串拷贝（S14-02）。
+	var last, last2 rune
+	lastSet := false
 	for i := 1; i < len(paragraphs); i++ {
-		if shouldBreakMergedParagraphBuilder(&merged) {
+		if lastSet && shouldBreakMergedParagraph(last, last2) {
 			merged.WriteByte('\n')
+			last, last2 = '\n', last
 		}
-		merged.WriteString(reSegmentLineSpace.ReplaceAllString(paragraphs[i], ""))
+		text := reSegmentLineSpace.ReplaceAllString(paragraphs[i], "")
+		merged.WriteString(text)
+		for _, r := range text {
+			last2 = last
+			last = r
+			lastSet = true
+		}
 	}
 
 	preprocessed := reSegmentQuoteTail.ReplaceAllString(
@@ -97,26 +106,21 @@ func reSegment(content string, chapterTitle string) string {
 	reduced = reSegmentTrimStart.ReplaceAllString(reduced, "")
 	reduced = reSegmentFinalQuoteSplit.ReplaceAllString(reduced, "”\n“")
 	reduced = reSegmentFinalColonQuote.ReplaceAllString(reduced, "：“")
-	reduced = reSegmentQuoteNarrationCut.ReplaceAllString(reduced, "$1\n$2")
-	reduced = reSegmentQuoteAfterNarrator.ReplaceAllString(reduced, "$1\n$2")
+	// 对齐 Legado ContentHelp.kt:76-89 最终链：只有 4 条替换（TrimStart/QuoteSplit/ColonQuote/
+	// DialogueQuote），不额外做 QuoteNarrationCut/QuoteAfterNarrator 切分（S14-04）。
 	reduced = reSegmentFinalDialogueQuote.ReplaceAllString(reduced, "\n$1：“$3")
 	reduced = strings.ReplaceAll(reSegmentSplitLines.ReplaceAllString(reduced, "\n"), "\r", "")
 	return reduced
 }
 
-func shouldBreakMergedParagraphBuilder(builder *strings.Builder) bool {
-	text := strings.TrimRight(builder.String(), "\r\n")
-	if text == "" {
-		return false
-	}
-	runes := []rune(text)
-	last := runes[len(runes)-1]
+// shouldBreakMergedParagraph 判断合段时是否需要换行（对齐 Legado buffer.last() 语义）：
+// 上一段末尾为句末符号，或末尾为右引号且倒数第二个为句末符号。
+func shouldBreakMergedParagraph(last rune, last2 rune) bool {
 	if matchReSegmentRune(reSegmentMarkSentencesEnd, last) {
 		return true
 	}
 	return matchReSegmentRune(reSegmentMarkQuotationRight, last) &&
-		len(runes) >= 2 &&
-		matchReSegmentRune(reSegmentMarkSentencesEnd, runes[len(runes)-2])
+		matchReSegmentRune(reSegmentMarkSentencesEnd, last2)
 }
 
 func reduceReSegmentLength(input string) string {
@@ -141,7 +145,8 @@ func reduceReSegmentLength(input string) string {
 		if dialogue > 1 {
 			paragraphs[i] = splitReSegmentQuote(paragraphs[i])
 			dialogue--
-		} else if dialogue > 0 && i < len(paragraphs)-1 && dialogueFlags[i+1] {
+		} else if dialogue > 0 && i < len(paragraphs)-2 && dialogueFlags[i+1] {
+			// 对齐 Legado ContentHelp.kt:107-109：对话模式只处理到倒数第三段（i < l-2）。
 			paragraphs[i] = splitReSegmentQuote(paragraphs[i])
 		}
 	}
@@ -490,16 +495,52 @@ func forceReSegmentSplit(text string, offset int, minCount int, gain int, trigge
 	return result
 }
 
+// fnv64aOffsetBasis / fnv64aPrime 是 FNV-1a 64 位算法参数；手写步进以便从缓存的中间状态续算。
+const (
+	fnv64aOffsetBasis uint64 = 14695981039346656037
+	fnv64aPrime       uint64 = 1099511628211
+)
+
+// reSegmentBaseHashCache 缓存 forceReSegmentSplit 同一 text 的 FNV-1a 中间状态（text+0x00 之后）：
+// 同一片段内每个句末符号都要取分数，旧实现每次 fnv 重写整个 text 字节，长段落为 O(k·m)；
+// text+0x00 只算一次，之后从该状态续算 offset/idx/midCount，与旧实现逐位一致（S14-03）。
+var reSegmentBaseHashCache = struct {
+	sync.Mutex
+	m map[string]uint64
+}{m: map[string]uint64{}}
+
+func reSegmentBaseHash(text string) uint64 {
+	reSegmentBaseHashCache.Lock()
+	if cached, ok := reSegmentBaseHashCache.m[text]; ok {
+		reSegmentBaseHashCache.Unlock()
+		return cached
+	}
+	reSegmentBaseHashCache.Unlock()
+	h := fnv64aOffsetBasis
+	for i := range len(text) {
+		h ^= uint64(text[i])
+		h *= fnv64aPrime
+	}
+	h ^= 0
+	h *= fnv64aPrime
+	reSegmentBaseHashCache.Lock()
+	reSegmentBaseHashCache.m[text] = h
+	reSegmentBaseHashCache.Unlock()
+	return h
+}
+
 func deterministicReSegmentScore(text string, offset int, idx int, midCount int) float64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(text))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(strconv.Itoa(offset)))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(strconv.Itoa(idx)))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(strconv.Itoa(midCount)))
-	return float64(h.Sum64()%10000) / 10000.0
+	// 从缓存的 text+0x00 中间状态续算，与旧实现 fnv.Write(text,0,offset,0,idx,0,midCount) 完全等价。
+	h := reSegmentBaseHash(text)
+	for _, part := range []string{strconv.Itoa(offset), strconv.Itoa(idx), strconv.Itoa(midCount)} {
+		h ^= 0
+		h *= fnv64aPrime
+		for i := range len(part) {
+			h ^= uint64(part[i])
+			h *= fnv64aPrime
+		}
+	}
+	return float64(h%10000) / 10000.0
 }
 
 func seekReSegmentIndexes(runes []rune, key string, from int, to int, inOrder bool) []int {

@@ -9,8 +9,8 @@ import (
 
 	replaceapp "reader/internal/app/replace"
 	"reader/internal/domain/book"
-	"reader/internal/domain/replace"
 	"reader/internal/domain/fetch"
+	"reader/internal/domain/replace"
 	"reader/internal/domain/rule"
 	"reader/internal/domain/source"
 	"reader/internal/infra/script"

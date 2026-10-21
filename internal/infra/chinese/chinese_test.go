@@ -46,3 +46,16 @@ func TestConvertConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// S09-06：词典加载失败不得永久缓存——坏模式首次失败返回原文，修复后下次调用重试成功。
+func TestConverterFailureRetries(t *testing.T) {
+	c := &converter{mode: "no-such-dictionary-mode"}
+	if got, err := c.convert("繁體"); err == nil || got != "繁體" {
+		t.Fatalf("convert with bad mode = %q, err=%v; want original + error", got, err)
+	}
+	// "修复"词典（换成合法模式）后必须能恢复，证明失败未永久缓存。
+	c.mode = "t2s"
+	if got, err := c.convert("繁體"); err != nil || got != "繁体" {
+		t.Fatalf("convert after fixing mode = %q, err=%v; want 繁体", got, err)
+	}
+}

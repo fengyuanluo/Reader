@@ -130,15 +130,6 @@ func (s *BookSource) ApplyLegadoDefaults(data []byte) error {
 	return nil
 }
 
-// jsonFieldPresent 判断 JSON 对象中字段是否存在且值不为 null。
-func jsonFieldPresent(fields map[string]json.RawMessage, name string) bool {
-	raw, ok := fields[name]
-	if !ok {
-		return false
-	}
-	return string(bytes.TrimSpace(raw)) != "null"
-}
-
 func SourceIDFromURL(bookSourceURL string) string {
 	sum := sha256.Sum256([]byte(bookSourceURL))
 	return "src_" + hex.EncodeToString(sum[:])[:24]

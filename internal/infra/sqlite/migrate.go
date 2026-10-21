@@ -3,7 +3,12 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // migration 是一个版本化迁移步骤；apply 与版本记录在同一事务内完成。
@@ -26,6 +31,12 @@ var migrations = []migration{
 	{version: 7, name: "book source and check item columns", apply: addExtraColumns},
 	// 版本 8：cache_entries 按 owner（book）删除正文缓存走 owner 索引，避免全表扫描。
 	{version: 8, name: "cache entries owner index", apply: execSQL(`CREATE INDEX IF NOT EXISTS idx_cache_entries_owner ON cache_entries(owner_type, owner_id)`)},
+	// 版本 9（S11-02/S11-07）：书架列表 ORDER BY dur_chapter_time 与 cache_entries 过期清理
+	// 走索引，避免全表扫描 + TEMP B-TREE。
+	{version: 9, name: "books dur_chapter_time and cache expiry indexes", apply: execSQL(`
+CREATE INDEX IF NOT EXISTS idx_books_dur_chapter_time ON books(dur_chapter_time DESC);
+CREATE INDEX IF NOT EXISTS idx_cache_entries_namespace_expires ON cache_entries(namespace, expires_at);
+`)},
 }
 
 // Migrate 把数据库升级到最新版本。连接级 PRAGMA（外键、busy_timeout、WAL）由 Open 通过 DSN 设置。
@@ -34,11 +45,20 @@ func Migrate(db *sql.DB) error {
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
-	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	// schema_migrations 建表是 autocommit 语句（不在迁移事务内），_txlock=immediate
+	// 只作用于显式事务；并发迁移双方同时建表时仍可能 SQLITE_BUSY，退避重试兜底。
+	var createErr error
+	for range 5 {
+		if _, createErr = db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-)`); err != nil {
-		return fmt.Errorf("create schema_migrations: %w", err)
+)`); createErr == nil || !isBusy(createErr) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if createErr != nil {
+		return fmt.Errorf("create schema_migrations: %w", createErr)
 	}
 	var current int64
 	if err := db.QueryRowContext(ctx, `SELECT coalesce(max(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
@@ -48,15 +68,49 @@ func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
 		if step.version <= current {
 			continue
 		}
-		if err := applyMigration(ctx, db, step); err != nil {
+		// SQLITE_BUSY 重试（S11-09）：busy_timeout 只等待单条语句；BEGIN IMMEDIATE
+		// 排队也可能在 busy_timeout 窗口外（如迁移语句耗时超过窗口）遇到锁竞争，
+		// 简单退避重试后重新评估 current，保证并发迁移双方最终都成功。
+		var err error
+		for retry := range 5 {
+			if err = applyMigration(ctx, db, step); err == nil || !isBusy(err) {
+				break
+			}
+			time.Sleep(time.Duration(100*(retry+1)) * time.Millisecond)
+		}
+		if err != nil {
 			return fmt.Errorf("migration %d (%s): %w", step.version, step.name, err)
 		}
 	}
 	return nil
 }
 
+// isBusy 判断错误是否为 SQLite 锁竞争（SQLITE_BUSY / SQLITE_LOCKED）。
+func isBusy(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	code := sqliteErr.Code()
+	return code == sqlite3.SQLITE_BUSY || code == sqlite3.SQLITE_LOCKED
+}
+
+// isUniqueViolation 判断错误是否为 SQLite UNIQUE / PRIMARY KEY 约束冲突（与
+// repositories.isUniqueViolation 同语义，供并发迁移的版本冲突判定使用）。
+func isUniqueViolation(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	code := sqliteErr.Code()
+	return code == sqlite3.SQLITE_CONSTRAINT_UNIQUE || code == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
+}
+
 func applyMigration(ctx context.Context, db *sql.DB, step migration) error {
-	tx, err := db.BeginTx(ctx, nil)
+	// BEGIN IMMEDIATE 全程持写锁（S11-09）：两个进程并发迁移同一库时，先提交者成功，
+	// 后启动方在开始时就拿到 busy_timeout 等待，避免双方都读到相同 current 后
+	// INSERT INTO schema_migrations 因 version PRIMARY KEY 冲突使后启动方启动失败。
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelLinearizable})
 	if err != nil {
 		return err
 	}
@@ -65,6 +119,13 @@ func applyMigration(ctx context.Context, db *sql.DB, step migration) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES (?)`, step.version); err != nil {
+		// 并发迁移方已提交同一版本时视为成功：重读确认版本已存在且本步 apply 为幂等 DDL。
+		if isUniqueViolation(err) {
+			var applied int
+			if qerr := db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version = ?`, step.version).Scan(&applied); qerr == nil && applied > 0 {
+				return nil
+			}
+		}
 		return err
 	}
 	return tx.Commit()

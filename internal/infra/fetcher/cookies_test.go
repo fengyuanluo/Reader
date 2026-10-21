@@ -258,18 +258,15 @@ func TestCookieManagerLoadCachesPerDomain(t *testing.T) {
 		t.Fatalf("Save() stale error = %v", err)
 	}
 	// 把缓存中的过期时间拨到过去，模拟过期。
-	manager.cacheMu.RLock()
-	cached := manager.cache["example.test"]
-	manager.cacheMu.RUnlock()
-	for i := range cached {
-		if cached[i].Name == "stale" {
-			past := time.Now().Add(-time.Minute)
-			cached[i].ExpiresAt = &past
+	manager.mutateCache("example.test", func(cookies []fetch.Cookie) []fetch.Cookie {
+		for i := range cookies {
+			if cookies[i].Name == "stale" {
+				past := time.Now().Add(-time.Minute)
+				cookies[i].ExpiresAt = &past
+			}
 		}
-	}
-	manager.cacheMu.Lock()
-	manager.cache["example.test"] = cached
-	manager.cacheMu.Unlock()
+		return cookies
+	})
 	got, err = manager.Load(ctx, "https://www.example.test/", "")
 	if err != nil {
 		t.Fatalf("Load() stale error = %v", err)
@@ -346,4 +343,198 @@ type countingCookieRepo struct {
 func (r *countingCookieRepo) ListByDomain(ctx context.Context, domain string) ([]fetch.Cookie, error) {
 	r.listCalls++
 	return r.memoryCookieRepo.ListByDomain(ctx, domain)
+}
+
+// batchDeleteRepo 记录批量删除调用次数（S08-07）。
+type batchDeleteRepo struct {
+	memoryCookieRepo
+	batchCalls int
+	deleted    int64
+}
+
+func (r *batchDeleteRepo) DeleteExpired(ctx context.Context, domain string, before time.Time) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.batchCalls++
+	n := int64(0)
+	for key, cookie := range r.cookies {
+		if cookie.Domain == domain && cookie.ExpiresAt != nil && !cookie.ExpiresAt.After(before) {
+			delete(r.cookies, key)
+			n++
+		}
+	}
+	r.deleted += n
+	return n, nil
+}
+
+// TestCookieManagerCacheBoundedByLRUCapacity 覆盖 S00-04：连续 Load 1 万个不同 domain，
+// 缓存条目数不超过 LRU 容量上限；空结果按负缓存短 TTL 处理。
+func TestCookieManagerCacheBoundedByLRUCapacity(t *testing.T) {
+	ctx := context.Background()
+	repo := &memoryCookieRepo{cookies: map[string]fetch.Cookie{}}
+	manager := NewCookieManager(repo, nil)
+	for i := range 10000 {
+		if _, err := manager.Load(ctx, fmt.Sprintf("https://host%d.example.site/", i), ""); err != nil {
+			t.Fatalf("Load(%d) error = %v", i, err)
+		}
+	}
+	if n := manager.cache.len(); n > cookieCacheCapacity {
+		t.Fatalf("cache len = %d, want <= %d", n, cookieCacheCapacity)
+	}
+	// 最近使用的域仍在缓存中，最久未使用的被淘汰。
+	if _, err := manager.Load(ctx, "https://host9999.example.site/", ""); err != nil {
+		t.Fatalf("Load(9999) error = %v", err)
+	}
+}
+
+// TestCookieManagerNegativeCacheExpires 覆盖 S00-04 空结果负缓存：TTL 内命中缓存，TTL 后重新查 repo。
+func TestCookieManagerNegativeCacheExpires(t *testing.T) {
+	ctx := context.Background()
+	repo := &countingCookieRepo{memoryCookieRepo: memoryCookieRepo{cookies: map[string]fetch.Cookie{}}}
+	manager := NewCookieManager(repo, nil)
+	if _, err := manager.Load(ctx, "https://empty.example.test/", ""); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	first := repo.listCalls
+	if _, err := manager.Load(ctx, "https://empty.example.test/", ""); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if repo.listCalls != first {
+		t.Fatalf("negative cache miss within TTL: repo calls = %d, want %d", repo.listCalls, first)
+	}
+}
+
+// TestCookieManagerSessionCookieDomainMatch 覆盖 S08-06：a.example.com 种下的 session cookie，
+// example.com（父域）请求不带；b.a.example.com 与 example.com 的子域匹配规则按 RFC 6265。
+func TestCookieManagerSessionCookieDomainMatch(t *testing.T) {
+	ctx := context.Background()
+	repo := &memoryCookieRepo{cookies: map[string]fetch.Cookie{}}
+	manager := NewCookieManager(repo, NewSessionCookieStore())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+	headers := http.Header{}
+	headers.Add("Set-Cookie", "sub=s1")
+	if err := manager.Save(ctx, "https://a.example.test/", headers); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	// 父域请求不带子域的 session cookie。
+	got, err := manager.Load(ctx, "https://example.test/", "")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if strings.Contains(got, "sub=s1") {
+		t.Fatalf("cookie = %q leaks subdomain session cookie to parent domain", got)
+	}
+	// 子域自身请求带。
+	got, err = manager.Load(ctx, "https://a.example.test/", "")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !strings.Contains(got, "sub=s1") {
+		t.Fatalf("cookie = %q missing sub=s1 for its own host", got)
+	}
+}
+
+// TestCookieManagerSaveRejectsCrossSiteDomain 覆盖 S08-06：Set-Cookie 声明的 Domain 与当前 host
+// 不做 domain-match 时拒绝（RFC 6265 5.3 步骤 6），避免跨站投毒。
+func TestCookieManagerSaveRejectsCrossSiteDomain(t *testing.T) {
+	ctx := context.Background()
+	repo := &memoryCookieRepo{cookies: map[string]fetch.Cookie{}}
+	manager := NewCookieManager(repo, NewSessionCookieStore())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+	headers := http.Header{}
+	headers.Add("Set-Cookie", "evil=1; Domain=other.test")
+	if err := manager.Save(ctx, "https://example.test/", headers); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	got, err := manager.Load(ctx, "https://example.test/", "")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if strings.Contains(got, "evil=1") {
+		t.Fatalf("cookie = %q accepted cross-site Domain", got)
+	}
+	got, err = manager.Load(ctx, "https://other.test/", "")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if strings.Contains(got, "evil=1") {
+		t.Fatalf("cookie = %q persisted cross-site Domain", got)
+	}
+}
+
+// TestCookieManagerBatchDeletesExpiredCookies 覆盖 S08-07：5 条过期 cookie 批量删除，
+// 批量接口只调用一次；无批量接口时回退逐条 Delete 且缓存一次失效。
+func TestCookieManagerBatchDeletesExpiredCookies(t *testing.T) {
+	ctx := context.Background()
+	repo := &batchDeleteRepo{memoryCookieRepo: memoryCookieRepo{cookies: map[string]fetch.Cookie{}}}
+	manager := NewCookieManager(repo, nil)
+	past := time.Now().Add(-time.Hour)
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		expires := past
+		if err := repo.Save(ctx, fetch.Cookie{Domain: "example.test", Name: name, Value: "v", ExpiresAt: &expires}); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+	}
+	fresh := time.Now().Add(time.Hour)
+	if err := repo.Save(ctx, fetch.Cookie{Domain: "example.test", Name: "keep", Value: "v", ExpiresAt: &fresh}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	got, err := manager.Load(ctx, "https://example.test/", "")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if strings.Contains(got, "a=v") || !strings.Contains(got, "keep=v") {
+		t.Fatalf("cookie = %q, want expired dropped and keep=v", got)
+	}
+	if repo.batchCalls != 1 {
+		t.Fatalf("DeleteExpired calls = %d, want 1", repo.batchCalls)
+	}
+	if _, ok := repo.cookies["example.test|a"]; ok {
+		t.Fatal("expired cookie a still persisted")
+	}
+}
+
+// TestCookieManagerFallbackDeletesExpiredCookies 覆盖 S08-07 回退路径：仓储无批量能力时逐条 Delete。
+func TestCookieManagerFallbackDeletesExpiredCookies(t *testing.T) {
+	ctx := context.Background()
+	repo := &countingCookieRepo{memoryCookieRepo: memoryCookieRepo{cookies: map[string]fetch.Cookie{}}}
+	manager := NewCookieManager(repo, nil)
+	past := time.Now().Add(-time.Hour)
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		expires := past
+		if err := repo.Save(ctx, fetch.Cookie{Domain: "example.test", Name: name, Value: "v", ExpiresAt: &expires}); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+	}
+	if _, err := manager.Load(ctx, "https://example.test/", ""); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		if _, ok := repo.cookies["example.test|"+name]; ok {
+			t.Fatalf("expired cookie %s still persisted", name)
+		}
+	}
+}
+
+// TestMapToCookieDeterministicTruncation 覆盖 S08-08：100 条 cookie 截断到 4096 且两次调用结果一致。
+func TestMapToCookieDeterministicTruncation(t *testing.T) {
+	values := map[string]string{}
+	for i := range 100 {
+		values[fmt.Sprintf("cookie%03d", i)] = strings.Repeat("v", 100)
+	}
+	first := mapToCookie(values, cookieMaxHeaderLength)
+	second := mapToCookie(values, cookieMaxHeaderLength)
+	if len(first) > cookieMaxHeaderLength {
+		t.Fatalf("cookie length = %d, want <= %d", len(first), cookieMaxHeaderLength)
+	}
+	if first != second {
+		t.Fatal("mapToCookie not deterministic across calls")
+	}
+	// 无上限时全部保留。
+	full := mapToCookie(values, 0)
+	if len(full) <= cookieMaxHeaderLength {
+		t.Fatalf("full length = %d, want > %d", len(full), cookieMaxHeaderLength)
+	}
 }

@@ -787,10 +787,8 @@ func TestRuntimeScriptRequestsDoNotSendSourceProxyAsHeader(t *testing.T) {
 }
 
 func TestRuntimeProvidesFormattingDigestAndDeviceHelpers(t *testing.T) {
-	previousLocal := time.Local
-	time.Local = time.UTC
-	defer func() { time.Local = previousLocal }()
-
+	// t.Local() 随进程时区变化，这里按本地时区计算 epoch 期望值，不再改写全局 time.Local（并发测试会竞争）。
+	epochWant := time.Unix(0, 0).Format("2006/01/02 15:04")
 	runtime := NewRuntime(Policy{SourceKey: "https://source.example.test"})
 	got, err := runtime.Eval(context.Background(), `[
   java.timeFormat(0),
@@ -804,7 +802,7 @@ func TestRuntimeProvidesFormattingDigestAndDeviceHelpers(t *testing.T) {
 		t.Fatalf("Eval() error = %v", err)
 	}
 	parts := strings.Split(got.(string), "|")
-	if len(parts) != 6 || parts[0] != "1970/01/01 00:00" || parts[1] != "第102章" || parts[2] != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" || parts[3] != "1,2" {
+	if len(parts) != 6 || parts[0] != epochWant || parts[1] != "第102章" || parts[2] != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" || parts[3] != "1,2" {
 		t.Fatalf("got = %#v", got)
 	}
 	if len(parts[4]) != 16 || parts[4] != parts[5] {
@@ -813,7 +811,7 @@ func TestRuntimeProvidesFormattingDigestAndDeviceHelpers(t *testing.T) {
 }
 
 func TestRuntimeProvidesCookieUserAgentHeadAndAjaxTestAllHelpers(t *testing.T) {
-	deadlineSeen := false
+	deadlineSeen := make(chan struct{}, 4)
 	fetcher := fetcherFunc(func(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
 		if req.Method == http.MethodHead {
 			if req.Headers["X-Test"] != "head" {
@@ -822,7 +820,7 @@ func TestRuntimeProvidesCookieUserAgentHeadAndAjaxTestAllHelpers(t *testing.T) {
 			return &fetch.Response{StatusCode: 204, Headers: fetch.Headers{"X-Head": []string{"ok"}}, URL: req.URL}, nil
 		}
 		if _, ok := ctx.Deadline(); ok {
-			deadlineSeen = true
+			deadlineSeen <- struct{}{}
 		}
 		if !req.SkipRateLimit {
 			t.Fatalf("ajaxTestAll request = %#v", req)
@@ -845,8 +843,8 @@ java.removeCookie('https://example.test');
 		t.Fatalf("EvalWithBindings() error = %v", err)
 	}
 	want := "abc||Reader-Test|204|ok|https://source.example.test/a|https://source.example.test/b"
-	if got != want || !deadlineSeen {
-		t.Fatalf("got = %#v deadlineSeen=%v, want %q", got, deadlineSeen, want)
+	if got != want || len(deadlineSeen) == 0 {
+		t.Fatalf("got = %#v deadlineSeen=%v, want %q", got, len(deadlineSeen) > 0, want)
 	}
 }
 

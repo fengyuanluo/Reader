@@ -30,7 +30,7 @@ Reader 对外 API 以 `api/openapi.yaml` 为唯一真相源，服务默认挂载
 | POST | `/book-sources/{sourceId}/login` | 提交登录表单值并执行 `loginUrl` 脚本 |
 | DELETE | `/book-sources/{sourceId}/login` | 清除 `loginInfo` / `loginHeader`（204） |
 | POST | `/search` | 多源搜索（`keyword` 必填，可用 `sourceIds`/`group` 限定范围） |
-| POST | `/discovery` | 发现分类与发现列表 |
+| POST | `/discovery` | 发现分类与发现列表（body 可带 `sourceIds`/`group`/`discoveryUrl`/`page`；`discoveryUrl` 为直连模式，省略时用书源 `exploreUrl`） |
 | POST | `/books` | 加入书架 |
 | GET | `/books` | 书架分页查询 |
 | GET | `/books/{bookId}` | 书籍详情 |
@@ -39,6 +39,7 @@ Reader 对外 API 以 `api/openapi.yaml` 为唯一真相源，服务默认挂载
 | POST | `/books/{bookId}/refresh-toc` | 刷新目录 |
 | GET | `/books/{bookId}/chapters` | 章节列表 |
 | GET | `/books/{bookId}/chapters/{index}/content` | 章节正文 |
+| GET | `/books/{bookId}/export.txt` | 全书 UTF-8 TXT 导出 |
 | PUT | `/books/{bookId}/progress` | 保存阅读进度 |
 | GET | `/images/proxy` | 图片安全代理 |
 | GET | `/replace-rules` | 替换规则列表 |
@@ -57,12 +58,12 @@ Reader 对外 API 以 `api/openapi.yaml` 为唯一真相源，服务默认挂载
 
 ## 通用约定
 
-- **异步语义**：`POST /check/book-sources`、`DELETE /check/tasks/{taskId}`、`POST /debug/book-source`、`DELETE /debug/sessions/{sessionId}` 成功返回 **202** 加任务/会话快照，终态由 `GET` 轮询或事件流确认。
+- **异步语义**：`POST /check/book-sources`、`DELETE /check/tasks/{taskId}`、`POST /debug/book-source`、`DELETE /debug/sessions/{sessionId}` 成功返回 **202** 加任务/会话快照，终态由 `GET` 轮询或事件流确认。`POST /check/book-sources` 在已有未完成任务时返回 **409** `check_task_running`（防重入）。
 - **请求体**：JSON 端点要求 `Content-Type: application/json`（否则 400）；普通 JSON 请求体上限 10 MiB，书源导入上限 32 MiB，超限返回 **413** `payload_too_large`。
-- **分页**：`page >= 1`、`1 <= pageSize <= 200`，越界返回 400 `validation_failed`。
+- **分页**：`page >= 1`、`1 <= pageSize <= 200`，越界返回 400 `validation_failed`。`GET /check/tasks/{taskId}` 的条目按页返回（`?page=&pageSize=&status=`，默认第一页 50 条 + `total`）；`search`/`discovery`/`check` 的 `sourceIds` 数组上限 1000，超出返回 400。
 - **未装配能力**：可选服务缺失时返回 **501** `not_configured`，不再用 500 掩盖。
 - **冲突**：`PUT /book-sources/{sourceId}` 修改 `bookSourceUrl` 时，若新地址已被其他书源占用，或 body 中的 `sourceId` 与路径不一致，返回 **409** `source_conflict`。
-- **SSE**：`Content-Type: text/event-stream`；先回放历史事件（支持 `Last-Event-ID` 续传），随后实时推送并周期发送 `: heartbeat` 注释行；会话进入终态后关闭连接；订阅不存在的会话立即返回 404。
+- **SSE**：`Content-Type: text/event-stream`；先回放历史事件（校验与调试事件流都支持 `Last-Event-ID` 续传，事件携带 `id:` 序号），随后实时推送并周期发送 `: heartbeat` 注释行；会话/任务进入终态后关闭连接；订阅不存在的会话立即返回 404。
 
 ## 认证
 
@@ -231,4 +232,4 @@ curl -L -H "Authorization: Bearer dev-token" \
   --output cover.jpg
 ```
 
-图片代理复用 Fetcher 安全策略，默认禁止私网、回环、link-local 和 metadata 地址，且限制响应大小和重定向。
+图片代理复用 Fetcher 安全策略，默认禁止私网、回环、link-local 和 metadata 地址，且限制响应大小和重定向。SVG 响应强制携带 `X-Content-Type-Options: nosniff` 与 `Content-Security-Policy: default-src 'none'`，内联脚本不会执行。

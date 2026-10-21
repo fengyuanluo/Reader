@@ -19,7 +19,7 @@ func runSearch(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	limit := fs.Int("limit", 20, "max results printed (>= 1)")
 	precision := fs.Bool("precision", false, "only keep exact keyword matches")
 	concurrency := fs.Int("concurrency", 0, "per-source search concurrency (0 = searcher default)")
-	timeout := fs.Duration("timeout", 0, "per-source search timeout (0 = disabled)")
+	timeout := fs.Duration("timeout", 0, "per-source search timeout (0 = use default, currently 15s)")
 	asJSON := fs.Bool("json", false, "output JSON")
 	if code, done := ParseFlags(fs, "search <keyword> [flags]", args, stdout, stderr); done {
 		return code

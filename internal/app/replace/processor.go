@@ -2,7 +2,6 @@ package replaceapp
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -94,8 +93,16 @@ func (p *Processor) Process(ctx context.Context, input ProcessInput) (ProcessRes
 		return ProcessResult{}, err
 	}
 
-	displayTitle, err := p.applyTitleRules(ctx, input.Chapter.Title, titleRules)
-	if err != nil {
+	displayTitle := input.Chapter.Title
+	// 对齐 Legado ContentProcessor.kt:186-192 与 BookChapter.getDisplayTitle 默认 chineseConvert=true：
+	// includeTitle 重加标题时标题与正文使用同一简繁转换设置，保证文字体系一致。
+	if input.IncludeTitle {
+		displayTitle, err = p.applyTitleRules(ctx, p.convertChinese(displayTitle), titleRules)
+		if err != nil {
+			return ProcessResult{}, err
+		}
+	} else if displayTitle, _, err = p.applyTitleRulesForDedup(ctx, input.Chapter.Title, titleRules); err != nil {
+		// includeTitle=false 时 Legado 完全跳过标题处理；这里只为 sameTitle 去重计算 displayTitle。
 		return ProcessResult{}, err
 	}
 
@@ -117,7 +124,7 @@ func (p *Processor) Process(ctx context.Context, input ProcessInput) (ProcessRes
 	content = trimLines(content)
 	effectiveRuleIDs := []int64{}
 	for _, rule := range contentRules {
-		if rule == nil || rule.Pattern == "" {
+		if rule == nil || rule.Pattern == "" || !rule.IsEnabled {
 			continue
 		}
 		next, err := applyRule(ctx, content, *rule)
@@ -147,11 +154,19 @@ func (p *Processor) Process(ctx context.Context, input ProcessInput) (ProcessRes
 	}, nil
 }
 
+// applyTitleRulesForDedup 为 sameTitle 去重计算 displayTitle：仅应用 titleRules，不做简繁转换
+// （对齐 Legado ContentProcessor.kt:110-116 中 chineseConvert=false 的 getDisplayTitle 调用），
+// IncludeTitle=false 时不对外展示标题，规则处理结果只用于去重判断。
+func (p *Processor) applyTitleRulesForDedup(ctx context.Context, title string, rules []*replace.ReplaceRule) (string, bool, error) {
+	next, err := p.applyTitleRules(ctx, title, rules)
+	return next, next != title, err
+}
+
 // applyTitleRules 应用标题域替换规则；与 Legado BookChapter.getDisplayTitle 一致，单条规则出错不中止。
 func (p *Processor) applyTitleRules(ctx context.Context, title string, rules []*replace.ReplaceRule) (string, error) {
 	displayTitle := strings.ReplaceAll(strings.ReplaceAll(title, "\r", ""), "\n", "")
 	for _, rule := range rules {
-		if rule == nil || rule.Pattern == "" {
+		if rule == nil || rule.Pattern == "" || !rule.IsEnabled {
 			continue
 		}
 		next, err := applyRule(ctx, displayTitle, *rule)
@@ -169,16 +184,31 @@ func (p *Processor) applyTitleRules(ctx context.Context, title string, rules []*
 	return displayTitle, nil
 }
 
-// handleRuleFailure 处理单条替换规则失败：正则超限时禁用该规则（对齐 Legado 的 RegexTimeoutException 分支），
-// 保存失败也要记录，否则该规则会一直保持启用并反复失败。
+// handleRuleFailure 处理单条替换规则失败：仅正则执行超时（ErrRegexTimeout，对应 Legado 的
+// RegexTimeoutException 分支）才禁用规则并持久化；输入过大（ErrRegexInputTooLarge）与请求
+// 取消（ErrRegexCancelled，对应 CancellationException 分支）不属于该分支，只告警不禁用。
+// 禁用走仓储更新（通过规则值拷贝触发 Save），不改快照共享指针，避免与其他 goroutine 构成数据竞争。
 func (p *Processor) handleRuleFailure(ctx context.Context, rule *replace.ReplaceRule, err error) {
-	if errors.Is(err, ErrRegexLimitExceeded) && rule.IsRegex {
-		rule.IsEnabled = false
-		if saveErr := p.repo.Save(ctx, rule); saveErr != nil {
-			slog.Warn("disable replace rule failed", "ruleId", rule.ID, "ruleName", rule.Name, "error", saveErr)
+	switch classifyRegexFailure(err) {
+	case regexFailureTimeout:
+		if rule.IsRegex {
+			// rule 是快照内共享指针的元素；禁用走值拷贝触发仓储 Save，不改共享指针，
+			// 避免与其他 goroutine 构成数据竞争（S14-05）。
+			disabled := *rule
+			disabled.IsEnabled = false
+			if saveErr := p.repo.Save(ctx, &disabled); saveErr != nil {
+				slog.Warn("disable replace rule failed", "ruleId", rule.ID, "ruleName", rule.Name, "error", saveErr)
+			} else {
+				// 禁用已持久化，失效快照缓存，避免后续章节仍重放该禁用规则（S14-05）。
+				p.InvalidateRuleCache()
+			}
 		}
+		slog.Warn("replace rule timed out, disabled", "ruleId", rule.ID, "ruleName", rule.Name)
+	case regexFailureCancelled:
+		// 请求取消：静默跳过（对齐 Legado CancellationException 分支），不写日志噪音。
+	default:
+		slog.Warn("replace rule failed", "ruleId", rule.ID, "ruleName", rule.Name, "error", err)
 	}
-	slog.Warn("replace rule failed", "ruleId", rule.ID, "ruleName", rule.Name, "error", err)
 }
 
 func applyRule(ctx context.Context, text string, rule replace.ReplaceRule) (string, error) {

@@ -36,14 +36,15 @@ func TestBuildBookFetchRequestEncodesFormBodyOnce(t *testing.T) {
 	}
 }
 
-// 显式设置了 Content-Type 时正文按原样发送（Legado: post(body, contentType)），不再做表单编码。
+// 对齐 Legado AnalyzeUrl.kt：表单正文按 charset（默认 UTF-8）percent 编码一次，
+// 显式 Content-Type 不跳过编码，只保留该头（S09-05 新语义）。
 func TestBuildBookFetchRequestKeepsBodyWhenContentTypeSet(t *testing.T) {
 	req, err := buildBookFetchRequest(context.Background(), `https://site.example.test/api,{"method":"POST","headers":{"Content-Type":"text/plain; charset=utf-8"},"body":"a=1&b=中文"}`, &source.BookSource{SourceID: "s1", BookSourceURL: "https://site.example.test/source"}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBookFetchRequest() error = %v", err)
 	}
-	if got := string(req.Body); got != "a=1&b=中文" {
-		t.Fatalf("body = %q, want 原样正文", got)
+	if got := string(req.Body); got != "a=1&b=%E4%B8%AD%E6%96%87" {
+		t.Fatalf("body = %q, want 编码一次", got)
 	}
 	if req.Headers["Content-Type"] != "text/plain; charset=utf-8" {
 		t.Fatalf("content-type = %q", req.Headers["Content-Type"])

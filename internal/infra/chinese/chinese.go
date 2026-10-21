@@ -2,27 +2,44 @@
 package chinese
 
 import (
+	"log/slog"
 	"sync"
 
 	"github.com/longbridgeapp/opencc"
 )
 
-// converter 以 sync.Once 懒加载 OpenCC 词典；词典只读，Convert 可并发调用。
+// converter 懒加载 OpenCC 词典；词典只读，Convert 可并发调用。
+// 词典加载失败不再永久缓存：加载互斥锁保护重置逻辑，瞬时原因（词典文件暂不可读、
+// 内存不足）恢复后下次调用会重试；转换期间的 Convert 调用返回原文（与 Legado 语义一致）。
 type converter struct {
-	mode string
-	once sync.Once
-	cc   *opencc.OpenCC
-	err  error
+	mode   string
+	initMu sync.Mutex
+	cc     *opencc.OpenCC
+	loaded bool
+}
+
+func (c *converter) ensure() (*opencc.OpenCC, error) {
+	c.initMu.Lock()
+	defer c.initMu.Unlock()
+	if c.loaded {
+		return c.cc, nil
+	}
+	cc, err := opencc.New(c.mode)
+	if err != nil {
+		// 失败不缓存 err：下次调用重试；每次失败打警告日志（此前静默吞错，繁简转换永久失效无日志）。
+		slog.Warn("opencc dictionary load failed", "mode", c.mode, "error", err)
+		return nil, err
+	}
+	c.cc, c.loaded = cc, true
+	return c.cc, nil
 }
 
 func (c *converter) convert(value string) (string, error) {
-	c.once.Do(func() {
-		c.cc, c.err = opencc.New(c.mode)
-	})
-	if c.err != nil {
-		return value, c.err
+	cc, err := c.ensure()
+	if err != nil {
+		return value, err
 	}
-	return c.cc.Convert(value)
+	return cc.Convert(value)
 }
 
 var (

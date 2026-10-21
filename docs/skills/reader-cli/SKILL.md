@@ -1,6 +1,6 @@
 ---
 name: reader-cli
-description: Reader CLI：书源导入/搜索/书架/目录/正文/下载的非交互命令行，面向 Agent 自动化，单二进制 `reader`，`--json` 机读输出
+description: Reader CLI：书源导入/校验/搜索/书架/目录/正文/下载的非交互命令行，面向 Agent 自动化，单二进制 `reader`，`--json` 机读输出
 ---
 
 # Reader CLI 技能卡
@@ -24,6 +24,7 @@ Reader 提供单二进制 CLI（`go run ./cmd/reader` 或构建后的 `reader`�
 | 整本/区间下载并导出 TXT | `reader download <bookId> [--from N --to M --export path]` |
 | 一键搜书→选源→下载→导出 | `reader fetch <书名> [--author <a> --group <g> --probe N --max-sources N --search-workers N --workers N --export path --json]` |
 | 启停书源 | `reader source enable|disable <sourceId>` |
+| 校验书源可用性（搜索→详情→目录→正文） | `reader check [--timeout 30s --concurrency 16 --keyword <kw> --json] <id1,id2\|--all>` |
 
 ## 调用约定
 
@@ -32,6 +33,8 @@ Reader 提供单二进制 CLI（`go run ./cmd/reader` 或构建后的 `reader`�
 - 退出码：0 成功；1 用法/参数错误（在打开数据库前判定，不会建库）；2 运行失败。`download` 有章节失败时 exit 2，`failed` 数组含失败章节索引与原因。
 - `import --update` 只接受 `lastUpdateTime`（默认）、`always`、`skipExisting`；带 UTF-8 BOM 的 JSON 可直接导入。
 - `search --limit` 必须 >= 1；`download --from` 必须在 0 到最后一章索引之间。
+- `check`：flag 必须写在 ID 之前；多个 ID 用逗号连成一个参数（空格分隔会报用法错）。`--json` 的 `items[].failureCode` 区分失败阶段（如 `search_failed`）；有失败 exit 2。
+- `search --timeout` 缺省为每源 15s（`READER_SEARCH_SOURCE_TIMEOUT` 可覆盖），超时源记 `search_timeout` warning，不阻塞整体结果。
 - Ctrl-C / SIGTERM 取消进行中的命令；`download` 被中断时不导出 TXT，exit 2，重跑从缓存续传。
 - 链式句柄：`search --json` 返回 `items[].bookUrl` 与 `items[].sourceId` → 原样传给 `book add`；`bookId` 从 `book add` 返回值取，不要自行计算。
 - CLI 直连 SQLite（`READER_SQLITE_DSN`，默认 `data/reader.db`），不需要启动 server、不需要 token。`reader serve` 默认监听 `127.0.0.1:8080`，此时可以不设 token；监听非回环地址必须设置 `READER_TOKEN`（production 始终必须）。serve 的 JSON 日志在 stderr。

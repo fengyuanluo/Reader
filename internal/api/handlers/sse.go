@@ -38,8 +38,13 @@ func prepareSSE(w http.ResponseWriter, r *http.Request) (http.Flusher, bool) {
 	return flusher, true
 }
 
-// writeSSEWriter 写入一条 SSE 消息；返回错误表示连接已断开，调用方应结束循环。
-func writeSSEMessage(w http.ResponseWriter, flusher http.Flusher, eventType string, data []byte) error {
+// writeSSEMessageWithID 写入一条带 id 字段的 SSE 消息；id<=0 时省略 id 行。
+func writeSSEMessageWithID(w http.ResponseWriter, flusher http.Flusher, eventType string, eventID int64, data []byte) error {
+	if eventID > 0 {
+		if _, err := fmt.Fprintf(w, "id: %d\n", eventID); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data); err != nil {
 		return err
 	}

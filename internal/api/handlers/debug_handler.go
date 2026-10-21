@@ -20,7 +20,7 @@ func (h *SourceHandler) CreateDebugSession(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var body generated.DebugSessionCreateRequest
-	raw, ok := h.readJSONBody(w, r, h.bodyLimit)
+	raw, ok := h.readJSONBody(w, r, h.debugBodyLimit)
 	if !ok {
 		return
 	}

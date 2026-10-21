@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"reader/internal/domain/book"
+	"reader/internal/domain/fetch"
 	"reader/internal/domain/source"
 )
 
@@ -366,3 +371,249 @@ func (r *fakeSourceRepo) UpdateExploreEnabled(ctx context.Context, id string, en
 	return errors.New("not implemented")
 }
 func (r *fakeSourceRepo) Reorder(ctx context.Context, orders []source.SourceOrder) error { return nil }
+
+// TestMultiSourceSearchDefaultTimeoutApplies 验证 input.Timeout<=0 时每源默认超时生效（S01-01）：
+// 慢源 30s 远超 15s 默认超时，搜索应在 ~15s 内以 search_timeout 结束，而不是等满 30s。
+func TestMultiSourceSearchDefaultTimeoutApplies(t *testing.T) {
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "slow", BookSourceURL: "source-slow", BookSourceName: "S", SearchURL: "https://s.test", Enabled: true},
+	}}
+	single := &countingSearcher{delay: 30 * time.Second}
+	searcher := NewMultiSourceSearcher(repo, single)
+	start := time.Now()
+	result, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", EnabledOnly: true, Concurrency: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed >= 30*time.Second {
+		t.Fatalf("default per-source timeout did not apply, elapsed = %v", elapsed)
+	}
+	if elapsed > defaultSourceTimeout+2*time.Second {
+		t.Fatalf("elapsed = %v, want ~defaultSourceTimeout(%v)", elapsed, defaultSourceTimeout)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "search_timeout" {
+		t.Fatalf("warnings = %#v, want single search_timeout", result.Warnings)
+	}
+}
+
+// TestMultiSourceSearchWithSourceTimeoutOverridesDefault 验证 WithSourceTimeout 覆盖内置默认值（S01-01）。
+func TestMultiSourceSearchWithSourceTimeoutOverridesDefault(t *testing.T) {
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "slow", BookSourceURL: "source-slow", BookSourceName: "S", SearchURL: "https://s.test", Enabled: true},
+	}}
+	searcher := NewMultiSourceSearcher(repo, slowSingleSearcher{}).WithSourceTimeout(10 * time.Millisecond)
+	start := time.Now()
+	_, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", EnabledOnly: true, Concurrency: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if time.Since(start) >= 2*time.Second {
+		t.Fatal("WithSourceTimeout should override default")
+	}
+	// WithSourceTimeout(0) 保持原默认。
+	untouched := NewMultiSourceSearcher(repo, slowSingleSearcher{}).WithSourceTimeout(0)
+	if untouched.sourceTimeout != defaultSourceTimeout {
+		t.Fatalf("WithSourceTimeout(0) changed sourceTimeout to %v", untouched.sourceTimeout)
+	}
+}
+
+// countingSearcher 记录同时在 Search 内的 goroutine 峰值，验证 worker 池并发度（S01-02）。
+type countingSearcher struct {
+	current int32
+	max     int32
+	delay   time.Duration
+}
+
+func (c *countingSearcher) Search(ctx context.Context, input SearchInput) ([]book.SearchBook, error) {
+	cur := atomic.AddInt32(&c.current, 1)
+	defer atomic.AddInt32(&c.current, -1)
+	for {
+		old := atomic.LoadInt32(&c.max)
+		if cur <= old || atomic.CompareAndSwapInt32(&c.max, old, cur) {
+			break
+		}
+	}
+	select {
+	case <-time.After(c.delay):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return []book.SearchBook{{Name: input.Keyword, Author: input.Keyword, Origin: input.Source.BookSourceURL}}, nil
+}
+
+// TestMultiSourceSearchConcurrencyCappedByWorkerPool 验证并发峰值恒等于并发度，与源数无关（S01-02）。
+func TestMultiSourceSearchConcurrencyCappedByWorkerPool(t *testing.T) {
+	items := make([]*source.BookSource, 40)
+	for i := range items {
+		items[i] = &source.BookSource{
+			SourceID:       fmt.Sprintf("src-%d", i),
+			BookSourceURL:  fmt.Sprintf("source-%d", i),
+			BookSourceName: fmt.Sprintf("S%d", i),
+			SearchURL:      "https://s.test",
+			Enabled:        true,
+		}
+	}
+	repo := &fakeSourceRepo{items: items}
+	single := &countingSearcher{delay: 20 * time.Millisecond}
+	searcher := NewMultiSourceSearcher(repo, single)
+	_, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", Concurrency: 5})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if single.max > 5 {
+		t.Fatalf("max concurrent single searches = %d, want <= 5", single.max)
+	}
+	if single.max < 2 {
+		t.Fatalf("max concurrent = %d, worker pool should run sources concurrently", single.max)
+	}
+}
+
+// TestMultiSourceSearchGoroutineCountBoundedByConcurrency 验证 goroutine 数与源数无关，恒受并发度约束（S01-02）。
+func TestMultiSourceSearchGoroutineCountBoundedByConcurrency(t *testing.T) {
+	items := make([]*source.BookSource, 300)
+	for i := range items {
+		items[i] = &source.BookSource{
+			SourceID:       fmt.Sprintf("src-%d", i),
+			BookSourceURL:  fmt.Sprintf("source-%d", i),
+			BookSourceName: fmt.Sprintf("S%d", i),
+			SearchURL:      "https://s.test",
+			Enabled:        true,
+		}
+	}
+	repo := &fakeSourceRepo{items: items}
+	// barrier 在全部源进入 Search 前阻塞，采样 goroutine 峰值。
+	release := make(chan struct{})
+	var once sync.Once
+	single := &goroutineProbeSearcher{release: release, once: &once}
+	const concurrency = 6
+	searcher := NewMultiSourceSearcher(repo, single)
+	done := make(chan struct{})
+	go func() {
+		_, _ = searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", Concurrency: concurrency})
+		close(done)
+	}()
+	// 等待并发度个 worker 全部阻塞在 Search 内。
+	deadline := time.After(5 * time.Second)
+	for single.arrived.Load() < concurrency {
+		select {
+		case <-deadline:
+			t.Fatal("workers never reached concurrency inside Search")
+		default:
+			runtime.Gosched()
+		}
+	}
+	before := runtime.NumGoroutine()
+	if before > concurrency+20 {
+		t.Fatalf("goroutines = %d, want ~concurrency(%d)", before, concurrency)
+	}
+	close(release)
+	<-done
+}
+
+// goroutineProbeSearcher 阻塞直到 release 关闭，记录进入 Search 的数量。值接收者满足 SourceSearcher。
+type goroutineProbeSearcher struct {
+	release chan struct{}
+	once    *sync.Once
+	arrived atomic.Int32
+}
+
+func (g *goroutineProbeSearcher) Search(ctx context.Context, input SearchInput) ([]book.SearchBook, error) {
+	g.arrived.Add(1)
+	<-g.release
+	return []book.SearchBook{{Name: input.Keyword, Origin: input.Source.BookSourceURL}}, nil
+}
+
+// BenchmarkSingleSourceSearch 验证单源搜索 B/op 与条目数无关（S00-01）：
+// b.ReportAllocs 对比小/大响应 × 多条目时 per-item 分配应恒定。
+func BenchmarkSingleSourceSearch(b *testing.B) {
+	bookHTML := `<div class="book"><a class="name" href="/book/1">斗破苍穹</a><span class="author">天蚕土豆</span><span class="kind">玄幻</span><span class="last">第一章</span><p class="intro">少年故事</p></div>`
+	cases := []struct {
+		name  string
+		items int
+	}{
+		{"items_10", 10},
+		{"items_100", 100},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			src := searchTestSource()
+			var sb strings.Builder
+			for i := 0; i < tc.items; i++ {
+				fmt.Fprintf(&sb, `<div class="book"><a class="name" href="/book/%d">斗破苍穹%d</a><span class="author">天蚕土豆</span><span class="kind">玄幻</span><span class="last">第一章</span><p class="intro">少年故事</p></div>`, i, i)
+			}
+			_ = bookHTML
+			fetcher := fakeFetcher{resp: &fetch.Response{StatusCode: 200, URL: "https://example.test/search", Body: []byte(sb.String())}}
+			searcher := NewSingleSourceSearcher(fetcher, nil)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				books, err := searcher.Search(context.Background(), SearchInput{Source: src, Keyword: "斗破", Page: 1})
+				if err != nil || len(books) != tc.items {
+					b.Fatalf("Search() err = %v, books = %d, want %d", err, len(books), tc.items)
+				}
+			}
+		})
+	}
+}
+
+// TestMultiSourceSearchWarnsOnEmptySearchURL 验证空 searchUrl 源被跳过时记录 source_skipped Warning（S02-07）。
+func TestMultiSourceSearchWarnsOnEmptySearchURL(t *testing.T) {
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "empty", BookSourceURL: "source-empty", BookSourceName: "E", SearchURL: "", Enabled: true},
+		{SourceID: "ok", BookSourceURL: "source-ok", BookSourceName: "O", SearchURL: "https://o.test", Enabled: true},
+	}}
+	single := &stubSingleSearcher{byOrigin: map[string][]book.SearchBook{
+		"source-ok": {{Name: "斗破苍穹", Author: "天蚕土豆", Origin: "source-ok"}},
+	}}
+	searcher := NewMultiSourceSearcher(repo, single)
+
+	result, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", Concurrency: 2})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	found := false
+	for _, w := range result.Warnings {
+		if w.SourceID == "empty" && w.Code == "source_skipped" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %#v, want source_skipped for empty searchUrl", result.Warnings)
+	}
+}
+
+// TestMultiSourceSearchWarnsOnDisabledSource 验证 EnabledOnly 时禁用源被跳过记录 source_disabled Warning（S02-07）。
+func TestMultiSourceSearchWarnsOnDisabledSource(t *testing.T) {
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "off", BookSourceURL: "source-off", BookSourceName: "D", SearchURL: "https://d.test", Enabled: false},
+	}}
+	searcher := NewMultiSourceSearcher(repo, &stubSingleSearcher{})
+
+	result, err := searcher.Search(context.Background(), MultiSearchInput{Keyword: "斗破", EnabledOnly: true, SourceIDs: []string{"off"}})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "source_disabled" {
+		t.Fatalf("warnings = %#v, want source_disabled", result.Warnings)
+	}
+}
+
+// TestMultiSourceSearchCanceledNotMarkedTimeout 验证上层主动取消时 Warning code 为 search_canceled
+// 而非 search_timeout（S02-10）。
+func TestMultiSourceSearchCanceledNotMarkedTimeout(t *testing.T) {
+	repo := &fakeSourceRepo{items: []*source.BookSource{
+		{SourceID: "slow", BookSourceURL: "source-slow", BookSourceName: "S", SearchURL: "https://s.test", Enabled: true},
+	}}
+	searcher := NewMultiSourceSearcher(repo, slowSingleSearcher{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := searcher.Search(ctx, MultiSearchInput{Keyword: "斗破", EnabledOnly: true, Concurrency: 1, Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "search_canceled" {
+		t.Fatalf("warnings = %#v, want search_canceled", result.Warnings)
+	}
+}

@@ -1,6 +1,8 @@
 package urlrule
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestAbsoluteURL(t *testing.T) {
 	got := Absolute("https://example.test/book/toc/index.html", "../chapter/1.html")
@@ -26,7 +28,8 @@ func TestAbsoluteRejectsJavascriptURL(t *testing.T) {
 
 func TestCustomURLAttributePreserved(t *testing.T) {
 	got := ParseCustom(`chapter/1.html,{"webView":true,"method":"GET"}`)
-	if got.URL != "chapter/1.html" || got.Attribute["webView"] != true || got.Attribute["method"] != "GET" {
+	// 对齐 GSON 语义归一后键统一为小写。
+	if got.URL != "chapter/1.html" || got.Attribute["webview"] != true || got.Attribute["method"] != "GET" {
 		t.Fatalf("custom = %#v", got)
 	}
 	absolute := Absolute("https://example.test/book/", `chapter/1.html,{"method":"GET"}`)
@@ -46,7 +49,8 @@ func TestAbsolutePreservingOptionsKeepsOriginalText(t *testing.T) {
 
 func TestCustomURLParsesLooseAttributeJSON(t *testing.T) {
 	got := ParseCustom(`chapter/1.html,{method:'POST',headers:{'X-Test':'1'},body:{keyword:'斗破'},webView:“true”}`)
-	if got.URL != "chapter/1.html" || got.Attribute["method"] != "POST" || got.Attribute["webView"] != "true" {
+	// 对齐 GSON 语义归一后键统一为小写（后键覆盖前键），消费方按小写/EqualFold 查表。
+	if got.URL != "chapter/1.html" || got.Attribute["method"] != "POST" || got.Attribute["webview"] != "true" {
 		t.Fatalf("custom = %#v", got)
 	}
 	headers, ok := got.Attribute["headers"].(map[string]any)
@@ -81,5 +85,39 @@ func TestEncodeURIAndRequestStringsSupportCharset(t *testing.T) {
 	}
 	if got := EncodeFormString("q=民间故事&searchtype=title", "gb2312"); got != "q=%C3%F1%BC%E4%B9%CA%CA%C2&searchtype=title" {
 		t.Fatalf("EncodeFormString() = %q", got)
+	}
+}
+
+// 仅大小写不同的重复键按 GSON 语义取后键，且归一为小写，取值确定（S07-05）。
+func TestCustomURLDuplicateCaseKeysTakesLast(t *testing.T) {
+	got := ParseCustom(`chapter/1.html,{"Headers":{"a":"1"},"headers":{"a":"2"}}`)
+	headers, ok := got.Attribute["headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("headers attr = %#v", got.Attribute["headers"])
+	}
+	if headers["a"] != "2" {
+		t.Fatalf("headers[a] = %v, want 2 (后键覆盖前键)", headers["a"])
+	}
+	first := ParseAttributeObject(`{"Key":1,"key":2}`)
+	if first["key"] != float64(2) {
+		t.Fatalf("ParseAttributeObject duplicate-case key = %#v, want 2", first["key"])
+	}
+}
+
+// 独立 header JSON（书源 Header 字段整串）键保持原大小写（HTTP 头名敏感），
+// 仅大小写不同的重复键按后键覆盖取值确定（S07-05，CookieFix 确认范围）。
+func TestParseHeaderObjectKeepsKeyCase(t *testing.T) {
+	got := ParseHeaderObject(`{'User-Agent':'okhttp/4.9.2','client-name':'app'}`)
+	if got["User-Agent"] != "okhttp/4.9.2" || got["client-name"] != "app" {
+		t.Fatalf("ParseHeaderObject = %#v, want original-case keys", got)
+	}
+	dup := ParseHeaderObject(`{"Headers":{"a":"1"},"headers":{"a":"2"}}`)
+	// 键大小写敏感：Headers 与 headers 是两个不同键（HTTP 头名不归一），
+	// 每个键内取值确定、后键覆盖前键。
+	if v, ok := dup["Headers"].(map[string]any); !ok || v["a"] != "1" {
+		t.Fatalf("Headers value = %#v, want {a:1}", dup["Headers"])
+	}
+	if v, ok := dup["headers"].(map[string]any); !ok || v["a"] != "2" {
+		t.Fatalf("headers value = %#v, want {a:2}", dup["headers"])
 	}
 }

@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"runtime/debug"
+
 	"reader/internal/api/middleware"
 	"reader/internal/infra/config"
 )
@@ -148,5 +150,91 @@ func TestRunServeHelpExitsZero(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "--addr <string>") || stderr.Len() != 0 {
 		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+}
+
+// S10-04：查询参数绑定错误必须是 application/json 的 Error 对象（含 traceId），
+// 而非 ogen 默认的 text/plain 400。
+func TestQueryParamBindingErrorReturnsJSONError(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "invalid page", path: "/api/v1/books?page=abc"},
+		{name: "invalid pageSize", path: "/api/v1/book-sources?page=1&pageSize=abc"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, cleanup, err := newRuntimeServer(testServeConfig(t, "secret"))
+			if err != nil {
+				t.Fatalf("newRuntimeServer() error = %v", err)
+			}
+			defer cleanup()
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.Header.Set("Authorization", "Bearer secret")
+			rec := httptest.NewRecorder()
+			server.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+			}
+			if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+				t.Fatalf("Content-Type = %q, want application/json; body: %s", ct, rec.Body.String())
+			}
+			traceID := rec.Header().Get(middleware.TraceHeader)
+			if traceID == "" {
+				t.Fatal("X-Trace-Id header is empty")
+			}
+			var body struct {
+				Code    string `json:"code"`
+				TraceID string `json:"traceId"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode error body: %v; body: %s", err, rec.Body.String())
+			}
+			if body.Code == "" || body.TraceID == "" {
+				t.Fatalf("error body missing code/traceId: %+v", body)
+			}
+			if body.TraceID != traceID {
+				t.Fatalf("body traceId = %q, header = %q", body.TraceID, traceID)
+			}
+		})
+	}
+}
+
+// setGoMemoryLimit：显式 GOMEMLIMIT 优先（不覆盖软上限），可用的 cgroup/proc 探测不可得时保持默认。
+func TestSetGoMemoryLimitRespectsGOMEMLIMIT(t *testing.T) {
+	previous := debug.SetMemoryLimit(1 << 30) // 先设一个已知值
+	defer debug.SetMemoryLimit(previous)
+
+	cfg := testServeConfig(t, "secret")
+	cfg.GoMemLimitRatio = 0.5
+	t.Setenv("GOMEMLIMIT", "2GiB")
+	setGoMemoryLimit(cfg)
+	// 显式 GOMEMLIMIT 时 setGoMemoryLimit 必须不动软上限。
+	if current := debug.SetMemoryLimit(1 << 30); current != 1<<30 {
+		t.Fatalf("memory limit = %d, want 1GiB（显式 GOMEMLIMIT 应优先）", current)
+	}
+}
+
+// S10-08：READER_DEBUG_BODY_LIMIT 接到 debug/check 请求体上限——超限请求返回 413。
+func TestDebugBodyLimitConsumed(t *testing.T) {
+	cfg := testServeConfig(t, "secret")
+	cfg.DebugBodyLimit = 100
+	server, cleanup, err := newRuntimeServer(cfg)
+	if err != nil {
+		t.Fatalf("newRuntimeServer() error = %v", err)
+	}
+	defer cleanup()
+
+	big := strings.Repeat("x", 200)
+	body := `{"keyword":"` + big + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/debug/book-source", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body: %s", rec.Code, rec.Body.String())
 	}
 }

@@ -127,3 +127,47 @@ func openImporterTestDB(t *testing.T) *sql.DB {
 	}
 	return db
 }
+
+// TestImporterSameSourceIDDifferentURLsDedupedInBatch 验证同一批次两条同 sourceId 不同 URL 的条目：
+// 第二条按“已存在”处理（updated），最终库里只有一条，result 与落库状态一致（S15-06）。
+func TestImporterSameSourceIDDifferentURLsDedupedInBatch(t *testing.T) {
+	ctx := context.Background()
+	db := openImporterTestDB(t)
+	repo := repositories.NewBookSourceRepository(db)
+	importer := NewImporter(repo)
+
+	payload := `[
+		{"sourceId":"collide","bookSourceUrl":"https://first.example.test","bookSourceName":"First"},
+		{"sourceId":"collide","bookSourceUrl":"https://second.example.test","bookSourceName":"Second"}
+	]`
+	result, err := importer.Import(ctx, ImportInput{Payload: []byte(payload)})
+	if err != nil {
+		t.Fatalf("Import() error = %v", err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	// 第二条基于第一条的 pending 状态按已存在处理：不再以 added 落库静默互覆。
+	if result.Items[0].Status != ImportStatusAdded {
+		t.Fatalf("first status = %q, want added", result.Items[0].Status)
+	}
+	if result.Items[1].Status == ImportStatusAdded {
+		t.Fatalf("second status = %q, want not added (pending dedup by sourceId)", result.Items[1].Status)
+	}
+	count, err := countBookSources(db)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("book source rows = %d, want 1", count)
+	}
+}
+
+// countBookSources 统计 book_sources 表行数，用于断言最终落库条数。
+func countBookSources(db *sql.DB) (int, error) {
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM book_sources`).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}

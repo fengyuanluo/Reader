@@ -42,14 +42,29 @@ func TestBuildAppliesLegadoRequestOptions(t *testing.T) {
 	}
 }
 
-// webView 生效（远端新增 WebViewFallback），webJs 只接受不生效：两者都不再按不支持报错。
-func TestBuildAcceptsWebViewAndIgnoresWebJS(t *testing.T) {
+// webView 生效（远端新增 WebViewFallback），webJs 与 webView 声明一起生效（对齐 Legado useWebView 分支）。
+func TestBuildAppliesWebJSWithWebView(t *testing.T) {
 	req, err := Build(context.Background(), `https://example.test,{"webView":true,"webJs":"document.body.innerText"}`, "", fetch.Request{}, nil)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if !req.WebViewFallback || req.BodyJS != "" {
+	if !req.WebViewFallback || req.BodyJS != "document.body.innerText" {
 		t.Fatalf("request = %#v", req)
+	}
+}
+
+// webJs 未声明 webView 时完全丢弃 BodyJS（S07-09 对齐 Legado getStrResponse 非 webView 分支）。
+func TestBuildDropsWebJSWithoutWebView(t *testing.T) {
+	req, err := Build(context.Background(), `https://example.test,{"webJs":"document.body.innerText"}`, "", fetch.Request{}, nil)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if req.BodyJS != "" || req.WebViewFallback {
+		t.Fatalf("request = %#v", req)
+	}
+	// webView=false 同样不执行（Legado 非 webView 分支不跑 webJs）。
+	if req2, err := Build(context.Background(), `https://example.test,{"webJs":"document.body.innerText","webView":false}`, "", fetch.Request{}, nil); err != nil || req2.BodyJS != "" {
+		t.Fatalf("Build(webView:false) = %#v %v", req2, err)
 	}
 }
 
@@ -143,7 +158,7 @@ func TestBuildAppliesJSBeforeCharsetEncodingAndOptionHeadersBeforeBody(t *testin
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if req.URL != "https://example.test/search?key=%D6%D0%CE%C4" || string(req.Body) != "q=中文" {
+	if req.URL != "https://example.test/search?key=%D6%D0%CE%C4" || string(req.Body) != "q=%D6%D0%CE%C4" {
 		t.Fatalf("request = %#v", req)
 	}
 	if len(req.Headers) != 1 || headerValue(req.Headers, "Content-Type") != "text/plain" {
@@ -151,13 +166,26 @@ func TestBuildAppliesJSBeforeCharsetEncodingAndOptionHeadersBeforeBody(t *testin
 	}
 }
 
-// type 键存在且值非 null 时按 hex 二进制处理响应（对齐 Legado AnalyzeUrl），空串同样生效。
+// 显式 Content-Type 时 body 仍按 charset 选项编码（S09-05）：GBK + 预设表单头 + 中文 body。
+func TestBuildEncodesBodyWithCharsetDespiteContentType(t *testing.T) {
+	req, err := Build(context.Background(), `/api,{"method":"POST","body":"q=中文","charset":"GBK","headers":{"Content-Type":"application/x-www-form-urlencoded"}}`, "https://example.test", fetch.Request{}, nil)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if string(req.Body) != "q=%D6%D0%CE%C4" {
+		t.Fatalf("body = %q, want GBK-encoded", req.Body)
+	}
+}
+
+// type 键存在且值为非空白非 null 字符串时按 hex 处理（对齐 Legado setType isNullOrBlank），
+// 空串与空白串视为未设置（S07-06/S09-04）。
 func TestBuildMarksHexEncodingForTypeKeyPresence(t *testing.T) {
 	tests := []struct {
 		option string
 		want   bool
 	}{
-		{`{"type":""}`, true},
+		{`{"type":""}`, false},
+		{`{"type":" "}`, false},
 		{`{"type":null}`, false},
 		{`{"type":123}`, true},
 		{`{"type":"x"}`, true},
@@ -227,7 +255,7 @@ func TestApplyNetworkOptions(t *testing.T) {
 func TestFetchFormatsNilBodyJSResultLikeLegado(t *testing.T) {
 	resp, err := Fetch(context.Background(), fetcherFunc(func(context.Context, fetch.Request) (*fetch.Response, error) {
 		return &fetch.Response{StatusCode: 200, Body: []byte("before")}, nil
-	}), fetch.Request{BodyJS: "null"}, func(context.Context, string, any) (any, error) {
+	}), fetch.Request{BodyJS: "null", WebViewFallback: true}, func(context.Context, string, any) (any, error) {
 		return nil, nil
 	})
 	if err != nil {
@@ -248,12 +276,29 @@ func TestFetchAppliesBodyJS(t *testing.T) {
 		}
 		return "after", nil
 	}
-	resp, err := Fetch(context.Background(), fetcher, fetch.Request{URL: "https://example.test", BodyJS: "transform"}, eval)
+	resp, err := Fetch(context.Background(), fetcher, fetch.Request{URL: "https://example.test", BodyJS: "transform", WebViewFallback: true}, eval)
 	if err != nil {
 		t.Fatalf("Fetch() error = %v", err)
 	}
 	if string(resp.Body) != "after" || resp.URL != "https://example.test/final" {
 		t.Fatalf("response = %#v", resp)
+	}
+}
+
+// bodyJs 是 Reader 独立扩展选项（非 WebView 脚本），无 WebViewFallback 时仍生效（ScriptV 收口）：
+// S07-09 只限制 webJs→BodyJS 的写入（Build 侧 webView 门），Fetch 侧按 BodyJS 非空判断。
+func TestFetchAppliesBodyJSWithoutWebViewFallback(t *testing.T) {
+	fetcher := fetcherFunc(func(context.Context, fetch.Request) (*fetch.Response, error) {
+		return &fetch.Response{StatusCode: 200, Body: []byte("before")}, nil
+	})
+	resp, err := Fetch(context.Background(), fetcher, fetch.Request{BodyJS: "transform"}, func(context.Context, string, any) (any, error) {
+		return "after", nil
+	})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if string(resp.Body) != "after" {
+		t.Fatalf("body = %q, want after", resp.Body)
 	}
 }
 

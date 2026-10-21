@@ -29,6 +29,32 @@ func (r *BookSourceRepository) Save(ctx context.Context, src *source.BookSource)
 	return r.SaveMany(ctx, []*source.BookSource{src})
 }
 
+// checkBatchConflicts 在写库前校验本批 sourceId 与 bookSourceUrl 的集合内一致性（S11-04）：
+// 同 sourceId 对应多个不同地址、或同地址对应多个不同 sourceId 时，双 ON CONFLICT upsert
+// 会在批内互相改写身份（UNIQUE(book_source_url) 冲突分支改写 source_id），返回 ErrConflict。
+// 同 sourceId 且同地址的重复条目允许（幂等，最后一行生效）。
+func checkBatchConflicts(sources []*source.BookSource) error {
+	idURL := map[string]string{}
+	urlID := map[string]string{}
+	for _, src := range sources {
+		if prevURL, ok := idURL[src.SourceID]; ok {
+			if prevURL != src.BookSourceURL {
+				return fmt.Errorf("%w: sourceId=%q maps to multiple URLs %q and %q", source.ErrConflict, src.SourceID, prevURL, src.BookSourceURL)
+			}
+		} else {
+			idURL[src.SourceID] = src.BookSourceURL
+		}
+		if prevID, ok := urlID[src.BookSourceURL]; ok {
+			if prevID != src.SourceID {
+				return fmt.Errorf("%w: bookSourceUrl=%q maps to multiple sourceIds %q and %q", source.ErrConflict, src.BookSourceURL, prevID, src.SourceID)
+			}
+		} else {
+			urlID[src.BookSourceURL] = src.SourceID
+		}
+	}
+	return nil
+}
+
 // SaveMany 在单个事务内写入全部书源，任一失败整批回滚。
 // 以 sourceId 与 bookSourceUrl 双键 upsert：同 sourceId 换地址即改名（对齐 Legado 编辑书源时删旧插新，
 // 并清理旧地址的书源变量与缓存）；同地址换 sourceId 则覆盖。若新地址已属于另一书源，返回 source.ErrConflict。
@@ -43,6 +69,13 @@ func (r *BookSourceRepository) SaveMany(ctx context.Context, sources []*source.B
 			return err
 		}
 		args[i] = a
+	}
+	// 批内冲突预检（S11-04）：双 ON CONFLICT upsert 在批内 sourceId/地址交错时会把
+	// URL 改写到他人地址或覆盖他人身份，结果不可预期，整批返回 ErrConflict。
+	// 批内允许同 sourceId 同地址（后续行幂等覆盖前一行，语义与逐条 upsert 一致），
+	// 但同 sourceId 换地址、同地址换 sourceId 都视为冲突。
+	if err := checkBatchConflicts(sources); err != nil {
+		return err
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -59,6 +92,12 @@ func (r *BookSourceRepository) SaveMany(ctx context.Context, sources []*source.B
 		return err
 	}
 	defer upsert.Close()
+	// 本批全部目标地址集合：换址删除时 oldURL 若恰为本批某源的新地址，删除会误清该源
+	// 刚写入的变量与缓存（S11-04），必须跳过。
+	batchURLs := make(map[string]struct{}, len(sources))
+	for _, src := range sources {
+		batchURLs[src.BookSourceURL] = struct{}{}
+	}
 	for i, src := range sources {
 		var oldURL string
 		if err := lookup.QueryRowContext(ctx, src.SourceID).Scan(&oldURL); err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -71,8 +110,10 @@ func (r *BookSourceRepository) SaveMany(ctx context.Context, sources []*source.B
 			return err
 		}
 		if oldURL != "" && oldURL != src.BookSourceURL {
-			if err := deleteSourceOwnedData(ctx, tx, oldURL); err != nil {
-				return err
+			if _, reused := batchURLs[oldURL]; !reused {
+				if err := deleteSourceOwnedData(ctx, tx, oldURL); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -119,6 +160,73 @@ func (r *BookSourceRepository) List(ctx context.Context, filter source.BookSourc
 		return source.Page[*source.BookSource]{}, err
 	}
 	return source.Page[*source.BookSource]{Items: items, Total: total}, nil
+}
+
+// StreamAll 以 keyset 分页流式拉取满足 filter 的全部书源（S00-03）：每页从上一页的
+// (custom_order, book_source_name, source_id) 游标继续，不再从头 OFFSET 跳过，也不重复
+// COUNT。整库 2 万源时全量拉取从 O(n²) 降为 O(n)。每行交给 yield，回调返回错误即中止。
+// 供 source.ListAll 通过可选接口类型断言优先使用。
+func (r *BookSourceRepository) StreamAll(ctx context.Context, filter source.BookSourceFilter, yield func(*source.BookSource) error) error {
+	where, args := buildBookSourceWhere(filter)
+	// keyset 分页大小；与 ListAll 的旧分页大小同量级。
+	const streamPageSize = 500
+	var cursor struct {
+		order    int
+		name, id string
+	}
+	hasCursor := false
+	for {
+		query := selectBookSourceSQL + where
+		queryArgs := append([]any{}, args...)
+		if hasCursor {
+			if where == "" {
+				query += ` WHERE (custom_order, book_source_name, source_id) > (?, ?, ?)`
+			} else {
+				query += ` AND (custom_order, book_source_name, source_id) > (?, ?, ?)`
+			}
+			queryArgs = append(queryArgs, cursor.order, cursor.name, cursor.id)
+		}
+		query += ` ORDER BY custom_order ASC, book_source_name ASC, source_id ASC LIMIT ?`
+		queryArgs = append(queryArgs, streamPageSize+1)
+		rows, err := r.db.QueryContext(ctx, query, queryArgs...)
+		if err != nil {
+			return err
+		}
+		count := 0
+		next := struct {
+			order    int
+			name, id string
+		}{}
+		for rows.Next() {
+			src, err := scanBookSource(rows)
+			if err != nil {
+				_ = rows.Close()
+				return err
+			}
+			count++
+			next = struct {
+				order    int
+				name, id string
+			}{src.CustomOrder, src.BookSourceName, src.SourceID}
+			if count <= streamPageSize {
+				if err := yield(src); err != nil {
+					_ = rows.Close()
+					return err
+				}
+			}
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return err
+		}
+		if count <= streamPageSize {
+			return nil
+		}
+		// 第 streamPageSize+1 行只用于推进游标，不交付。
+		cursor = next
+		hasCursor = true
+	}
 }
 
 func (r *BookSourceRepository) Delete(ctx context.Context, id string) error {

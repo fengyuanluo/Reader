@@ -96,6 +96,10 @@ func runDownload(env *cmdEnv, args []string, stdout, stderr io.Writer) int {
 	summary.Cached = dlSummary.Cached
 	summary.Skipped = dlSummary.Skipped
 	summary.Failed = dlSummary.Failed
+	if summary.Failed == nil {
+		// JSON 输出 "failed": [] 而非 null，机器消费方不需特判（S16-04）。
+		summary.Failed = []downloadFailureJSON{}
+	}
 
 	// 被信号中断：已抓章节已入缓存可续跑，不导出以免残缺内容覆盖已有 TXT。
 	if ctx.Err() != nil {
@@ -225,8 +229,11 @@ func downloadChapters(ctx context.Context, rt *bootstrap.Runtime, b *book.Book, 
 			mu.Unlock()
 			return
 		}
-		// 已取消：丢弃结果，不再计数与输出，与串行版“取消后停止”一致。
+		// 已取消：结果记 cancelled，不再计数与输出，保证区间守恒（S16-05）。
 		if ctx.Err() != nil {
+			mu.Lock()
+			failed[index] = "canceled"
+			mu.Unlock()
 			return
 		}
 		mu.Lock()
@@ -246,6 +253,10 @@ func downloadChapters(ctx context.Context, rt *bootstrap.Runtime, b *book.Book, 
 				defer wg.Done()
 				for index := range queue {
 					if ctx.Err() != nil {
+						// 已取消：剩余章节记 cancelled，保证 Downloaded+Failed 区间守恒（S16-05）。
+						mu.Lock()
+						failed[index] = "canceled"
+						mu.Unlock()
 						continue
 					}
 					fetchOne(index)
@@ -273,7 +284,11 @@ func downloadChapters(ctx context.Context, rt *bootstrap.Runtime, b *book.Book, 
 		}
 		for _, index := range pending {
 			if ctx.Err() != nil {
-				break
+				// 已取消：未派发的章节记 cancelled，保证区间守恒（S16-05）。
+				mu.Lock()
+				failed[index] = "canceled"
+				mu.Unlock()
+				continue
 			}
 			queue <- index
 		}
@@ -323,23 +338,41 @@ func chapterSection(index int, title, content string) string {
 	return sb.String()
 }
 
-// exportTXT 流式写出 TXT：顺序写文件句柄，不再把全量内容拼进内存。
+// exportTXT 原子写出 TXT：先写同目录临时文件，成功后 fsync 并 rename 替换目标，
+// 写中途失败（磁盘满/信号/io 错误）不会截断或覆盖已有 TXT（S16-02）。
 func exportTXT(path, name, author string, sections []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.Create(path)
+	tmpPath := path + ".tmp"
+	f, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	if _, err := fmt.Fprintf(f, "%s\n%s\n\n", name, author); err != nil {
+	// 写失败时清理临时文件，不触碰目标文件。
+	defer func() {
+		if err != nil {
+			f.Close()
+			os.Remove(tmpPath)
+		}
+	}()
+	if _, err = fmt.Fprintf(f, "%s\n%s\n\n", name, author); err != nil {
 		return err
 	}
 	for _, section := range sections {
-		if _, err := io.WriteString(f, section); err != nil {
+		if _, err = io.WriteString(f, section); err != nil {
 			return err
 		}
 	}
-	return f.Close()
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	// 同目录 rename，POSIX 原子替换目标文件。
+	if err = os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return nil
 }

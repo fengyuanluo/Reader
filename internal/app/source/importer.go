@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"reader/internal/domain/fetch"
 	"reader/internal/domain/source"
@@ -52,7 +53,20 @@ type ImportInput struct {
 	Payload   []byte
 	RemoteURL string
 	Options   ImportOptions
+	// Depth 是远程 sourceUrls 递归展开的当前深度；0 表示用户直接发起的导入。
+	// 内部递归调用时逐层 +1，超过 maxRemoteDepth 后记 RemoteError 并停止，
+	// 防止自引用/相互引用的远程文档造成无限抓取循环（对齐 Legado 仅一层远程展开的语义）。
+	Depth int
 }
+
+const (
+	// maxRemoteDepth 限制远程 sourceUrls 文档的递归展开层数；超出即停止展开。
+	maxRemoteDepth = 3
+	// maxSourceURLsPerDocument 限制单个 sourceUrls 文档允许携带的 URL 数量，超限截断。
+	maxSourceURLsPerDocument = 1000
+	// importTotalTimeout 是单次导入请求远程抓取链的整体预算，防止多个慢 URL 让请求长时间挂起。
+	importTotalTimeout = 2 * time.Minute
+)
 
 type ImportOptions struct {
 	KeepExistingName    bool
@@ -108,7 +122,7 @@ func (i *Importer) WithSavedCallback(callback func(bookSourceURL string)) *Impor
 
 func (i *Importer) Import(ctx context.Context, input ImportInput) (*ImportResult, error) {
 	if input.RemoteURL != "" {
-		return i.importSourceURLs(ctx, []string{input.RemoteURL}, input.Options)
+		return i.importSourceURLs(ctx, []string{input.RemoteURL}, input, input.Depth)
 	}
 	var raw json.RawMessage
 	// 与 Legado 导入一致容忍开头 BOM；远程拉取的内容递归进入本函数，同样覆盖。
@@ -121,7 +135,7 @@ func (i *Importer) Import(ctx context.Context, input ImportInput) (*ImportResult
 	switch raw[0] {
 	case '{':
 		if urls, ok := sourceURLs(raw); ok {
-			return i.importSourceURLs(ctx, urls, input.Options)
+			return i.importSourceURLs(ctx, urls, input, input.Depth)
 		}
 		return i.importObject(ctx, raw, input.Options)
 	case '[':
@@ -131,24 +145,36 @@ func (i *Importer) Import(ctx context.Context, input ImportInput) (*ImportResult
 	}
 }
 
-func (i *Importer) importSourceURLs(ctx context.Context, urls []string, options ImportOptions) (*ImportResult, error) {
+func (i *Importer) importSourceURLs(ctx context.Context, urls []string, input ImportInput, depth int) (*ImportResult, error) {
 	if i.fetcher == nil {
 		return nil, ErrImportFetcherUnavailable
 	}
+	if depth >= maxRemoteDepth {
+		// 展开层数达到上限，不再抓取；按 Legado 语义远程文档最多展开数层。
+		return nil, fmt.Errorf("remote sourceUrls recursion exceeded %d levels", maxRemoteDepth)
+	}
+	// 整体预算：无论 URL 列表多长，远程抓取链必须在预算内收敛，
+	// 防止无人值守请求被慢站点串行挂起几十分钟。
+	fetchCtx, cancel := context.WithTimeout(ctx, importTotalTimeout)
+	defer cancel()
 	result := &ImportResult{}
 	for _, remoteURL := range urls {
+		if fetchCtx.Err() != nil {
+			result.RemoteErrors = append(result.RemoteErrors, RemoteError{URL: remoteURL, Error: "import deadline exceeded"})
+			continue
+		}
 		reqURL := remoteURL
 		requestWithoutUA := false
 		if strings.HasSuffix(remoteURL, "#requestWithoutUA") {
 			reqURL = strings.TrimSuffix(remoteURL, "#requestWithoutUA")
 			requestWithoutUA = true
 		}
-		resp, err := i.fetcher.Fetch(ctx, fetch.Request{URL: reqURL, RequestWithoutUA: requestWithoutUA})
+		resp, err := i.fetcher.Fetch(fetchCtx, fetch.Request{URL: reqURL, RequestWithoutUA: requestWithoutUA})
 		if err != nil {
 			result.RemoteErrors = append(result.RemoteErrors, RemoteError{URL: remoteURL, Error: err.Error()})
 			continue
 		}
-		partial, err := i.Import(ctx, ImportInput{Payload: resp.Body, Options: options})
+		partial, err := i.Import(fetchCtx, ImportInput{Payload: resp.Body, Options: input.Options, Depth: depth + 1})
 		if err != nil {
 			result.RemoteErrors = append(result.RemoteErrors, RemoteError{URL: remoteURL, Error: err.Error()})
 			continue
@@ -164,6 +190,10 @@ func sourceURLs(raw json.RawMessage) ([]string, bool) {
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, false
+	}
+	if len(doc.SourceURLs) > maxSourceURLsPerDocument {
+		// 超限截断，防止单个恶意文档驱使服务端发起海量抓取。
+		doc.SourceURLs = doc.SourceURLs[:maxSourceURLsPerDocument]
 	}
 	return doc.SourceURLs, len(doc.SourceURLs) > 0
 }
@@ -194,6 +224,10 @@ func (i *Importer) importArray(ctx context.Context, raw json.RawMessage, options
 func (i *Importer) importEntries(ctx context.Context, entries []json.RawMessage, options ImportOptions) (*ImportResult, error) {
 	result := &ImportResult{}
 	pending := map[string]*source.BookSource{}
+	// pendingSourceIDs 记录本批次已决定写入的 sourceId：SaveMany 的 upsert 第一键是
+	// source_id，同批次两条同 sourceId 不同地址的条目会在事务内静默互覆，
+	// 必须让后者按“已存在”处理，保证 result 与最终落库状态一致。
+	pendingSourceIDs := map[string]*source.BookSource{}
 	toSave := make([]*source.BookSource, 0, len(entries))
 	for _, entry := range entries {
 		src, err := source.ParseBookSource(entry)
@@ -202,7 +236,7 @@ func (i *Importer) importEntries(ctx context.Context, entries []json.RawMessage,
 			result.Items = append(result.Items, ImportItemResult{Status: ImportStatusFailed, Error: err.Error()})
 			continue
 		}
-		save, err := i.planImport(ctx, result, src, options, pending)
+		save, err := i.planImport(ctx, result, src, options, pending, pendingSourceIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -239,9 +273,14 @@ func (i *Importer) notifySaved(sources []*source.BookSource) {
 }
 
 // planImport 决定单条书源的导入状态并应用导入选项，记入 result；需要写库时返回 true。
-// pending 记录本批次已决定写入的书源，使同批次重复地址按“已存在”处理。
-func (i *Importer) planImport(ctx context.Context, result *ImportResult, src *source.BookSource, options ImportOptions, pending map[string]*source.BookSource) (bool, error) {
+// pending 记录本批次已决定写入的书源（按地址），使同批次重复地址按“已存在”处理；
+// pendingSourceIDs 按 sourceId 记录，防止同批次同 sourceId 不同地址的条目静默互覆。
+func (i *Importer) planImport(ctx context.Context, result *ImportResult, src *source.BookSource, options ImportOptions, pending, pendingSourceIDs map[string]*source.BookSource) (bool, error) {
 	existing := pending[src.BookSourceURL]
+	if existing == nil {
+		// 同批次已有相同 sourceId 的条目视作已存在（SaveMany 按 source_id upsert，后者会覆盖前者）。
+		existing = pendingSourceIDs[src.SourceID]
+	}
 	if existing == nil {
 		found, err := i.repo.FindByURL(ctx, src.BookSourceURL)
 		if err != nil && !errors.Is(err, source.ErrNotFound) {
@@ -277,6 +316,7 @@ func (i *Importer) planImport(ctx context.Context, result *ImportResult, src *so
 		return false, nil
 	}
 	pending[src.BookSourceURL] = src
+	pendingSourceIDs[src.SourceID] = src
 	return true, nil
 }
 

@@ -80,8 +80,13 @@ func (p *ImageProxy) Fetch(ctx context.Context, input ImageProxyInput) (ImagePro
 	resp, err := p.fetcher.Fetch(ctx, fetch.Request{
 		URL: imageURL,
 		Headers: map[string]string{
-			"Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+			"Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
 		},
+		// 图片代理是已鉴权的任意 URL 抓取端点（S13-10）：填入固定 SourceKey 并配默认
+		// concurrentRate（每秒 10 张），使 fetcher 的按源限速兜底，防止持 token 调用方
+		// 无限速地把 Reader 当作公网内容中转。
+		SourceKey:      "image-proxy",
+		ConcurrentRate: "10/1000",
 	})
 	if err != nil {
 		return ImageProxyResult{}, err
@@ -152,12 +157,12 @@ func (p *ImageProxy) decodeImage(ctx context.Context, input ImageProxyInput, ima
 	return decoded, nil
 }
 
+// imageCacheKey 只用 URL 与 DecodeMode：同一图片在不同 BookID/SourceID 下应共享同一份缓存
+// （S13-09）；DecodeMode 决定解码产物，必须参与键。BookID 仅传给解码上下文，不参与键。
 func imageCacheKey(input ImageProxyInput) string {
 	return strings.Join([]string{
 		strings.TrimSpace(input.URL),
-		strings.TrimSpace(input.SourceID),
 		string(input.DecodeMode),
-		strings.TrimSpace(input.BookID),
 	}, "|")
 }
 
@@ -218,8 +223,10 @@ func normalizeImageContentType(headers fetch.Headers, body []byte) string {
 }
 
 func isAllowedImageContentType(contentType string) bool {
+	// image/svg+xml 可携带 script，经代理内联回传构成反射型 XSS 向量（S13-01），
+	// 直接拒绝：Legado 把图片下载为本地文件，无此面。
 	switch contentType {
-	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/svg+xml", "image/bmp":
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp":
 		return true
 	default:
 		return false

@@ -629,3 +629,26 @@ func TestCheckerContentUsesFirstNonVolumeChapterInMemory(t *testing.T) {
 		t.Fatalf("nextChapterURL = %q", checker.content.nextChapter)
 	}
 }
+
+// TestCheckerKeepsKeywordWithDashSubstrings 覆盖 S03-13：含 "--"/"++" 子串的正常中文关键字
+// 原样使用，不再被过宽的子串排除回退默认关键字。
+func TestCheckerKeepsKeywordWithDashSubstrings(t *testing.T) {
+	checker := newTestChecker()
+	src := testCheckSource()
+	src.RuleSearch.Value = &rule.SearchRule{CheckKeyWord: "斗破--特别版"}
+	item, err := checker.CheckSource(context.Background(), src, defaultCheckOptions())
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if checker.search.input.Keyword != "斗破--特别版" || item.KeywordUsed != "斗破--特别版" {
+		t.Fatalf("input = %#v, item = %#v", checker.search.input, item)
+	}
+
+	src.RuleSearch.Value = &rule.SearchRule{CheckKeyWord: "C++入门"}
+	if _, err := checker.CheckSource(context.Background(), src, defaultCheckOptions()); err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if checker.search.input.Keyword != "C++入门" {
+		t.Fatalf("keyword = %q, want C++入门", checker.search.input.Keyword)
+	}
+}

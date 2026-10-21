@@ -158,6 +158,11 @@ func (s *AppService) ExportTXT(ctx context.Context, id string, w io.Writer) (Exp
 	}
 
 	stats := ExportStats{ChapterCount: len(chapters)}
+	// S13-04：循环内复用已加载的 b/chapter（GetChapterContentWith 只查缓存表），
+	// source 仅在遇到未缓存章节时按需查询一次，避免数千章的书触发 N+1 查询。
+	exportBookID := book.IDFromURL(b.BookURL)
+	var src *source.BookSource
+	var srcErr error
 	for _, chapter := range chapters {
 		if chapter == nil {
 			return ExportStats{}, errors.New("nil chapter in table of contents")
@@ -175,7 +180,25 @@ func (s *AppService) ExportTXT(ctx context.Context, id string, w io.Writer) (Exp
 			continue
 		}
 
-		result, _, err := s.GetChapterContent(ctx, id, chapter.Index)
+		var nextChapterURL string
+		if next, err := s.Chapters.FindByIndex(ctx, exportBookID, chapter.Index+1); err == nil && next != nil {
+			nextChapterURL = next.URL
+		} else if first, err := s.Chapters.FindByIndex(ctx, exportBookID, 0); err == nil && first != nil {
+			nextChapterURL = first.URL
+		}
+		if src == nil && srcErr == nil {
+			if _, cached, err := s.Chapters.GetContent(ctx, exportBookID, chapter.Index); err != nil {
+				return ExportStats{}, err
+			} else if !cached {
+				// S13-04：source 仅在需要联网抓取（缓存未命中）时查询一次并复用；
+				// 缓存齐全的书零次 source 查询。
+				src, srcErr = s.Sources.FindByURL(ctx, b.Origin)
+				if srcErr != nil {
+					return ExportStats{}, fmt.Errorf("chapter %d (%s): %w", chapter.Index, chapter.Title, srcErr)
+				}
+			}
+		}
+		result, err := s.GetChapterContentWith(ctx, src, *b, *chapter, nextChapterURL)
 		if err != nil {
 			return ExportStats{}, fmt.Errorf("chapter %d (%s): %w", chapter.Index, chapter.Title, err)
 		}

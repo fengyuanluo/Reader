@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/PaesslerAG/gval"
@@ -12,6 +13,7 @@ import (
 
 	"reader/internal/infra/rule/internal/lru"
 	"reader/internal/infra/rule/parser"
+	"reader/internal/infra/rule/regex"
 )
 
 var (
@@ -19,13 +21,58 @@ var (
 	ErrRuleParse   = errors.New("rule_parse_failed")
 )
 
+// regexMatchOperator 实现 jayway JsonPath 的 `=~` 正则过滤运算符（如 [?(@.t=~/a.c/)]）：
+// 左侧为字符串，右侧为 `/.../` 包裹的正则字面量，编译为包含匹配。
+var regexMatchOperator = gval.InfixOperator("=~", func(a, b any) (any, error) {
+	left, ok := a.(string)
+	if !ok {
+		if a == nil {
+			left = ""
+		} else {
+			left = fmt.Sprint(a)
+		}
+	}
+	pattern, ok := b.(string)
+	if !ok {
+		if b == nil {
+			pattern = ""
+		} else {
+			pattern = fmt.Sprint(b)
+		}
+	}
+	matched, err := regex.MatchString(strings.TrimSpace(pattern), left)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrRuleParse, err)
+	}
+	return matched, nil
+})
+
+// regexFilterPattern 匹配 jayway JsonPath 的 `/.../` 包裹正则字面量（可带尾部标志位）。
+var regexFilterPattern = regexp.MustCompile(`(=~)\s*/((?:[^/\\]|\\.)*)/([a-zA-Z]*)`)
+
+// normalizeRegexFilter 把过滤表达式中的 `/.../` 正则字面量改写为 gval 可扫描的
+// 双引号字符串：`@.t=~/a.c/` → `@.t=~"a.c"`。pjsonpath.Language() 的扫描器在
+// 引号外遇到 `/` 会报 "unexpected /"，因此 `/.../` 写法必须先归一（S07-03）；
+// 引号内的 `\"` 转义由 gval 字符串扫描处理，正则内的 `\"` 写成 `\\\"`。
+func normalizeRegexFilter(rule string) string {
+	if !strings.Contains(rule, "=~") || !regexFilterPattern.MatchString(rule) {
+		return rule
+	}
+	return regexFilterPattern.ReplaceAllStringFunc(rule, func(m string) string {
+		sub := regexFilterPattern.FindStringSubmatch(m)
+		pattern := strings.ReplaceAll(sub[2], `"`, `\"`)
+		return sub[1] + `"` + pattern + `"`
+	})
+}
+
 // language 在 JSONPath 基础语言上补齐数值/文本比较与逻辑运算，
-// 使过滤表达式支持 Legado（jayway）常用的 > < >= <= && || ! 等运算符。
+// 使过滤表达式支持 Legado（jayway）常用的 > < >= <= && || ! 与 =~ 等运算符。
 var language = gval.NewLanguage(
 	pjsonpath.Language(),
 	gval.Arithmetic(),
 	gval.Text(),
 	gval.PropositionalLogic(),
+	regexMatchOperator,
 )
 
 // evaluableCacheSize 为 JSONPath 编译缓存容量，按规则字符串复用解析结果。
@@ -85,7 +132,7 @@ func normalizeRule(rule string) string {
 	if strings.HasPrefix(rule, "$.[") {
 		rule = "$" + strings.TrimPrefix(rule, "$.")
 	}
-	return normalizeSingleQuotedStrings(rule)
+	return normalizeSingleQuotedStrings(normalizeRegexFilter(rule))
 }
 
 func normalizeSingleQuotedStrings(rule string) string {

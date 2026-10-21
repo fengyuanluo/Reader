@@ -37,6 +37,20 @@ func checkOptionsFromDTO(dto *generated.CheckOptions) checkapp.Options {
 	return opts
 }
 
+// itemStatusFromDTO 把 GetCheckTaskParams.Status 转成领域条目状态；nil/未知值返回 nil（不过滤）。
+func itemStatusFromDTO(params generated.GetCheckTaskParams) *task.CheckTaskItemStatus {
+	if params.Status == nil {
+		return nil
+	}
+	status := task.CheckTaskItemStatus(*params.Status)
+	switch status {
+	case task.CheckItemPending, task.CheckItemRunning, task.CheckItemPassed, task.CheckItemFailed, task.CheckItemSkipped, task.CheckItemCancelled:
+		return &status
+	}
+	return nil
+}
+
+// mapCheckEvent 把领域校验事件映射为 DTO；Item 为 nil 时省略（S03-10 摘要事件）。
 func mapCheckEvent(event *task.CheckEvent) generated.CheckEvent {
 	dto := generated.CheckEvent{
 		TaskId:  event.TaskID,

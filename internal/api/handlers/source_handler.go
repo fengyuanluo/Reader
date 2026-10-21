@@ -48,23 +48,31 @@ type SourceHandler struct {
 	check      *checkapp.Manager
 	bodyLimit  int64
 	importBody int64
+	// debugBodyLimit 是 debug 会话与 check 任务请求体的上限（来自 READER_DEBUG_BODY_LIMIT），
+	// 独立于普通 JSON 请求的 bodyLimit（S10-08）。
+	debugBodyLimit int64
 	// checkConcurrency 是校验任务同时校验的书源数上限，由装配方从配置注入（零值由 checkapp 回退到默认值）。
 	checkConcurrency int
 	// heartbeat 覆盖 SSE 心跳间隔，仅供测试缩短等待；零值使用 defaultSSEHeartbeatInterval。
 	heartbeat time.Duration
+	// sseStreams 记录活跃 SSE 连接的 context，关闭时统一取消（S10-01）。
+	sseStreams *sseStreamRegistry
 }
 
 // 请求体上限：普通 JSON 请求体参照 READER_FETCH_MAX_BODY_BYTES 的默认值 10 MiB
 // （替换规则测试与正文相关请求可能携带整章文本）；书源导入可能携带批量书源数组，放宽到 32 MiB。
+// maxSourceIds 是 search/discovery/check 请求中 sourceIds 数组的上限（S10-11），
+// 单请求可携带的 sourceId 数量受请求体上限约束，这里加一层 O(1) 防御。
 const (
 	defaultJSONBodyLimit   int64 = 10 << 20
 	defaultImportBodyLimit int64 = 32 << 20
+	maxSourceIds                 = 1000
 	// maxPageSize 与 OpenAPI PageSize 参数的 maximum 保持一致。
 	maxPageSize = 200
 )
 
 func NewSourceHandler(manager *sourceapp.Manager) *SourceHandler {
-	return &SourceHandler{manager: manager, bodyLimit: defaultJSONBodyLimit, importBody: defaultImportBodyLimit}
+	return &SourceHandler{manager: manager, bodyLimit: defaultJSONBodyLimit, importBody: defaultImportBodyLimit, debugBodyLimit: defaultJSONBodyLimit, sseStreams: newSSEStreamRegistry()}
 }
 
 func (h *SourceHandler) WithImporter(importer *sourceapp.Importer) *SourceHandler {
@@ -84,6 +92,15 @@ func (h *SourceHandler) WithBodyLimits(jsonLimit, importLimit int64) *SourceHand
 	}
 	if importLimit > 0 {
 		h.importBody = importLimit
+	}
+	return h
+}
+
+// WithDebugBodyLimit 注入 debug 会话与 check 任务请求体上限（来自 READER_DEBUG_BODY_LIMIT）；
+// 非正值沿用默认 JSON 上限（S10-08）。
+func (h *SourceHandler) WithDebugBodyLimit(limit int64) *SourceHandler {
+	if limit > 0 {
+		h.debugBodyLimit = limit
 	}
 	return h
 }
@@ -165,17 +182,19 @@ func (h *SourceHandler) ImportBookSources(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, mapImportResult(result, middleware.TraceIDFromContext(r.Context())))
 }
 
-// writeImportError 区分导入的输入错误与服务端错误：请求体不合法返回 400，抓取器缺失返回 501。
+// writeImportError 区分导入的输入错误与服务端错误：请求体不合法返回 400，抓取缺失返回 501。
+// default 分支不回显内部错误原文（S10-03）：fetch/DB 错误可能携带内网 IP 与 SQL 细节，
+// 只返回固定 message，与 writeSourceError 的 default 行为一致。
 func writeImportError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, sourceapp.ErrInvalidImportPayload):
-		middleware.WriteError(w, r, http.StatusBadRequest, "import_invalid", err.Error(), nil)
+		middleware.WriteError(w, r, http.StatusBadRequest, "import_invalid", "import payload is invalid", nil)
 	case errors.Is(err, sourceapp.ErrImportFetcherUnavailable):
-		middleware.WriteError(w, r, http.StatusNotImplemented, "not_configured", err.Error(), nil)
+		middleware.WriteError(w, r, http.StatusNotImplemented, "not_configured", "import fetcher is not configured", nil)
 	case errors.Is(err, source.ErrConflict):
-		middleware.WriteError(w, r, http.StatusConflict, "source_conflict", err.Error(), nil)
+		middleware.WriteError(w, r, http.StatusConflict, "source_conflict", "book source conflicts with an existing source", nil)
 	default:
-		middleware.WriteError(w, r, http.StatusInternalServerError, "import_failed", err.Error(), nil)
+		middleware.WriteError(w, r, http.StatusInternalServerError, "import_failed", "import failed", nil)
 	}
 }
 
@@ -546,6 +565,10 @@ func (h *SourceHandler) SearchBooks(w http.ResponseWriter, r *http.Request) {
 		EnabledOnly: enabledOnly,
 	}
 	if body.SourceIds != nil {
+		if len(*body.SourceIds) > maxSourceIds {
+			writeValidationError(w, r, fmt.Sprintf("sourceIds must contain at most %d entries", maxSourceIds))
+			return
+		}
 		input.SourceIDs = append([]string(nil), (*body.SourceIds)...)
 	}
 	if body.Group != nil {
@@ -586,6 +609,10 @@ func (h *SourceHandler) DiscoverBooks(w http.ResponseWriter, r *http.Request) {
 	}
 	input := discoveryapp.Input{Page: page}
 	if body.SourceIds != nil {
+		if len(*body.SourceIds) > maxSourceIds {
+			writeValidationError(w, r, fmt.Sprintf("sourceIds must contain at most %d entries", maxSourceIds))
+			return
+		}
 		input.SourceIDs = append([]string(nil), (*body.SourceIds)...)
 	}
 	if body.Group != nil {
@@ -890,11 +917,14 @@ func writeImageProxyError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, contentapp.ErrInvalidImageType):
 		middleware.WriteError(w, r, http.StatusBadGateway, "fetch_failed", "image response content type is not allowed", nil)
 	case errors.Is(err, contentapp.ErrImageDecodeFailed):
-		middleware.WriteError(w, r, http.StatusBadGateway, "script_failed", err.Error(), nil)
+		// 解码脚本错误含书源脚本片段，不回显内部原文（S10-03）。
+		middleware.WriteError(w, r, http.StatusBadGateway, "script_failed", "image decode script failed", nil)
 	case errors.Is(err, fetch.ErrBlocked):
+		// 封禁地址回显属有意反馈，保留。
 		middleware.WriteError(w, r, http.StatusBadGateway, "fetch_blocked", err.Error(), nil)
 	default:
-		middleware.WriteError(w, r, http.StatusBadGateway, "fetch_failed", err.Error(), nil)
+		// fetch 层错误含内部解析出的 IP，不回显内部原文（S10-03）。
+		middleware.WriteError(w, r, http.StatusBadGateway, "fetch_failed", "image fetch failed", nil)
 	}
 }
 
@@ -914,6 +944,28 @@ func writeReplaceError(w http.ResponseWriter, r *http.Request, err error) {
 // writeNotConfigured 表示该能力在本次装配中不可用（依赖服务为 nil），用 501 与真实内部错误区分。
 func writeNotConfigured(w http.ResponseWriter, r *http.Request, message string) {
 	middleware.WriteError(w, r, http.StatusNotImplemented, "not_configured", message, nil)
+}
+
+// WriteParamError 把 oapi-codegen 生成的参数绑定错误转成 Error schema 的 JSON 400 响应（S10-04），
+// 代替生成代码默认的 text/plain http.Error；响应携带 X-Trace-Id 头与 traceId 字段。
+func WriteParamError(w http.ResponseWriter, r *http.Request, err error) {
+	middleware.WriteError(w, r, http.StatusBadRequest, "validation_failed", "invalid request parameter", map[string]any{
+		"parameter": paramName(err),
+		"reason":    err.Error(),
+	})
+}
+
+// paramName 提取参数绑定错误的参数名，便于客户端定位。
+func paramName(err error) string {
+	var required *generated.RequiredParamError
+	if errors.As(err, &required) {
+		return required.ParamName
+	}
+	var format *generated.InvalidParamFormatError
+	if errors.As(err, &format) {
+		return format.ParamName
+	}
+	return ""
 }
 
 func writeValidationError(w http.ResponseWriter, r *http.Request, message string) {

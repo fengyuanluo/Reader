@@ -1,3 +1,4 @@
+# 验证门禁统一入口（与 Makefile / scripts/verify.sh 同源，勿内联重复定义）
 name: CI
 
 on:
@@ -23,14 +24,15 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Generate
-        run: go generate ./...
+      - name: Verify (generate, test -race, vet, generated-check, openapi, security, e2e)
+        run: make verify
 
-      - name: Check generated API
-        run: git diff --exit-code internal/api/generated
+      - name: Staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./...
 
-      - name: Test
-        run: go test -race -count=1 ./...
-
-      - name: Vet
-        run: go vet ./...
+      - name: Govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...

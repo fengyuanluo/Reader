@@ -34,6 +34,8 @@ export READER_GLOBAL_CONCURRENCY="8"
 export READER_SOURCE_CONCURRENCY="2"
 export READER_CHECK_CONCURRENCY="16"                # 书源校验并发（同时校验的书源数），不受全局上限约束
 export READER_SCRIPT_TIMEOUT="10s"
+export READER_SEARCH_SOURCE_TIMEOUT="15s"           # 多源搜索/校验的每源默认超时（全局 Timeout 生效时被覆盖）
+export READER_GOMEM_LIMIT_RATIO="0.5"               # 0.1~1：GOMEMLIMIT 未设置时按可用内存比例设 Go 软内存上限
 export READER_DEBUG_BODY_LIMIT="32768"
 export READER_CONTENT_RESEGMENT="false"
 export READER_CONTENT_CHINESE_CONVERTER_TYPE="0"
@@ -44,6 +46,10 @@ export READER_CONTENT_CHINESE_CONVERTER_TYPE="0"
 - `0`：关闭简繁转换
 - `1`：繁体转简体
 - `2`：简体转繁体
+
+`GOMEMLIMIT` 语义：显式设置 `GOMEMLIMIT` 环境变量时以其为准；未设置时 `serve` 启动按系统可用内存 × `READER_GOMEM_LIMIT_RATIO`（0.1~1，默认 0.5）调用 `debug.SetMemoryLimit` 设置软上限。
+
+SQLite 连接池：WAL 模式下 `bootstrap.Open` 将最大/空闲连接数都设为 4（`maxReadConns`），允许多读 + 单写并行，避免一条慢查询阻塞全部读写；写并发由 WAL + `busy_timeout` 兜底。
 
 `READER_DATA_DIR` 与 SQLite 路径的关系：`READER_SQLITE_DSN` 未设置时，数据库默认落在 `READER_DATA_DIR` 下（默认 `data/reader.db`）；显式设置 `READER_SQLITE_DSN` 时以该值为准。相对路径按进程当前工作目录解析，部署时建议用绝对路径。
 
@@ -109,6 +115,8 @@ git diff --exit-code internal/api/generated
 - `v4`：新增 `idx_debug_events_session` 索引。
 - `v5`：清空 `namespace='content'` 的旧正文缓存（旧缓存保存的是已应用用户替换规则的正文，需重新抓取）。
 - `v6`：补 `books` 的 Legado 元数据列（`custom_tag`、`custom_cover_url`、`custom_intro`、`charset`、`book_group`、`last_check_time`、`last_check_count`、`can_update`、`book_order`）。
+- `v8`：`cache_entries` 按 owner 删除正文缓存的 owner 索引（`idx_cache_entries_owner`）。
+- `v9`：书架列表与缓存过期清理索引（`idx_books_dur_chapter_time`、`idx_cache_entries_namespace_expires`）。
 
 `sqlite.Open` 的行为（`internal/infra/sqlite/open.go`）：
 
@@ -154,6 +162,16 @@ go generate ./...
 go test -race -count=1 ./...
 go vet ./...
 git diff --exit-code internal/api/generated
+make openapi-check
+make security
+make e2e
+```
+
+额外安全/静态检查门禁（CI 同步运行）：
+
+```bash
+make staticcheck   # honnef.co/go/tools staticcheck ./...
+make govulncheck   # golang.org/x/vuln govulncheck ./...
 ```
 
 可选 make 入口：

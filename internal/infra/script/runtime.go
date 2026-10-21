@@ -34,6 +34,7 @@ import (
 	"github.com/dop251/goja"
 	"github.com/dop251/goja/ast"
 	"github.com/dop251/goja/parser"
+	"github.com/dop251/goja/token"
 	"golang.org/x/net/publicsuffix"
 	"golang.org/x/text/encoding/htmlindex"
 	"golang.org/x/text/transform"
@@ -62,6 +63,9 @@ const defaultWebViewUserAgent = "Mozilla/5.0 (Linux; Android 10; K; wv) AppleWeb
 
 // defaultScriptTimeout 是 Policy.Timeout<=0 时的执行上限，保证脚本与其网络请求总有截止时间。
 var defaultScriptTimeout = 30 * time.Second
+
+// maxAjaxTestAllConcurrency 是 java.ajaxTestAll 单次批量请求的最大并发度（S04-06）。
+const maxAjaxTestAllConcurrency = 16
 
 type Bindings map[string]any
 
@@ -102,6 +106,8 @@ type Runtime struct {
 	// 与 jsLib 的 programs 分开，互不挤占容量。
 	callSites *programCache
 	logs      *logBuffer
+	// ttfCache 按字体数据哈希缓存解析结果（S05-04）：*ttfFont 只读，可并发共享；容量有界。
+	ttfCache *ttfCache
 }
 
 // evalContext 是单次 Eval 的只读上下文，不写回共享 Runtime。
@@ -126,7 +132,7 @@ func NewRuntime(policy Policy) *Runtime {
 	if variables == nil {
 		variables = newMemoryVariableRepository()
 	}
-	return &Runtime{
+	runtime := &Runtime{
 		policy:    policy,
 		timeout:   timeout,
 		cache:     cache,
@@ -136,7 +142,10 @@ func NewRuntime(policy Policy) *Runtime {
 		programs:  newProgramCache(defaultProgramCacheSize),
 		callSites: newProgramCache(defaultProgramCacheSize),
 		logs:      newLogBuffer(defaultLogMaxEntries, defaultLogMaxBytes),
+		ttfCache:  newTTFCache(defaultTTFCacheSize),
 	}
+	startMemoryWatchdog()
+	return runtime
 }
 
 type stageContextKey struct{}
@@ -178,12 +187,17 @@ func (r *Runtime) EvalWithBindings(ctx context.Context, script string, bindings 
 	// VM 才随本 Eval 丢弃，不会把 Interrupt 打到后续脚本。
 	stopInterrupt := context.AfterFunc(ctx, func() { vm.Interrupt(ErrScriptTimeout) })
 	defer stopInterrupt()
+	// 内存看门狗（S04-03）：Eval 期间进程堆超过预算即中断本 VM，脚本以内存预算超限报错。
+	unregisterVM := scriptMemoryWatchdog.trackVM(vm)
+	defer unregisterVM()
 	src := sourceFromBindings(r.policy.Source, bindings)
 	runCtx := r.newEvalContext(ctx, src, bindings)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			if recoveredErr, ok := recovered.(error); ok && errors.Is(recoveredErr, ErrScriptTimeout) {
 				err = runCtx.wrap(ErrScriptTimeout, recovered)
+			} else if recoveredErr, ok := recovered.(error); ok && errors.Is(recoveredErr, errScriptOutOfMemory) {
+				err = runCtx.wrap(ErrScriptFailed, recoveredErr)
 			} else {
 				err = runCtx.wrap(ErrScriptFailed, recovered)
 			}
@@ -465,8 +479,7 @@ GZIPInputStream = function(value){ return __ReaderGZIPInputStream(value); };
 }
 
 func (r *Runtime) installSafeGlobals(vm *goja.Runtime, runCtx evalContext) error {
-	blocked := []string{"require", "process", "global", "globalThis", "window", "document", "XMLHttpRequest", "fetch"}
-	for _, name := range blocked {
+	for _, name := range []string{"require", "process", "global", "globalThis", "window", "document", "XMLHttpRequest", "fetch"} {
 		if err := vm.Set(name, goja.Undefined()); err != nil {
 			return err
 		}
@@ -879,6 +892,7 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 			return newScriptHTTPResponse(vm, currentBoundResponse(vm), nil)
 		},
 		// ajaxTestAll(urls[, timeoutMillis][, skipRateLimit])：并发批量请求，返回响应数组（JsExtensions.kt:161）。
+		// 以受限 errgroup 并发执行（并发度受 Policy.Timeout 总预算约束，单 URL ctx 仍是 runCtx 子集）。
 		"ajaxTestAll": func(call goja.FunctionCall) goja.Value {
 			if len(call.Arguments) == 0 {
 				return vm.NewArray()
@@ -886,27 +900,44 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 			urls := jsStringArray(vm, call.Argument(0))
 			timeoutIndex := 1
 			skipRate := len(call.Arguments) > 2 && call.Argument(2).ToBoolean()
-			responses := make([]goja.Value, 0, len(urls))
+			responses := make([]goja.Value, len(urls))
 			if r.policy.Fetcher == nil {
-				for range urls {
-					responses = append(responses, newScriptHTTPResponse(vm, nil, ErrScriptFailed))
+				for i := range urls {
+					responses[i] = newScriptHTTPResponse(vm, nil, ErrScriptFailed)
 				}
 				return vm.ToValue(responses)
 			}
-			for _, rawURL := range urls {
-				callCtx, cancel := scriptCallContext(runCtx.ctx, call, timeoutIndex)
-				urlCtx := runCtx
-				urlCtx.ctx = callCtx
-				req, err := r.buildScriptRequest(urlCtx, vm, rawURL, nil)
-				if err == nil {
-					req.SkipRateLimit = skipRate
-					var resp *fetch.Response
-					resp, err = requestoption.Fetch(callCtx, r.policy.Fetcher, req, vmRequestEvaluator(r, vm))
-					responses = append(responses, newScriptHTTPResponse(vm, resp, err))
-				} else {
-					responses = append(responses, newScriptHTTPResponse(vm, nil, err))
-				}
-				cancel()
+			var wg sync.WaitGroup
+			type fetchResult struct {
+				resp *fetch.Response
+				err  error
+			}
+			results := make([]fetchResult, len(urls))
+			// 并发度：与 Legado JsExtensions ajaxAll 一致全并发，但每个请求的 ctx 仍受 Eval 总超时约束。
+			sem := make(chan struct{}, maxAjaxTestAllConcurrency)
+			for i, rawURL := range urls {
+				wg.Add(1)
+				go func(i int, rawURL string) {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					callCtx, cancel := scriptCallContext(runCtx.ctx, call, timeoutIndex)
+					defer cancel()
+					urlCtx := runCtx
+					urlCtx.ctx = callCtx
+					req, err := r.buildScriptRequest(urlCtx, vm, rawURL, nil)
+					if err == nil {
+						req.SkipRateLimit = skipRate
+						results[i].resp, results[i].err = requestoption.Fetch(callCtx, r.policy.Fetcher, req, vmRequestEvaluator(r, vm))
+					} else {
+						results[i].err = err
+					}
+				}(i, rawURL)
+			}
+			wg.Wait()
+			// goja.Runtime 非并发安全：响应包装回 VM goroutine 后再构造。
+			for i := range results {
+				responses[i] = newScriptHTTPResponse(vm, results[i].resp, results[i].err)
 			}
 			return vm.ToValue(responses)
 		},
@@ -998,8 +1029,12 @@ func installJavaImporterCompat(vm *goja.Runtime) error {
 		return err
 	}
 	if err := vm.Set("JavaImporter", func(call goja.ConstructorCall) *goja.Object {
-		obj := vm.GlobalObject()
-		_ = obj.Set("importPackage", func(args ...any) {})
+		// 返回隔离对象而非 vm.GlobalObject()：全局对象本体不暴露给脚本（S05-06 防御纵深）。
+		obj := vm.NewObject()
+		proto := vm.NewObject()
+		_ = proto.Set("importPackage", func(args ...any) {})
+		_ = proto.Set("importClass", func(args ...any) {})
+		_ = obj.SetPrototype(proto)
 		return obj
 	}); err != nil {
 		return err
@@ -1378,22 +1413,37 @@ var rhinoLetConditionPattern = regexp.MustCompile(`\blet\s*\(\s*([A-Za-z_$][A-Za
 
 // rewriteJavaCompatScript 兼容 Rhino 语法差异。Rhino 会把 with(JavaImporter) 块内的函数声明提升到外层，
 // goja 按块级作用域处理；因此只把顶层 with 块中直接声明的函数改写为赋值，其余代码（含注释、字符串）原样保留。
+// Rhino 的 let(x=y) 条件式 let（goja 无法解析）在 AST 路径上先尝试：解析成功时按精确偏移改写，字符串
+// 字面量中的 "let(a=1)" 形如文本不被误改写（S04-09）；解析失败（jsLib 含 Rhino 专属语法，goja 无法
+// 解析做歧义判定）时回落到既有的行级正则改写，保持 Rhino jsLib 可编译。
 func rewriteJavaCompatScript(script string) string {
-	script = rhinoLetConditionPattern.ReplaceAllString(script, `($1 = $2, $3)`)
-	if !strings.Contains(script, "with") {
-		return script
-	}
 	program, err := parser.ParseFile(nil, "", script, 0)
 	if err != nil {
-		// 解析失败时不做猜测性改写，交给 goja 报出真实语法错误。
-		return script
+		// 解析失败：脚本含 Rhino 专属语法（如 let(x=y) 条件式 let），goja 无法做 AST 歧义判定。
+		// 回落到行级正则改写（既有兼容行为），仅处理真正的 let(x=y) 形态；否则交给 goja 报真实语法错误。
+		return rhinoLetConditionPattern.ReplaceAllString(script, `($1 = $2, $3)`)
 	}
 	type span struct {
-		start, nameEnd, bodyEnd int
-		name                    string
+		start, end  int
+		replacement string
 	}
 	var spans []span
 	for _, stmt := range program.Body {
+		if lexical, ok := stmt.(*ast.LexicalDeclaration); ok && lexical.Token == token.LET {
+			// Rhino 的 let(x=y) 条件式 let 在 goja AST 中解析为 LexicalDeclaration(LET)。
+			// 顶层真正的 let 声明（let x = 1）同样是 LexicalDeclaration(LET)，但两个都不该改写：
+			// 真正的 let 声明是合法 goja 语法；let(x=y) 形式在纯 goja 下会编译失败（Rhino 专属），
+			// 因此仅当后续文本匹配 let(...) pattern 时按精确偏移改写。
+			if len(lexical.List) == 1 {
+				start := int(lexical.Idx0()) - 1
+				end := int(lexical.Idx1()) - 1
+				if start >= 0 && end <= len(script) && start < end {
+					if replacement := rewriteRhinoLetSpan(script[start:end]); replacement != script[start:end] {
+						spans = append(spans, span{start: start, end: end, replacement: replacement})
+					}
+				}
+			}
+		}
 		with, ok := stmt.(*ast.WithStatement)
 		if !ok {
 			continue
@@ -1408,34 +1458,49 @@ func rewriteJavaCompatScript(script string) string {
 				continue
 			}
 			// file.Idx 从 1 开始，转换为字节偏移。
+			nameStart := int(decl.Function.Function) - 1
+			nameEnd := int(decl.Function.Name.Idx1()) - 1
+			bodyEnd := int(decl.Function.Idx1()) - 1
+			if nameStart < 0 || nameStart >= nameEnd || nameEnd > bodyEnd || bodyEnd > len(script) {
+				return script
+			}
 			spans = append(spans, span{
-				start:   int(decl.Function.Function) - 1,
-				nameEnd: int(decl.Function.Name.Idx1()) - 1,
-				bodyEnd: int(decl.Function.Idx1()) - 1,
-				name:    string(decl.Function.Name.Name),
+				start:       nameStart,
+				end:         bodyEnd,
+				replacement: string(decl.Function.Name.Name) + " = function" + script[nameEnd:bodyEnd] + ";",
 			})
 		}
 	}
 	if len(spans) == 0 {
 		return script
 	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
 	var b strings.Builder
-	b.Grow(len(script) + len(spans)*9)
+	b.Grow(len(script))
 	last := 0
 	for _, s := range spans {
-		if s.start < last || s.start >= s.nameEnd || s.nameEnd > s.bodyEnd || s.bodyEnd > len(script) {
+		if s.start < last || s.end > len(script) {
 			return script
 		}
 		b.WriteString(script[last:s.start])
-		b.WriteString(s.name)
-		b.WriteString(" = function")
-		// 赋值表达式需要显式结束，避免同一行相邻的两个声明拼接成语法错误。
-		b.WriteString(script[s.nameEnd:s.bodyEnd])
-		b.WriteString(";")
-		last = s.bodyEnd
+		b.WriteString(s.replacement)
+		last = s.end
 	}
 	b.WriteString(script[last:])
 	return b.String()
+}
+
+// rewriteRhinoLetSpan 把 let(x=y) rest 片段改写为 (x = y, rest)（Rhino 条件式 let 语义）。
+// 仅作用于 AST 确认的 LexicalDeclaration 偏移（S04-09），字符串字面量中的形如文本不会被改写。
+func rewriteRhinoLetSpan(fragment string) string {
+	match := rhinoLetConditionPattern.FindStringSubmatchIndex(fragment)
+	if match == nil {
+		return fragment
+	}
+	name := fragment[match[2]:match[3]]
+	value := fragment[match[4]:match[5]]
+	rest := fragment[match[6]:match[7]]
+	return "(" + name + " = " + value + ", " + rest + ")"
 }
 
 type javaCipherCompat struct {
@@ -1792,9 +1857,11 @@ func (r *Runtime) scriptGetElementsAt(ctx context.Context, vm *goja.Runtime, inp
 }
 
 // scriptGetElementAt 先按 JSONPath 取单个值，取不到时回落到元素集合（Legado getElement 语义）。
+// 廉价预检：text[0] 不是 { 或 [ 时跳过 json.Valid 全文扫描（S05-05，HTML 正文每次 getElement
+// 都免一次全文 JSON 验证）。
 func (r *Runtime) scriptGetElementAt(ctx context.Context, vm *goja.Runtime, input any, rule string, baseURL string) goja.Value {
 	text := strings.TrimSpace(scriptInputString(input))
-	if json.Valid([]byte(text)) {
+	if text != "" && (text[0] == '{' || text[0] == '[') && json.Valid([]byte(text)) {
 		if adapter, err := jsonpath.New(text); err == nil {
 			if value, err := adapter.Object(normalizeScriptJSONRule(rule)); err == nil {
 				return vm.ToValue(value)
@@ -2365,7 +2432,15 @@ func (r *Runtime) fetchScriptCall(runCtx evalContext, vm *goja.Runtime, method s
 		}
 	}
 	if present(headerIndex) {
-		mergeHeaders(req.Headers, normalizeScriptOptions(call.Argument(headerIndex).Export()))
+		// 脚本传入的 headers 走 S04-02 的保留键校验：Host/Connection/Content-Length 等保留键拒绝，
+		// 防止书源作者伪造请求头。headers 键不做 URL 选项白名单校验（X-Test 等自定义头合法，
+		// 与 Legado JsExtensions 一致），仅 rejectReservedHeaders。
+		merged := map[string]any{}
+		mergeAnyHeaders(merged, normalizeScriptOptions(call.Argument(headerIndex).Export()))
+		if err := rejectReservedHeaders(merged, runCtx); err != nil {
+			return nil, err
+		}
+		mergeHeaders(req.Headers, merged)
 		// headers 里的 proxy 键是代理配置而非 HTTP 头（AnalyzeUrl.kt:128-131）。
 		if proxy, ok := req.Headers["proxy"]; ok {
 			delete(req.Headers, "proxy")
@@ -2666,10 +2741,52 @@ func parseHeaderJSONString(raw string) map[string]string {
 	if err := json.Unmarshal([]byte(raw), &out); err == nil {
 		return out
 	}
-	for key, value := range urlrule.ParseAttributeObject(raw) {
+	// 独立 header JSON 的 loose 路径用 ParseHeaderObject：键保持原大小写（HTTP 头名敏感），
+	// ParseAttributeObject 会把键归一为小写（仅用于 URL 选项）。
+	for key, value := range urlrule.ParseHeaderObject(raw) {
 		out[key] = fmt.Sprint(value)
 	}
 	return out
+}
+
+// mergeAnyHeaders 把任意形式的 headers 输入并进 map[string]any（不脱敏、不校验，仅供校验入口使用）。
+func mergeAnyHeaders(target map[string]any, value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, raw := range typed {
+			target[key] = raw
+		}
+	case map[string]string:
+		for key, raw := range typed {
+			target[key] = raw
+		}
+	case string:
+		nested := map[string]string{}
+		if err := json.Unmarshal([]byte(typed), &nested); err == nil {
+			for key, text := range nested {
+				target[key] = text
+			}
+			return
+		}
+		// headers 字符串是独立 header JSON：用 ParseHeaderObject 保持键原大小写。
+		for key, raw := range urlrule.ParseHeaderObject(typed) {
+			target[key] = raw
+		}
+	}
+}
+
+// rejectReservedHeaders 拒绝脚本 headers 中不可由用户代码设置的保留键（S04-02）。
+func rejectReservedHeaders(headers map[string]any, runCtx evalContext) error {
+	for key := range headers {
+		if strings.EqualFold(strings.TrimSpace(key), "proxy") {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "host", "connection", "content-length", "transfer-encoding", "keep-alive":
+			return runCtx.wrap(ErrScriptFailed, fmt.Errorf("%s header is reserved", key))
+		}
+	}
+	return nil
 }
 
 func mergeHeaders(headers map[string]string, value any) {
@@ -2690,7 +2807,9 @@ func mergeHeaders(headers map[string]string, value any) {
 			}
 			return
 		}
-		for key, raw := range urlrule.ParseAttributeObject(typed) {
+		// headers 字符串是独立 header JSON：用 ParseHeaderObject 保持键原大小写；
+		// ParseAttributeObject 归一为小写，仅用于 URL 选项解析。
+		for key, raw := range urlrule.ParseHeaderObject(typed) {
 			headers[key] = fmt.Sprint(raw)
 		}
 	}
@@ -3141,12 +3260,34 @@ func cookieDomain(rawURL string) string {
 	return strings.TrimPrefix(host, "www.")
 }
 
+// reservedBindings 是脚本不可覆盖的绑定名单单一来源：installSafeGlobals 遮蔽的前两项与
+// EvalWithBindings 的调用方 bindings 校验共用（S04-05，避免两处清单漂移）。
+// 注意：只包含运行时自身安装的绑定（java/cache/cookie 等）与宿主遮蔽全局（require/process 等）；
+// book/source/result/chapter/src/baseUrl 是调用方按 Legado 语义注入的合法 bindings，不禁（否则
+// preUpdateJS、LoginCheckJS、@js ChapterURL 等链路全部断）。
+var reservedBindings = []string{
+	"require", "process", "global", "globalThis", "window", "document", "XMLHttpRequest", "fetch",
+	// 运行时自身安装的绑定，调用方传入同键 bindings 会整体替换沙箱。
+	"java", "cache", "cookie", "log", "org",
+	"JavaImporter", "Packages", "Base64",
+	"ByteArrayInputStream", "ByteArrayOutputStream", "GZIPInputStream", "__readerStringBytes",
+}
+
+func isReservedBinding(key string) bool {
+	for _, name := range reservedBindings {
+		if name == key {
+			return true
+		}
+	}
+	return false
+}
+
 func isForbiddenBinding(key string) bool {
 	switch key {
 	case "require", "process", "global", "globalThis", "window", "document", "XMLHttpRequest", "fetch":
 		return true
 	default:
-		return false
+		return isReservedBinding(key)
 	}
 }
 

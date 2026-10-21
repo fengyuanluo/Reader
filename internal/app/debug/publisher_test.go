@@ -2,6 +2,7 @@ package debugapp
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -174,8 +175,10 @@ func (r *fakeDebugRepo) AppendEvent(ctx context.Context, event *task.DebugEvent)
 }
 
 func (r *fakeDebugRepo) publishLocked(event *task.DebugEvent) {
+	// 与真实仓库一致原地分配 EventID：Publisher 推送给订阅者的是同一指针，
+	// 订阅端必须能看到分配后的 EventID。
+	event.EventID = int64(len(r.events) + 1)
 	copy := *event
-	copy.EventID = int64(len(r.events) + 1)
 	r.events = append(r.events, &copy)
 }
 
@@ -193,4 +196,58 @@ func (r *fakeDebugRepo) ListEvents(ctx context.Context, sessionID string, afterE
 		}
 	}
 	return out, nil
+}
+
+// TestPublisherConcurrentPublishKeepsEventIDOrder 验证并发 Publish 时订阅端收到的
+// 事件 event_id 单调递增，与 Last-Event-ID 增量语义一致（S15-05）。
+func TestPublisherConcurrentPublishKeepsEventIDOrder(t *testing.T) {
+	repo := &fakeDebugRepo{}
+	publisher := NewPublisher(repo)
+	const sessionID = "debug-order"
+	sub, err := publisher.Subscribe(context.Background(), sessionID, 0)
+	if err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+
+	const total = 200
+	var wg sync.WaitGroup
+	for i := range total {
+		wg.Add(1)
+		go func(seq int) {
+			defer wg.Done()
+			event := &task.DebugEvent{SessionID: sessionID, Message: fmt.Sprintf("event-%d", seq)}
+			if err := publisher.Publish(context.Background(), event); err != nil {
+				t.Errorf("Publish() error = %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// 订阅端收到的 event_id 必须单调递增（Last-Event-ID 增量语义）。
+	// 订阅者缓冲有界，高速发布可能触发断开（由客户端重连补齐），
+	// 因此断言收到的子集严格递增即可，同时校验已交付事件与库里记录一致。
+	deadline := time.After(5 * time.Second)
+	received := 0
+	last := int64(0)
+	for {
+		select {
+		case event, ok := <-sub:
+			if !ok {
+				if received == 0 {
+					t.Fatalf("subscription closed before any event")
+				}
+				return
+			}
+			if event.EventID <= last {
+				t.Fatalf("event_id %d after %d, want strictly increasing", event.EventID, last)
+			}
+			last = event.EventID
+			received++
+		case <-deadline:
+			if received == 0 {
+				t.Fatalf("timed out before any event")
+			}
+			return
+		}
+	}
 }

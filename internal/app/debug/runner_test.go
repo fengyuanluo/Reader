@@ -2,6 +2,7 @@ package debugapp
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -59,7 +60,21 @@ func TestRunnerCancelStopsRunningSession(t *testing.T) {
 		t.Fatalf("content stage did not observe cancellation")
 	}
 	// 被取消的运行不能把会话改成 failed，终态仍由 CancelSession 决定。
-	time.Sleep(20 * time.Millisecond)
+	// 轮询直到 runner 的运行句柄已被清理（goroutine 已退出、finish 已执行完毕），
+	// 再读库断言终态，避免固定 sleep 预算 flaky。
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		runner.mu.Lock()
+		remaining := len(runner.runs)
+		runner.mu.Unlock()
+		if remaining == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("runner handles not cleaned up within deadline: %d remaining", remaining)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	got, err := repo.FindSession(context.Background(), session.SessionID)
 	if err != nil {
 		t.Fatalf("FindSession() error = %v", err)
@@ -165,4 +180,87 @@ func (c *sequencedDebugContent) block(ctx context.Context) error {
 	<-ctx.Done()
 	close(c.releasedCh[index])
 	return ctx.Err()
+}
+
+// blockingContent 阻塞每次正文抓取，直到 ctx 取消，用于撑满并发槽。
+type blockingContent struct {
+	startedChans []chan struct{}
+	mu           sync.Mutex
+}
+
+func (c *blockingContent) ensureStarted(i int) chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for len(c.startedChans) <= i {
+		c.startedChans = append(c.startedChans, make(chan struct{}))
+	}
+	return c.startedChans[i]
+}
+
+func (c *blockingContent) signalStarted(i int) {
+	ch := c.ensureStarted(i)
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
+}
+
+func (c *blockingContent) GetTransientContent(ctx context.Context, src *source.BookSource, b book.Book, chapter book.BookChapter, nextChapterURL string) (contentapp.Result, error) {
+	c.mu.Lock()
+	index := len(c.startedChans)
+	c.mu.Unlock()
+	c.signalStarted(index)
+	<-ctx.Done()
+	return contentapp.Result{}, ctx.Err()
+}
+
+func (c *blockingContent) GetContentFromChapter(ctx context.Context, sourceID string, b book.Book, chapter book.BookChapter) (contentapp.Result, error) {
+	return c.GetTransientContent(ctx, nil, b, chapter, "")
+}
+
+// TestRunnerRejectsSessionsBeyondConcurrencyLimit 验证运行中会话超过并发上限时，
+// 多余会话直接置 failed 且不堆积后台 goroutine（S15-02）。
+func TestRunnerRejectsSessionsBeyondConcurrencyLimit(t *testing.T) {
+	repo := &fakeDebugRepo{}
+	content := &blockingContent{}
+	flow := NewKeywordFlow(&fakeDebugSearch{}, &fakeDebugSources{}, &fakeDebugBooks{chapters: []*book.BookChapter{{BookURL: "https://book.test/1", URL: "https://book.test/c/1", Title: "第一章", Index: 0}}}, content, NewPublisher(repo))
+	runner := NewRunner(flow, repo).WithMaxRunningSessions(1)
+
+	const total = 3
+	for i := range total {
+		session := &task.DebugSession{
+			SessionID: fmt.Sprintf("debug-limit-%d", i),
+			SourceID:  "source-id",
+			Mode:      task.DebugModeContentURL,
+			URL:       "https://book.test/c/1",
+			Status:    task.DebugSessionRunning,
+		}
+		if err := repo.CreateSession(context.Background(), session); err != nil {
+			t.Fatalf("CreateSession() error = %v", err)
+		}
+		runner.Start(context.Background(), session)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	var failed int
+	for time.Now().Before(deadline) {
+		failed = 0
+		for i := range total {
+			got, err := repo.FindSession(context.Background(), fmt.Sprintf("debug-limit-%d", i))
+			if err != nil {
+				t.Fatalf("FindSession() error = %v", err)
+			}
+			if got.Status == task.DebugSessionFailed {
+				failed++
+			}
+		}
+		if failed == total-1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if failed != total-1 {
+		t.Fatalf("failed sessions = %d, want %d", failed, total-1)
+	}
 }

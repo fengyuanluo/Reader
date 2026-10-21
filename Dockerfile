@@ -7,10 +7,11 @@ RUN go mod download
 
 COPY . .
 
+ARG VERSION=dev
 ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags="-s -w" -o /out/reader ./cmd/reader
+    go build -trimpath -ldflags="-s -w -X reader/internal/api/handlers.version=${VERSION}" -o /out/reader ./cmd/reader
 
 FROM alpine:3.23
 

@@ -131,6 +131,9 @@
 - 目录阶段提取出的变量现在会写入 `chapter.Variable`；正文阶段在真正发请求前，会对 `chapterURL` 以及其 custom URL string body 再执行一次 raw token expand，避免 `@get:{...}` 原样发往目标站点。
 - SSRF、timeout、max body、redirect 安全边界。
 - gzip header 与 gzip magic 双重解压兜底。
+- Cookie domain-match：Set-Cookie 的 `Domain` 与 host 不满足 domain-match 时被拒绝；session Cookie 按 host 粒度保存，读取时按 RFC 6265 domain-match 合并。
+- URL 选项 `webJs` 仅在声明 `webView`（truthy，配合远端 `WebViewFallback`）时生效，未声明 `webView` 时被完全丢弃（对齐 Legado `AnalyzeUrl` WebView 分支）。
+- JSONPath 过滤支持 jayway 的 `=~` 正则匹配运算符（`/.../` 包裹与裸正则均可）。
 
 #### 当前仍未完全对齐
 

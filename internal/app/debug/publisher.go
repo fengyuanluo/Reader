@@ -32,11 +32,14 @@ func NewPublisher(repo task.DebugRepository) *Publisher {
 func (p *Publisher) Publish(ctx context.Context, event *task.DebugEvent) error {
 	// 调试事件会持久化并推送给 SSE 订阅者，消息中的凭证必须在落库前脱敏。
 	event.Message = logging.RedactString(event.Message)
+	// AppendEvent 与推送必须在同一临界区内完成：两个 goroutine 并发发布时，
+	// EventID 较大的事件可能先落库先入 channel，导致 SSE 流顺序与
+	// Last-Event-ID 增量语义（按 event_id 排序）不一致。
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if err := p.repo.AppendEvent(ctx, event); err != nil {
 		return err
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	for sub := range p.subs[event.SessionID] {
 		if sub.closed {
 			continue

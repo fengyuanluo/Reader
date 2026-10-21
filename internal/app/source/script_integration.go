@@ -98,6 +98,10 @@ func finalizeHeaderMap(headers map[string]string) (map[string]string, error) {
 }
 
 func (s *ScriptIntegration) LoginCheck(ctx context.Context, src *domainsource.BookSource, resp *fetch.Response) (*fetch.Response, error) {
+	// 无运行时则跳过脚本检查，与 HeaderMap 的 nil 守卫语义一致，避免 nil 指针 panic。
+	if s == nil || s.runtime == nil || src == nil {
+		return resp, nil
+	}
 	ctx = script.WithSubStage(ctx, "login_check_js")
 	checkJS := strings.TrimSpace(src.LoginCheckJS)
 	if checkJS == "" {
@@ -171,7 +175,9 @@ func parseHeaderJSON(value any) (map[string]string, error) {
 	}
 	headers := map[string]string{}
 	if err := json.Unmarshal(raw, &headers); err != nil {
-		loose := urlrule.ParseAttributeObject(string(raw))
+		// ParseHeaderObject 保持 HTTP 头名原大小写（区分敏感），按出现顺序后键覆盖前键（GSON 语义）；
+		// ParseAttributeObject 会把头名归一为小写，丢失 HTTP 头名大小写。
+		loose := urlrule.ParseHeaderObject(string(raw))
 		if len(loose) == 0 {
 			return nil, err
 		}
@@ -245,8 +251,14 @@ func (s *ScriptIntegration) Login(ctx context.Context, src *domainsource.BookSou
 	}
 	scriptText, isScript := scriptRuleText(src.LoginURL)
 	if !isScript {
+		trimmed := strings.TrimSpace(src.LoginURL)
+		// Legado getLoginJs 对 http(s):// 开头的 loginUrl 返回该 URL 由 WebView/UI 侧处理，
+		// 并非把 URL 字符串当代码执行；此处流程不支持，返回 ErrUnsupportedLoginFlow。
+		if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+			return ErrUnsupportedLoginFlow
+		}
 		// Legado getLoginJs 对无前缀的 loginUrl 也按脚本处理。
-		scriptText = strings.TrimSpace(src.LoginURL)
+		scriptText = trimmed
 	}
 	if scriptText == "" {
 		return ErrLoginURLMissing

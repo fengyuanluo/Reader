@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -286,6 +287,140 @@ func TestBookSourceListEscapesLikeWildcards(t *testing.T) {
 				t.Fatalf("List(%+v) = %d items, want only %s", tc.filter, page.Total, tc.want)
 			}
 		})
+	}
+}
+
+// TestBookSourceSaveManyBatchConflicts 覆盖 S11-04 的批内冲突预检：双 ON CONFLICT
+// upsert 在批内 sourceId/地址交错时会把 URL 改写到他人地址，必须整批 ErrConflict。
+func TestBookSourceSaveManyBatchConflicts(t *testing.T) {
+	cases := []struct {
+		name  string
+		batch func(a, b *source.BookSource) []*source.BookSource
+	}{
+		{
+			name: "batch two sources swap urls",
+			batch: func(a, b *source.BookSource) []*source.BookSource {
+				// 先落库 A/B，再一批把 A 改到 B 地址、B 改到 A 地址：upsert 的
+				// UNIQUE(book_source_url) 冲突分支会互相改写 sourceId。
+				ra := testSource("https://a.example.test", "A")
+				ra.SourceID = a.SourceID
+				ra.BookSourceURL = "https://b.example.test"
+				rb := testSource("https://a.example.test", "B")
+				rb.SourceID = b.SourceID
+				return []*source.BookSource{ra, rb}
+			},
+		},
+		{
+			name: "batch two sources share target url",
+			batch: func(a, b *source.BookSource) []*source.BookSource {
+				ra := testSource("https://shared.example.test", "A")
+				ra.SourceID = a.SourceID
+				rb := testSource("https://shared.example.test", "B")
+				rb.SourceID = b.SourceID
+				return []*source.BookSource{ra, rb}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			db := openRepoTestDB(t)
+			repo := NewBookSourceRepository(db)
+			a := testSource("https://a.example.test", "A")
+			b := testSource("https://b.example.test", "B")
+			if err := repo.SaveMany(ctx, []*source.BookSource{a, b}); err != nil {
+				t.Fatalf("SaveMany() setup error = %v", err)
+			}
+			if err := repo.SaveMany(ctx, tc.batch(a, b)); !errors.Is(err, source.ErrConflict) {
+				t.Fatalf("SaveMany() error = %v, want ErrConflict", err)
+			}
+			// 整批回滚：原 A/B 两个源不变，也没有多出任何行。
+			assertCount(t, db, `SELECT count(*) FROM book_sources`, 2)
+		})
+	}
+}
+
+// TestBookSourceSaveManyKeepsDataWhenOldURLReusedByBatch 覆盖 S11-04 的换址删除保护：
+// 批内源 A 的旧地址恰为本批源 B 的新地址时，A 的换址删除不得清掉 B 刚写入的变量与缓存。
+func TestBookSourceSaveManyKeepsDataWhenOldURLReusedByBatch(t *testing.T) {
+	ctx := context.Background()
+	db := openRepoTestDB(t)
+	repo := NewBookSourceRepository(db)
+	a := testSource("https://old.example.test", "A")
+	b := testSource("https://b.example.test", "B")
+	if err := repo.SaveMany(ctx, []*source.BookSource{a, b}); err != nil {
+		t.Fatalf("SaveMany() setup error = %v", err)
+	}
+	// B 的变量与缓存先写入旧地址（模拟 B 历史数据），本批把 B 改到 A 的旧地址。
+	if _, err := db.Exec(`INSERT INTO source_variables(book_source_url, name, value) VALUES ('https://old.example.test', 'token', 'v')`); err != nil {
+		t.Fatalf("insert source variable: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO cache_entries(cache_key, namespace, owner_type, owner_id, value) VALUES ('cache-b', 'source', 'source', 'https://old.example.test', 'v')`); err != nil {
+		t.Fatalf("insert cache: %v", err)
+	}
+	bNew := testSource("https://old.example.test", "B")
+	bNew.SourceID = b.SourceID
+	aNew := testSource("https://a-new.example.test", "A")
+	aNew.SourceID = a.SourceID
+	if err := repo.SaveMany(ctx, []*source.BookSource{aNew, bNew}); err != nil {
+		t.Fatalf("SaveMany() error = %v", err)
+	}
+	// B 的新地址（原 A 旧地址）上的数据不被误删。
+	assertCount(t, db, `SELECT count(*) FROM source_variables WHERE book_source_url = 'https://old.example.test'`, 1)
+	assertCount(t, db, `SELECT count(*) FROM cache_entries WHERE owner_type = 'source' AND owner_id = 'https://old.example.test'`, 1)
+}
+
+// TestBookSourceStreamAllPagesWithoutOverlapOrGap 覆盖 S00-03 的 keyset 流式分页：
+// 同名同序书源（同名同 custom_order）翻页不重不漏，游标含 source_id 决胜。
+func TestBookSourceStreamAllPagesWithoutOverlapOrGap(t *testing.T) {
+	ctx := context.Background()
+	db := openRepoTestDB(t)
+	repo := NewBookSourceRepository(db)
+	// 同 custom_order 同名书源 60 个：旧 OFFSET 按 (custom_order, name) 排序时
+	// 同键行在页边界可能重复/丢失，keyset 必须靠 source_id 决胜。
+	batch := make([]*source.BookSource, 0, 60)
+	for i := range 60 {
+		src := testSource(fmt.Sprintf("https://s%d.example.test", i), "Same")
+		src.CustomOrder = 1
+		batch = append(batch, src)
+	}
+	if err := repo.SaveMany(ctx, batch); err != nil {
+		t.Fatalf("SaveMany() error = %v", err)
+	}
+	seen := map[string]int{}
+	if err := repo.StreamAll(ctx, source.BookSourceFilter{}, func(src *source.BookSource) error {
+		seen[src.SourceID]++
+		return nil
+	}); err != nil {
+		t.Fatalf("StreamAll() error = %v", err)
+	}
+	if len(seen) != 60 {
+		t.Fatalf("StreamAll() returned %d unique sources, want 60", len(seen))
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Fatalf("source %s visited %d times, want 1", id, count)
+		}
+	}
+}
+
+// TestListAllUsesStreamAllWhenAvailable 覆盖 S00-03 的类型断言路径：支持 StreamAll 的
+// 仓储走流式且不触发分页 List；不支持的仓储回退分页。
+func TestListAllUsesStreamAllWhenAvailable(t *testing.T) {
+	repo := NewBookSourceRepository(openRepoTestDB(t))
+	ctx := context.Background()
+	if err := repo.SaveMany(ctx, []*source.BookSource{
+		testSource("https://a.example.test", "A"),
+		testSource("https://b.example.test", "B"),
+	}); err != nil {
+		t.Fatalf("SaveMany() error = %v", err)
+	}
+	items, err := source.ListAll(ctx, repo, source.BookSourceFilter{})
+	if err != nil {
+		t.Fatalf("ListAll() error = %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("ListAll() returned %d sources, want 2", len(items))
 	}
 }
 

@@ -60,9 +60,10 @@ go run ./cmd/reader search 斗破苍穹 --limit 5 --json
 go run ./cmd/reader book add --source "$SRC_ID" --url "$BOOK_URL"
 go run ./cmd/reader download "$BOOK_ID" --from 0 --to 2 --export /tmp/book.txt
 go run ./cmd/reader fetch 斗破苍穹 --author 天蚕土豆 --json   # 搜索→选源→下载→导出，一步到位
+go run ./cmd/reader check --all                               # 前台书源校验（多源搜索→详情→目录→正文逐级探测）
 ```
 
-并发可调：`search --concurrency N` 覆盖本次多源搜索并发（等价于 `READER_GLOBAL_CONCURRENCY`），`download --workers N` 控制单源并发下载章节数（默认 4），`fetch --search-workers N --workers N` 分别控制两段。`fetch` 会并发探测候选源，按"目录章节数优先 + 探测耗时"选源，失败章节超过 5% 自动换源，退出码 0 表示导出成功。
+并发可调：`search --concurrency N` 覆盖本次多源搜索并发（等价于 `READER_GLOBAL_CONCURRENCY`），`download --workers N` 控制单源并发下载章节数（默认 4），`fetch --search-workers N --workers N` 分别控制两段。`fetch` 会并发探测候选源，按"目录章节数优先 + 探测耗时"选源，失败章节超过 5% 自动换源，退出码 0 表示导出成功。搜索/校验的单源超时可用 `READER_SEARCH_SOURCE_TIMEOUT`（默认 15s）调整，CLI 传 `--timeout 0` 回退该默认值。
 
 Full reference: `docs/CLI.md`。Agent 自动化用法见 `docs/skills/reader-cli/SKILL.md`。
 

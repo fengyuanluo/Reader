@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"reader/internal/domain/book"
@@ -269,5 +270,153 @@ func TestReplaceByBookRollsBackOnInvalidChapter(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].Title != "c1" {
 		t.Fatalf("chapters after rollback = %#v, want old chapter kept", list)
+	}
+}
+
+// TestBookRepositoryScanRejectsCorruptDownloadURLs 覆盖 S11-06：download_urls 损坏时
+// FindByID/FindByURL 返回明确错误，而不是静默得到 nil DownloadURLs。
+func TestBookRepositoryScanRejectsCorruptDownloadURLs(t *testing.T) {
+	ctx := context.Background()
+	db := openRepoTestDB(t)
+	books := NewBookRepository(db)
+	b := testBook("https://example.test/book/bad")
+	if err := books.Save(ctx, b); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := db.Exec(`UPDATE books SET download_urls = '{broken' WHERE book_url = ?`, b.BookURL); err != nil {
+		t.Fatalf("corrupt download_urls: %v", err)
+	}
+	_, err := books.FindByURL(ctx, b.BookURL)
+	if err == nil || !strings.Contains(err.Error(), "download_urls") {
+		t.Fatalf("FindByURL() error = %v, want corrupt download_urls error", err)
+	}
+}
+
+// TestBookRepositoryListMetaSkipsLargeColumns 覆盖 S11-01：ListMeta 不读 info_html/
+// toc_html/download_urls 大列，其余元数据列与 List 一致。
+func TestBookRepositoryListMetaSkipsLargeColumns(t *testing.T) {
+	ctx := context.Background()
+	db := openRepoTestDB(t)
+	books := NewBookRepository(db)
+	b := testBook("https://example.test/book/meta")
+	b.InfoHTML = "<html>info</html>"
+	b.TocHTML = "<html>toc</html>"
+	b.DownloadURLs = []string{"https://example.test/a.epub"}
+	if err := books.Save(ctx, b); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	items, total, err := books.ListMeta(ctx, book.BookFilter{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("ListMeta() error = %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("ListMeta total=%d len=%d", total, len(items))
+	}
+	got := items[0]
+	if got.BookURL != b.BookURL || got.Name != b.Name || got.Author != b.Author || got.LatestChapterTitle != b.LatestChapterTitle {
+		t.Fatalf("ListMeta row = %#v", got)
+	}
+	if got.InfoHTML != "" || got.TocHTML != "" || len(got.DownloadURLs) != 0 {
+		t.Fatalf("ListMeta loaded large columns: info=%q toc=%q urls=%v", got.InfoHTML, got.TocHTML, got.DownloadURLs)
+	}
+	// List 保持全量行为不变。
+	full, _, err := books.List(ctx, book.BookFilter{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if full[0].InfoHTML != b.InfoHTML || full[0].TocHTML != b.TocHTML {
+		t.Fatalf("List() should keep full columns: %#v", full[0])
+	}
+}
+
+// TestBookRepositoryUpdateTocStatsWritesConditionalColumns 覆盖 UpdateTocStats 的
+// 条件写入语义：Variable 仅在 VariableChanged 时写入，dur_* 仅在 DurChapterChanged 时写入。
+func TestBookRepositoryUpdateTocStatsWritesConditionalColumns(t *testing.T) {
+	ctx := context.Background()
+	db := openRepoTestDB(t)
+	books := NewBookRepository(db)
+	b := testBook("https://example.test/book/stats")
+	b.Variable = "old-var"
+	if err := books.Save(ctx, b); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	bookID := bookIDFromURL(b.BookURL)
+	// 只写目录统计，不改 variable 与 dur_*。
+	if err := books.UpdateTocStats(ctx, bookID, book.TocStats{
+		TotalChapterNum: 42, LastCheckTime: 111, LastCheckCount: 3,
+		LatestChapterTime: 222, LatestChapterTitle: "c42",
+	}); err != nil {
+		t.Fatalf("UpdateTocStats() error = %v", err)
+	}
+	got, err := books.FindByID(ctx, bookID)
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if got.TotalChapterNum != 42 || got.LastCheckTime != 111 || got.LastCheckCount != 3 || got.LatestChapterTime != 222 || got.LatestChapterTitle != "c42" {
+		t.Fatalf("stats = %#v", got)
+	}
+	if got.Variable != "old-var" || got.DurChapterIndex != 0 {
+		t.Fatalf("stats overwrote unrelated columns: variable=%q dur=%d", got.Variable, got.DurChapterIndex)
+	}
+	// VariableChanged 与 DurChapterChanged 时写入。
+	if err := books.UpdateTocStats(ctx, bookID, book.TocStats{
+		TotalChapterNum: 43, Variable: "new-var", VariableChanged: true,
+		DurChapterTitle: "c5", DurChapterIndex: 5, DurChapterPos: 10, DurChapterTime: 500, DurChapterChanged: true,
+	}); err != nil {
+		t.Fatalf("UpdateTocStats(changed) error = %v", err)
+	}
+	got, err = books.FindByID(ctx, bookID)
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if got.Variable != "new-var" || got.DurChapterTitle != "c5" || got.DurChapterIndex != 5 || got.DurChapterPos != 10 || got.DurChapterTime != 500 {
+		t.Fatalf("changed stats = %#v", got)
+	}
+	// 行不存在时不创建。
+	if err := books.UpdateTocStats(ctx, bookIDFromURL("https://example.test/book/missing"), book.TocStats{TotalChapterNum: 1}); err == nil {
+		t.Fatalf("UpdateTocStats(missing) error = nil, want ErrNotFound")
+	}
+}
+
+// TestBookRepositoryMigrationIndexes 覆盖 S11-02：dur_chapter_time 索引存在且列表查询
+// 不再全表扫描 + TEMP B-TREE。
+func TestBookRepositoryMigrationIndexes(t *testing.T) {
+	ctx := context.Background()
+	db := openRepoTestDB(t)
+	books := NewBookRepository(db)
+	for i := range 10 {
+		b := testBook("https://example.test/book/" + string(rune('a'+i)))
+		b.DurChapterTime = int64(i)
+		if err := books.Save(ctx, b); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+	}
+	var indexes int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_books_dur_chapter_time'`).Scan(&indexes); err != nil {
+		t.Fatalf("read indexes: %v", err)
+	}
+	if indexes != 1 {
+		t.Fatalf("idx_books_dur_chapter_time missing")
+	}
+	rows, err := db.QueryContext(ctx, `EXPLAIN QUERY PLAN SELECT book_url FROM books ORDER BY dur_chapter_time DESC LIMIT 5`)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatalf("scan explain: %v", err)
+		}
+		if !strings.Contains(detail, "idx_books_dur_chapter_time") {
+			t.Fatalf("query plan does not use index: %s", detail)
+		}
+		if strings.Contains(detail, "TEMP B-TREE") {
+			t.Fatalf("query plan materializes sort: %s", detail)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("explain rows: %v", err)
 	}
 }

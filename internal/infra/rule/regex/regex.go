@@ -188,7 +188,7 @@ func (p compiledPattern) FindAllStringSubmatch(input string) ([][]string, error)
 func (p compiledPattern) Replace(input string, replacement string, firstOnly bool) (string, error) {
 	if p.std != nil {
 		if !firstOnly {
-			return p.std.ReplaceAllString(input, replacement), nil
+			return p.std.ReplaceAllString(input, escapeLiteralDollar(replacement)), nil
 		}
 		loc := p.std.FindStringIndex(input)
 		if loc == nil {
@@ -216,8 +216,35 @@ func (p compiledPattern) replaceFirstStd(text string, replacement string) string
 	if loc == nil {
 		return text
 	}
-	expanded := p.std.ExpandString(nil, replacement, text, loc)
+	expanded := p.std.ExpandString(nil, escapeLiteralDollar(replacement), text, loc)
 	return text[:loc[0]] + string(expanded) + text[loc[1]:]
+}
+
+// escapeLiteralDollar 预处理替换文本：把不属于组引用的裸 `$` 转义为 `$$`；
+// 组引用（`$1`、`$name`、`${name}`）与已转义的 `$$` 保持不变，使替换文本中的
+// `$` 字面量（如金额符号 $100）不被 ExpandString 误当组引用展开。
+func escapeLiteralDollar(replacement string) string {
+	if !strings.Contains(replacement, "$") {
+		return replacement
+	}
+	var b strings.Builder
+	b.Grow(len(replacement) + 4)
+	for i := 0; i < len(replacement); i++ {
+		if replacement[i] != '$' {
+			b.WriteByte(replacement[i])
+			continue
+		}
+		rest := replacement[i+1:]
+		if strings.HasPrefix(rest, "$") || // 已转义
+			(len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9') || // $1 编号组
+			(len(rest) > 0 && (rest[0] == '_' || rest[0] >= 'a' && rest[0] <= 'z' || rest[0] >= 'A' && rest[0] <= 'Z')) || // $name 命名组
+			strings.HasPrefix(rest, "{") { // ${name}
+			b.WriteByte('$')
+			continue
+		}
+		b.WriteString("$$")
+	}
+	return b.String()
 }
 
 func regexp2Groups(match *regexp2.Match) []string {

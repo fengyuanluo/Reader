@@ -97,12 +97,52 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"READER_ENV": "test", "READER_GLOBAL_CONCURRENCY": "-1"},
 		{"READER_ENV": "test", "READER_ALLOW_PRIVATE_NETWORK": "not-bool"},
 		{"READER_ENV": "test", "READER_CONTENT_CHINESE_CONVERTER_TYPE": "-1"},
+		// S09-03：ConverterType 无上限校验（值 ≥3 静默返回原文）。
+		{"READER_ENV": "test", "READER_CONTENT_CHINESE_CONVERTER_TYPE": "3"},
+		// S09-03：READER_ENV 校验合法取值集合。
+		{"READER_ENV": "staging"},
+		{"READER_ENV": ""},
+		// GoMemLimitRatio 边界。
+		{"READER_ENV": "test", "READER_GOMEM_LIMIT_RATIO": "0"},
+		{"READER_ENV": "test", "READER_GOMEM_LIMIT_RATIO": "1.5"},
+		{"READER_ENV": "test", "READER_GOMEM_LIMIT_RATIO": "not-a-number"},
 	}
 
 	for _, env := range tests {
 		if _, err := Load(FromMap(env)); err == nil {
 			t.Fatalf("Load(%v) error = nil, want error", env)
 		}
+	}
+}
+
+// S09-03：READER_ENV=Production（大写 P）此前静默落入 development 分支，必须报错。
+func TestLoadRejectsWrongCaseEnv(t *testing.T) {
+	if _, err := Load(FromMap(map[string]string{"READER_ENV": "Production"})); err == nil {
+		t.Fatal("Load(Production) error = nil, want error")
+	}
+}
+
+// 契约 3：READER_SEARCH_SOURCE_TIMEOUT 覆盖多源搜索/校验的每源默认超时，默认 15s。
+func TestLoadSearchSourceTimeout(t *testing.T) {
+	cfg, err := Load(FromMap(map[string]string{"READER_ENV": "test"}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SearchSourceTimeout != 15*time.Second {
+		t.Fatalf("SearchSourceTimeout = %s, want 15s", cfg.SearchSourceTimeout)
+	}
+	cfg, err = Load(FromMap(map[string]string{
+		"READER_ENV":                   "test",
+		"READER_SEARCH_SOURCE_TIMEOUT": "8s",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SearchSourceTimeout != 8*time.Second {
+		t.Fatalf("SearchSourceTimeout = %s, want 8s", cfg.SearchSourceTimeout)
+	}
+	if redacted, ok := cfg.Redacted()["searchSourceTimeout"]; !ok || redacted != "8s" {
+		t.Fatalf("Redacted()[searchSourceTimeout] = %v (%T), want \"8s\"", redacted, redacted)
 	}
 }
 

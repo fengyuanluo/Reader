@@ -80,6 +80,9 @@ func (r *exportBookRepo) Save(context.Context, *book.Book) error { return nil }
 
 // UpdateInfo 满足 book.BookRepository 接口：导出路径不刷新信息。
 func (r *exportBookRepo) UpdateInfo(context.Context, *book.Book) error { return nil }
+
+// UpdateTocStats 满足 book.BookRepository 接口：导出路径不刷新目录元数据。
+func (r *exportBookRepo) UpdateTocStats(context.Context, string, book.TocStats) error { return nil }
 func (r *exportBookRepo) FindByID(context.Context, string) (*book.Book, error) {
 	if r.value == nil {
 		return nil, errors.New("book missing")

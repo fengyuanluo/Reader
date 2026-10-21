@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -76,29 +77,31 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 			return nil, err
 		}
 	}
+	// 每次响应只转换一次 string(resp.Body)，后续 GetElements/ScriptAdapter/详情回退全部复用
+	// 同一个不可变 string，避免逐条复制完整响应体（S00-01）。
+	respURL := resp.URL
+	respBody := string(resp.Body)
 	if strings.TrimSpace(src.BookURLPattern) != "" {
-		matched, err := matchesBookURLPattern(src.BookURLPattern, resp.URL)
+		matched, err := matchesBookURLPattern(src.BookURLPattern, respURL)
 		if err != nil {
 			return nil, err
 		}
 		if matched {
-			preview, err := bookapp.PreviewSearchBookFromInfo(ctx, src, resp.URL, string(resp.Body), book.SearchBook{
-				BookURL:     resp.URL,
+			preview, err := bookapp.PreviewSearchBookFromInfo(ctx, src, respURL, respBody, book.SearchBook{
+				BookURL:     respURL,
 				Origin:      src.BookSourceURL,
 				OriginName:  src.BookSourceName,
 				OriginOrder: src.CustomOrder,
 				Type:        src.BookSourceType,
 			}, s.script)
+			// 对齐 Legado：搜索链路只保留条目字段，详情/目录 HTML 大字段立即丢弃，避免数百源时内存放大（S02-02）。
+			preview.InfoHTML, preview.TocHTML = "", ""
+			// 对齐 Legado BookList.kt:68-83：解析出错或 name 为空时返回空结果，
+			// 不返回只有 BookURL/Origin 的空名 stub 条目（S02-01）。
 			if err == nil && strings.TrimSpace(preview.Name) != "" {
 				return []book.SearchBook{preview}, nil
 			}
-			return []book.SearchBook{{
-				BookURL:     resp.URL,
-				Origin:      src.BookSourceURL,
-				OriginName:  src.BookSourceName,
-				OriginOrder: src.CustomOrder,
-				Type:        src.BookSourceType,
-			}}, nil
+			return []book.SearchBook{}, nil
 		}
 	}
 	rule := src.RuleSearch.Value
@@ -106,13 +109,16 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 		return nil, errors.New("ruleSearch.bookList is required")
 	}
 	listRule, reverse := normalizeListRule(rule.BookList)
+	// 分析器上下文按页构造一次：ScriptAdapter.Src 与 Source 绑定与条目无关，
+	// 每个条目只替换 Book（S00-01/S01-03）。
+	sourceBindings := s.script.SourceBindings(ctx, src)
 	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
-		RedirectURL: resp.URL,
+		RedirectURL: respURL,
 		SourceURL:   src.BookSourceURL,
-		Script:      sourceapp.ScriptAdapter{Runtime: s.script, BaseURL: resp.URL, Source: src, Src: string(resp.Body)},
-		Source:      s.script.SourceBindings(ctx, src),
+		Script:      sourceapp.ScriptAdapter{Runtime: s.script, BaseURL: respURL, Source: src, Src: respBody},
+		Source:      sourceBindings,
 	})
-	items, err := analyzer.GetElements(ctx, listRule, string(resp.Body))
+	items, err := analyzer.GetElements(ctx, listRule, respBody)
 	if err != nil {
 		return nil, err
 	}
@@ -128,27 +134,40 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 			Variable:    encodeSearchVariables(baseVars),
 		}
 		itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
-			RedirectURL: resp.URL,
+			RedirectURL: respURL,
 			SourceURL:   src.BookSourceURL,
-			Script:      sourceapp.ScriptAdapter{Runtime: s.script, BaseURL: resp.URL, Source: src, Src: string(resp.Body), Book: &searchBook},
+			Script:      sourceapp.ScriptAdapter{Runtime: s.script, BaseURL: respURL, Source: src, Src: respBody, Book: &searchBook},
 			Book:        &searchBook,
-			Source:      s.script.SourceBindings(ctx, src),
+			Source:      sourceBindings,
 		})
 		itemAnalyzer.SetVariables(baseVars)
-		name, _ := itemAnalyzer.GetString(ctx, rule.Name, item)
+		name, nameErr := itemAnalyzer.GetString(ctx, rule.Name, item)
 		name = bookapp.FormatBookName(name)
 		if name == "" {
+			// 规则求值错误与"规则返回空"不可区分会掩盖排障线索；name 失败记录日志（S02-05）。
+			if nameErr != nil {
+				slog.WarnContext(ctx, "search name rule evaluation failed",
+					"source", src.BookSourceURL, "error", nameErr)
+			}
 			continue
 		}
 		author, _ := itemAnalyzer.GetString(ctx, rule.Author, item)
-		bookURL, _ := itemAnalyzer.GetURL(ctx, rule.BookURL, item)
-		if bookURL == "" {
-			bookURL = resp.URL
+		bookURL, err := itemAnalyzer.GetURL(ctx, rule.BookURL, item)
+		if err != nil {
+			// bookURL 求值失败记录日志，条目回退到列表页 URL。
+			slog.WarnContext(ctx, "search bookUrl rule evaluation failed",
+				"source", src.BookSourceURL, "error", err)
 		}
-		if _, ok := seen[bookURL]; ok {
+		if bookURL == "" {
+			bookURL = respURL
+		}
+		// 对齐 Legado BookList.kt LinkedHashSet 的对象级去重：仅 bookUrl+name+author
+		// 全部相同时丢弃，避免规则取错父节点时比 Legado 少返回条目（S02-09）。
+		dedupeKey := bookURL + "\x00" + name + "\x00" + author
+		if _, ok := seen[dedupeKey]; ok {
 			continue
 		}
-		seen[bookURL] = struct{}{}
+		seen[dedupeKey] = struct{}{}
 		kinds, _ := itemAnalyzer.GetStringList(ctx, rule.Kind, item)
 		intro, _ := itemAnalyzer.GetString(ctx, rule.Intro, item)
 		cover, _ := itemAnalyzer.GetURL(ctx, rule.CoverURL, item)
@@ -172,13 +191,15 @@ func (s *SingleSourceSearcher) Search(ctx context.Context, input SearchInput) ([
 	}
 	if len(results) == 0 && strings.TrimSpace(src.BookURLPattern) == "" {
 		// 对齐 Legado BookList.kt:100-106：仅在未配置 bookUrlPattern 时才按详情页回退解析。
-		preview, err := bookapp.PreviewSearchBookFromInfo(ctx, src, resp.URL, string(resp.Body), book.SearchBook{
-			BookURL:     resp.URL,
+		preview, err := bookapp.PreviewSearchBookFromInfo(ctx, src, respURL, respBody, book.SearchBook{
+			BookURL:     respURL,
 			Origin:      src.BookSourceURL,
 			OriginName:  src.BookSourceName,
 			OriginOrder: src.CustomOrder,
 			Type:        src.BookSourceType,
 		}, s.script)
+		// 搜索链路只保留条目字段，详情/目录 HTML 大字段立即丢弃（S02-02）。
+		preview.InfoHTML, preview.TocHTML = "", ""
 		if err == nil && strings.TrimSpace(preview.Name) != "" {
 			return []book.SearchBook{preview}, nil
 		}
@@ -221,7 +242,12 @@ func buildSearchRequest(ctx context.Context, runtime *script.Runtime, src *sourc
 	})
 	req, err = requestoption.Build(ctx, out, sourceRequestBase(src.BookSourceURL), req, evaluator)
 	if err != nil {
-		return fetch.Request{}, fmt.Errorf("%w: %v", ErrUnsupportedSearchURL, err)
+		// 仅"使用了不支持的 Legado URL 脚本/选项"才挂 ErrUnsupportedSearchURL；
+		// 其余 Build 错误（代理/DNS 配置等）原样返回，避免错误分类失真（S02-06）。
+		if errors.Is(err, requestoption.ErrUnsupportedURLOption) {
+			return fetch.Request{}, fmt.Errorf("%w: %v", ErrUnsupportedSearchURL, err)
+		}
+		return fetch.Request{}, err
 	}
 	return req, nil
 }
@@ -239,8 +265,10 @@ func renderSearchURL(ctx context.Context, runtime *script.Runtime, src *source.B
 		out = next
 	}
 	out = buildSearchURLPlaceholders(out, keyword, page, runtime == nil)
+	// 统一尾斜杠处理：source.key 与 source.bookSourceUrl 均做 Trim（与 Legado 的差异：
+	// Legado 不修剪，这里为避免 {{source.bookSourceUrl}}/search 拼出双斜杠统一修剪）（S02-11）。
 	out = strings.ReplaceAll(out, "{{source.key}}", strings.TrimRight(sourceRequestBase(src.BookSourceURL), "/"))
-	out = strings.ReplaceAll(out, "{{source.bookSourceUrl}}", src.BookSourceURL)
+	out = strings.ReplaceAll(out, "{{source.bookSourceUrl}}", strings.TrimRight(src.BookSourceURL, "/"))
 	if strings.Contains(out, "{{") && strings.Contains(out, "}}") {
 		if runtime == nil {
 			return "", fmt.Errorf("%w: unresolved expression in %q", ErrUnsupportedSearchURL, src.SearchURL)
@@ -295,6 +323,8 @@ func applySearchURLScripts(ctx context.Context, runtime *script.Runtime, src *so
 }
 
 func replaceInlineSearchExpressions(ctx context.Context, runtime *script.Runtime, src *source.BookSource, keyword string, page int, raw string) (string, error) {
+	// bindings 循环外构造一次，每个内嵌表达式只更新 result，避免重复构建 SourceBindings（S02-08）。
+	bindings := searchURLBindings(ctx, runtime, src, keyword, page)
 	var b strings.Builder
 	rest := raw
 	for {
@@ -310,7 +340,11 @@ func replaceInlineSearchExpressions(ctx context.Context, runtime *script.Runtime
 			return "", fmt.Errorf("%w: unterminated inline expression", ErrUnsupportedSearchURL)
 		}
 		expr := strings.TrimSpace(rest[:end])
-		value, err := runtime.EvalWithBindings(ctx, expr, searchURLBindings(ctx, runtime, src, keyword, page))
+		// 内嵌表达式沿用既有语义：result 绑定为 nil（见
+		// TestBuildSearchRequestDefinesNullResultForInlineExpression），
+		// 仅 <js> 片段链在 applySearchURLScripts 中传递上一段结果（S02-08）。
+		bindings["result"] = nil
+		value, err := runtime.EvalWithBindings(ctx, expr, bindings)
 		if err != nil {
 			return "", err
 		}

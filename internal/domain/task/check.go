@@ -6,7 +6,12 @@ import (
 	"time"
 )
 
-var ErrInvalidCheckTaskTransition = errors.New("invalid check task status transition")
+var (
+	// ErrInvalidCheckTaskTransition 表示任务状态机不允许该迁移。
+	ErrInvalidCheckTaskTransition = errors.New("invalid check task status transition")
+	// ErrCheckTaskRunning 表示已有未完成的校验任务（对齐 Legado“已有书源在校验”防重入语义）。
+	ErrCheckTaskRunning = errors.New("check task already running")
+)
 
 type CheckTaskStatus string
 
@@ -58,6 +63,8 @@ func IsTerminalCheckEvent(eventType CheckEventType) bool {
 
 // CheckEvent 是校验任务的流式进度事件，由 runner 在检查过程中发布。
 type CheckEvent struct {
+	// EventID 是任务流内单调递增的事件序号（从 1 开始），供 SSE Last-Event-ID 断线续传。
+	EventID   int64
 	TaskID    string
 	SourceID  string
 	Type      CheckEventType
@@ -170,6 +177,17 @@ type CheckRepository interface {
 	UpdateTaskStatus(ctx context.Context, taskID string, status CheckTaskStatus, finished int, completedAt *time.Time) error
 	UpdateTaskProgress(ctx context.Context, taskID string, finished int) error
 	SaveItem(ctx context.Context, item *CheckTaskItem) error
+	// SaveItemWithProgress 在单个事务内保存条目并推进 finished 计数，
+	// 避免每源多次独立写事务串行排队（S03-02）。
+	SaveItemWithProgress(ctx context.Context, item *CheckTaskItem, finished int) error
+	// SaveItems 批量保存条目，用于取消收尾时一次性落库排队条目（S03-11）。
+	SaveItems(ctx context.Context, items []*CheckTaskItem) error
+	// ListItemsPage 按页读取任务条目，支持按状态过滤；total 为该过滤条件下的条目总数（S03-06）。
+	ListItemsPage(ctx context.Context, taskID string, status *CheckTaskItemStatus, page, pageSize int) ([]*CheckTaskItem, int, error)
+	// HasUnfinishedTasks 判断是否存在 pending/running 的校验任务，供 Start 防重入（S03-04）。
+	HasUnfinishedTasks(ctx context.Context) (bool, error)
+	// FindMissingSourceIDs 返回 book_sources 中不存在的 sourceId（分批查询），供 Start 做存在性校验（S00-02）。
+	FindMissingSourceIDs(ctx context.Context, sourceIDs []string) ([]string, error)
 	ListItems(ctx context.Context, taskID string) ([]*CheckTaskItem, error)
 	// FailInterruptedTasks 把进程重启后遗留的未完成任务收敛为 failed，返回受影响行数。
 	FailInterruptedTasks(ctx context.Context, completedAt time.Time) (int64, error)

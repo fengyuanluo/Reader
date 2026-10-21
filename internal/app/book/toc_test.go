@@ -48,18 +48,189 @@ func TestTocServiceFetchesNextTocPagesAndDedupes(t *testing.T) {
 	book := testTocBook()
 	service := NewTocService(&fakeChapterRepo{}, &fakeTocFetcher{pages: map[string]fetch.Response{
 		book.TocURL:                       {URL: book.TocURL, Body: []byte(tocHTML(true))},
-		"https://site.example.test/toc/2": {URL: "https://site.example.test/toc/2", Body: []byte(`<html><body><ul><li class="chapter"><a class="name" href="/c/2">第二章</a><span class="time">dup</span></li><li class="chapter"><a class="name" href="/c/3">第三章</a><span class="time">2026-01-03</span></li></ul></body></html>`)},
+		"https://site.example.test/toc/2": {URL: "https://site.example.test/toc/2", Body: []byte(`<html><body><ul><li class="chapter"><a class="name" href="/c/2">第二章</a><span class="vip">true</span><span class="pay">1</span><span class="time">2026-01-02</span></li><li class="chapter"><a class="name" href="/c/3">第三章</a><span class="time">2026-01-03</span></li></ul></body></html>`)},
 	}}, nil)
 
 	got, err := service.RefreshToc(context.Background(), TocInput{Source: src, Book: book})
 	if err != nil {
 		t.Fatalf("RefreshToc() error = %v", err)
 	}
+	// 完整键去重：第二页 /c/2 与首页 /c/2 的 url+title+tag 全部相同，按 Legado LinkedHashSet
+	// 保留最后一次出现（第二页的），共 3 章。
 	if len(got) != 3 {
 		t.Fatalf("chapters = %#v", got)
 	}
+	if got[1].URL != "https://site.example.test/c/2" || got[1].Tag != "2026-01-02" {
+		t.Fatalf("second = %#v", got[1])
+	}
 	if got[2].Title != "第三章" || got[2].Index != 2 {
 		t.Fatalf("third = %#v", got[2])
+	}
+}
+
+// TestTocServiceKeepsSameURLWithDifferentTags 对齐 Legado BookChapter data class equals：
+// 同 URL 但 tag/标题不同的两条都会保留（S12-02），不再按 URL 单字段误删。
+func TestTocServiceKeepsSameURLWithDifferentTags(t *testing.T) {
+	src := testTocSource()
+	service := NewTocService(&fakeChapterRepo{}, &fakeTocFetcher{}, nil)
+
+	got, err := service.RefreshToc(context.Background(), TocInput{
+		Source: src,
+		Book:   testTocBook(),
+		TocHTML: `<ul>
+<li class="chapter"><a class="name" href="/c/1">第一章</a><span class="time">2026-01-01</span></li>
+<li class="chapter"><a class="name" href="/c/1">第一章</a><span class="time">2026-02-01</span></li>
+<li class="chapter"><a class="name" href="/c/1">第一章修订</a><span class="time">2026-01-01</span></li>
+</ul>`,
+	})
+	if err != nil {
+		t.Fatalf("RefreshToc() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("chapters = %#v, want same URL with different tags/titles kept", got)
+	}
+}
+
+// TestTocServiceDedupeKeepsLastOccurrence 对齐 Legado 非倒序目录先 reverse 再去重：
+// 完全相同的章节（url+title+tag 等全字段一致）重复时保留最后一次出现的章节（S12-02）。
+func TestTocServiceDedupeKeepsLastOccurrence(t *testing.T) {
+	src := testTocSource()
+	service := NewTocService(&fakeChapterRepo{}, &fakeTocFetcher{}, nil)
+
+	got, err := service.RefreshToc(context.Background(), TocInput{
+		Source: src,
+		Book:   testTocBook(),
+		TocHTML: `<ul>
+<li class="chapter"><a class="name" href="/c/1">第一章</a><span class="time">2026-01-01</span></li>
+<li class="chapter"><a class="name" href="/c/2">第二章</a><span class="time">2026-01-02</span></li>
+<li class="chapter"><a class="name" href="/c/1">第一章</a><span class="time">2026-01-01</span></li>
+</ul>`,
+	})
+	if err != nil {
+		t.Fatalf("RefreshToc() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("chapters = %#v", got)
+	}
+	// 顺序为 reverse → 去重（保留后出现）→ reverse：/c/1 的第二次出现（与第一次全字段一致）
+	// 被保留，反回后 /c/2 在 /c/1 之前。
+	if got[0].URL != "https://site.example.test/c/2" || got[0].Tag != "2026-01-02" {
+		t.Fatalf("first = %#v", got[0])
+	}
+	if got[1].URL != "https://site.example.test/c/1" || got[1].Tag != "2026-01-01" {
+		t.Fatalf("second = %#v", got[1])
+	}
+}
+
+// TestTocServiceWritesBackBookMetadataAfterRefresh 对齐 Legado BookChapterList.kt:152-161：
+// 刷新后写回 total_chapter_num、lastCheckTime，新增章数>0 时更新 lastCheckCount/latestChapterTime（S12-01）。
+func TestTocServiceWritesBackBookMetadataAfterRefresh(t *testing.T) {
+	src := testTocSource()
+	b := testTocBook()
+	b.TotalChapterNum = 1
+	chapters := &fakeChapterRepo{}
+	service := NewTocService(chapters, &fakeTocFetcher{pages: map[string]fetch.Response{
+		b.TocURL: {URL: b.TocURL, Body: []byte(tocHTML(false))},
+	}}, nil).WithBooks(chapters)
+
+	got, err := service.RefreshToc(context.Background(), TocInput{Source: src, Book: b})
+	if err != nil {
+		t.Fatalf("RefreshToc() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("chapters = %#v", got)
+	}
+	stats := chapters.stats
+	if stats.TotalChapterNum != 2 {
+		t.Fatalf("TotalChapterNum = %d, want 2", stats.TotalChapterNum)
+	}
+	if stats.LastCheckTime == 0 {
+		t.Fatalf("LastCheckTime not set: %+v", stats)
+	}
+	if stats.LastCheckCount != 1 {
+		t.Fatalf("LastCheckCount = %d, want 1 (2 - 1)", stats.LastCheckCount)
+	}
+	if stats.LatestChapterTime == 0 {
+		t.Fatalf("LatestChapterTime not set: %+v", stats)
+	}
+}
+
+// TestTocServiceClampsProgressWhenTocShrinks 对齐 Legado BookHelp.getDurChapter：
+// 章节收缩后 dur_chapter_index 被钳制且 total_chapter_num 更新（S12-01）。
+func TestTocServiceClampsProgressWhenTocShrinks(t *testing.T) {
+	src := testTocSource()
+	b := testTocBook()
+	b.DurChapterIndex = 5
+	b.DurChapterTitle = "第六章"
+	b.TotalChapterNum = 6
+	chapters := &fakeChapterRepo{}
+	service := NewTocService(chapters, &fakeTocFetcher{pages: map[string]fetch.Response{
+		b.TocURL: {URL: b.TocURL, Body: []byte(tocHTML(false))},
+	}}, nil).WithBooks(chapters)
+
+	if _, err := service.RefreshToc(context.Background(), TocInput{Source: src, Book: b}); err != nil {
+		t.Fatalf("RefreshToc() error = %v", err)
+	}
+	stats := chapters.stats
+	if stats.TotalChapterNum != 2 {
+		t.Fatalf("TotalChapterNum = %d, want 2", stats.TotalChapterNum)
+	}
+	if stats.DurChapterIndex < 0 || stats.DurChapterIndex > 1 {
+		t.Fatalf("DurChapterIndex = %d, want clamped into [0,1]", stats.DurChapterIndex)
+	}
+	if stats.DurChapterTitle == "" {
+		t.Fatalf("DurChapterTitle not set: %+v", stats)
+	}
+	if !stats.DurChapterChanged {
+		t.Fatalf("DurChapterChanged = false, want true (index 5 -> clamped)")
+	}
+}
+
+// TestTocServiceRemapsProgressByTitle 对齐 Legado BookHelp.getDurChapter 的标题 Jaccard
+// 相似度重映射：头部插入新章后旧进度按标题对齐到新列表中的同一章节。
+func TestTocServiceRemapsProgressByTitle(t *testing.T) {
+	src := testTocSource()
+	b := testTocBook()
+	// Legado getDurChapter 对 index<=0 直接返回 0，这里用 index=1 触发重映射。
+	b.DurChapterIndex = 1
+	b.DurChapterTitle = "第一章 陨落的天才"
+	b.TotalChapterNum = 1
+	chapters := &fakeChapterRepo{}
+	service := NewTocService(chapters, &fakeTocFetcher{pages: map[string]fetch.Response{
+		b.TocURL: {URL: b.TocURL, Body: []byte(`<html><body><ul>
+<li class="chapter"><a class="name" href="/c/0">序章</a></li>
+<li class="chapter"><a class="name" href="/c/1">第一章 陨落的天才</a></li>
+<li class="chapter"><a class="name" href="/c/2">第二章</a></li>
+</ul></body></html>`)},
+	}}, nil).WithBooks(chapters)
+
+	if _, err := service.RefreshToc(context.Background(), TocInput{Source: src, Book: b}); err != nil {
+		t.Fatalf("RefreshToc() error = %v", err)
+	}
+	if chapters.stats.DurChapterIndex != 1 {
+		t.Fatalf("DurChapterIndex = %d, want 1 (remapped by title)", chapters.stats.DurChapterIndex)
+	}
+}
+
+// TestTocServicePersistsVariableChangedByPreUpdateJS 对齐 Legado WebBook.kt:211-221：
+// preUpdateJs 修改的 book.variable 跨刷新持久化（S12-05）。
+func TestTocServicePersistsVariableChangedByPreUpdateJS(t *testing.T) {
+	src := testTocSource()
+	src.RuleToc.Value.PreUpdateJS = `book.putVariable("refreshedAt", "2026-10-21")`
+	b := testTocBook()
+	chapters := &fakeChapterRepo{}
+	service := NewTocService(chapters, &fakeTocFetcher{pages: map[string]fetch.Response{
+		b.TocURL: {URL: b.TocURL, Body: []byte(tocHTML(false))},
+	}}, script.NewRuntime(script.Policy{Timeout: time.Second, SourceKey: src.BookSourceURL})).WithBooks(chapters)
+
+	if _, err := service.RefreshToc(context.Background(), TocInput{Source: src, Book: b}); err != nil {
+		t.Fatalf("RefreshToc() error = %v", err)
+	}
+	if !chapters.stats.VariableChanged {
+		t.Fatalf("VariableChanged = false, want true: %+v", chapters.stats)
+	}
+	if !strings.Contains(chapters.stats.Variable, "refreshedAt") {
+		t.Fatalf("Variable = %q, want refreshedAt persisted", chapters.stats.Variable)
 	}
 }
 
@@ -381,11 +552,18 @@ func (f *fakeTocFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.R
 type fakeChapterRepo struct {
 	bookURL string
 	saved   []*domainbook.BookChapter
+	stats   domainbook.TocStats
 }
 
 func (r *fakeChapterRepo) ReplaceByBook(ctx context.Context, bookID string, chapters []*domainbook.BookChapter) error {
 	r.bookURL = bookID
 	r.saved = append([]*domainbook.BookChapter(nil), chapters...)
+	return nil
+}
+
+// UpdateTocStats 与 ReplaceByBook 等价记录：fake 仓库不区分列级更新。
+func (r *fakeChapterRepo) UpdateTocStats(ctx context.Context, bookID string, stats domainbook.TocStats) error {
+	r.stats = stats
 	return nil
 }
 func (r *fakeChapterRepo) ListByBook(ctx context.Context, bookID string) ([]*domainbook.BookChapter, error) {
@@ -402,6 +580,24 @@ func (r *fakeChapterRepo) SaveContent(ctx context.Context, bookID string, chapte
 }
 func (r *fakeChapterRepo) GetContent(ctx context.Context, bookID string, chapterIndex int) (string, bool, error) {
 	return "", false, nil
+}
+
+func (r *fakeChapterRepo) Save(ctx context.Context, b *domainbook.Book) error { return nil }
+func (r *fakeChapterRepo) UpdateInfo(ctx context.Context, b *domainbook.Book) error {
+	return nil
+}
+func (r *fakeChapterRepo) FindByID(ctx context.Context, id string) (*domainbook.Book, error) {
+	return nil, nil
+}
+func (r *fakeChapterRepo) FindByURL(ctx context.Context, bookURL string) (*domainbook.Book, error) {
+	return nil, nil
+}
+func (r *fakeChapterRepo) List(ctx context.Context, filter domainbook.BookFilter) ([]*domainbook.Book, int, error) {
+	return nil, 0, nil
+}
+func (r *fakeChapterRepo) Delete(ctx context.Context, id string) error { return nil }
+func (r *fakeChapterRepo) SaveProgress(ctx context.Context, id string, progress domainbook.BookProgress) error {
+	return nil
 }
 
 // 对齐 Legado StringExtensions.kt:74-79：非空且不是 false/no/not/0 即为真。

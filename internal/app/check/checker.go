@@ -86,6 +86,10 @@ func NewChecker(search SearchService, discovery DiscoveryService, books BookServ
 
 func (c *Checker) CheckSource(ctx context.Context, src *source.BookSource, opts Options) (*task.CheckTaskItem, error) {
 	start := time.Now()
+	if src == nil {
+		// 防御：书源未加载成功时不做 nil 解引用。
+		return nil, errors.New("check source is nil")
+	}
 	opts.Keyword = checkKeyword(src, opts.Keyword)
 	if opts.Timeout <= 0 {
 		opts.Timeout = DefaultTimeout
@@ -276,13 +280,15 @@ func (c *Checker) checkBook(ctx context.Context, b book.Book, src *source.BookSo
 }
 
 // checkKeyword 按 Legado BookSource.getCheckKeyword 语义选取校验关键字：
-// 书源自身的 RuleSearch.CheckKeyWord 优先，为空（或写成了 execute 规则）时才回退到调用方给出的默认关键字。
+// 书源自身的 RuleSearch.CheckKeyWord 优先，为空时回退到调用方给出的默认关键字。
+// 仅当关键字本身是 execute 型规则（{{ ... }}、@js:、<js>、http）时才回退；
+// 含 "--"/"++" 等子串的正常中文关键字原样使用（S03-13），不做子串猜测。
 func checkKeyword(src *source.BookSource, fallback string) string {
 	keyword := ""
 	if src != nil && src.RuleSearch.Value != nil {
 		keyword = strings.TrimSpace(src.RuleSearch.Value.CheckKeyWord)
 	}
-	if keyword != "" && !strings.Contains(keyword, "http") && !strings.Contains(keyword, "::") && !strings.Contains(keyword, "++") && !strings.Contains(keyword, "--") {
+	if keyword != "" && !strings.Contains(keyword, "{{") && !strings.Contains(keyword, "@js:") && !strings.Contains(keyword, "<js>") && !strings.Contains(keyword, "http") {
 		return keyword
 	}
 	if fallback = strings.TrimSpace(fallback); fallback != "" {

@@ -58,11 +58,26 @@ func SplitGroups(value string) []string {
 	return out
 }
 
-// listAllPageSize 为全量拉取书源时的分页大小。
+// listAllPageSize 为全量拉取书源时的分页大小（回退路径）。
 const listAllPageSize = 500
 
-// ListAll 分页拉取满足 filter 的全部书源，避免调用方固定 PageSize 造成静默截断。
+// ListAll 拉取满足 filter 的全部书源，避免调用方固定 PageSize 造成静默截断。
+// 仓储实现支持 keyset 流式（StreamAll，S00-03）时优先走流式：整库 2 万源时从
+// LIMIT/OFFSET 的 O(n²) 降为 O(n)，且不重复 COUNT；否则回退到分页 List。
 func ListAll(ctx context.Context, repo BookSourceRepository, filter BookSourceFilter) ([]*BookSource, error) {
+	if streamer, ok := repo.(interface {
+		StreamAll(ctx context.Context, filter BookSourceFilter, yield func(*BookSource) error) error
+	}); ok {
+		out := []*BookSource{}
+		err := streamer.StreamAll(ctx, filter, func(src *BookSource) error {
+			out = append(out, src)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
 	out := []*BookSource{}
 	for page := 1; ; page++ {
 		filter.Page = page

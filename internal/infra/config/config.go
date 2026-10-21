@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -37,6 +38,10 @@ type Config struct {
 	DebugBodyLimit              int64
 	ContentReSegment            bool
 	ContentChineseConverterType int
+	// SearchSourceTimeout 是多源搜索/校验的每源默认超时；Timeout<=0 时生效。
+	SearchSourceTimeout time.Duration
+	// GoMemLimitRatio 控制 serve 启动时按可用内存设置的软内存上限比例（0.1~1，默认 0.5）。
+	GoMemLimitRatio float64
 }
 
 type Source interface {
@@ -77,6 +82,8 @@ func Load(source Source) (Config, error) {
 		DebugBodyLimit:              32 * 1024,
 		ContentReSegment:            false,
 		ContentChineseConverterType: 0,
+		SearchSourceTimeout:         15 * time.Second,
+		GoMemLimitRatio:             0.5,
 	}
 
 	var err error
@@ -94,7 +101,7 @@ func Load(source Source) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.FetchMaxRedirects, err = intValue(source, "READER_FETCH_MAX_REDIRECTS", cfg.FetchMaxRedirects, 0)
+	cfg.FetchMaxRedirects, err = intValue(source, "READER_FETCH_MAX_REDIRECTS", cfg.FetchMaxRedirects, 0, math.MaxInt32)
 	if err != nil {
 		return Config{}, err
 	}
@@ -102,15 +109,15 @@ func Load(source Source) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.GlobalConcurrency, err = intValue(source, "READER_GLOBAL_CONCURRENCY", cfg.GlobalConcurrency, 1)
+	cfg.GlobalConcurrency, err = intValue(source, "READER_GLOBAL_CONCURRENCY", cfg.GlobalConcurrency, 1, math.MaxInt32)
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.SourceConcurrency, err = intValue(source, "READER_SOURCE_CONCURRENCY", cfg.SourceConcurrency, 1)
+	cfg.SourceConcurrency, err = intValue(source, "READER_SOURCE_CONCURRENCY", cfg.SourceConcurrency, 1, math.MaxInt32)
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.CheckConcurrency, err = intValue(source, "READER_CHECK_CONCURRENCY", cfg.CheckConcurrency, 1)
+	cfg.CheckConcurrency, err = intValue(source, "READER_CHECK_CONCURRENCY", cfg.CheckConcurrency, 1, math.MaxInt32)
 	if err != nil {
 		return Config{}, err
 	}
@@ -126,9 +133,25 @@ func Load(source Source) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.ContentChineseConverterType, err = intValue(source, "READER_CONTENT_CHINESE_CONVERTER_TYPE", cfg.ContentChineseConverterType, 0)
+	cfg.ContentChineseConverterType, err = intValue(source, "READER_CONTENT_CHINESE_CONVERTER_TYPE", cfg.ContentChineseConverterType, 0, 2)
 	if err != nil {
 		return Config{}, err
+	}
+	cfg.SearchSourceTimeout, err = durationValue(source, "READER_SEARCH_SOURCE_TIMEOUT", cfg.SearchSourceTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.GoMemLimitRatio, err = floatValue(source, "READER_GOMEM_LIMIT_RATIO", cfg.GoMemLimitRatio, 0.1, 1.0)
+	if err != nil {
+		return Config{}, err
+	}
+
+	// READER_ENV 只接受固定取值集合；此前任意字符串（含大小写差异，如 Production）会静默落入
+	// development 分支，回环部署时鉴权被静默关闭且用户无感知。
+	switch cfg.Env {
+	case EnvDevelopment, EnvProduction, EnvTest:
+	default:
+		return Config{}, fmt.Errorf("READER_ENV must be one of %s, %s, %s (got %q)", EnvDevelopment, EnvProduction, EnvTest, cfg.Env)
 	}
 
 	if cfg.Env == EnvTest && cfg.Token == "" {
@@ -163,6 +186,8 @@ func (cfg Config) Redacted() map[string]any {
 		"debugBodyLimit":              cfg.DebugBodyLimit,
 		"contentReSegment":            cfg.ContentReSegment,
 		"contentChineseConverterType": cfg.ContentChineseConverterType,
+		"searchSourceTimeout":         cfg.SearchSourceTimeout.String(),
+		"goMemLimitRatio":             cfg.GoMemLimitRatio,
 	}
 }
 
@@ -230,7 +255,7 @@ func durationValue(source Source, key string, fallback time.Duration) (time.Dura
 	return parsed, nil
 }
 
-func intValue(source Source, key string, fallback int, min int) (int, error) {
+func intValue(source Source, key string, fallback int, min int, max int) (int, error) {
 	value, ok := source.Lookup(key)
 	if !ok || value == "" {
 		return fallback, nil
@@ -241,6 +266,25 @@ func intValue(source Source, key string, fallback int, min int) (int, error) {
 	}
 	if parsed < min {
 		return 0, fmt.Errorf("%s must be >= %d", key, min)
+	}
+	if parsed > max {
+		return 0, fmt.Errorf("%s must be <= %d", key, max)
+	}
+	return parsed, nil
+}
+
+// floatValue 读取浮点配置项；缺失或空串时返回 fallback，越界（<min 或 >max）时报错。
+func floatValue(source Source, key string, fallback float64, min, max float64) (float64, error) {
+	value, ok := source.Lookup(key)
+	if !ok || value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number: %w", key, err)
+	}
+	if parsed < min || parsed > max {
+		return 0, fmt.Errorf("%s must be between %g and %g", key, min, max)
 	}
 	return parsed, nil
 }

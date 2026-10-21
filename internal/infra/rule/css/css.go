@@ -236,9 +236,7 @@ func selectStep(root *goquery.Selection, rule string) (*goquery.Selection, error
 }
 
 func filterDeepestTextMatch(root *goquery.Selection, needle string) *goquery.Selection {
-	matchedNodes := root.FindMatcher(matchAnyElement).FilterFunction(func(_ int, sel *goquery.Selection) bool {
-		return strings.Contains(strings.TrimSpace(ownText(sel)), needle)
-	}).Nodes
+	matchedNodes := collectTextMatches(root.Nodes, needle)
 	if len(matchedNodes) == 0 {
 		return emptySelection(root)
 	}
@@ -274,6 +272,52 @@ func filterDeepestTextMatch(root *goquery.Selection, needle string) *goquery.Sel
 	return out
 }
 
+// collectTextMatches 单遍 DFS 收集 ownText 命中 needle 的元素节点：
+// 只递归元素子节点（与 goquery FindMatcher 一致，不包含根自身），
+// 每个节点只计算一次 ownText，整体 O(节点数)，不再对全文档逐元素构造 Selection。
+func collectTextMatches(nodes []*html.Node, needle string) []*html.Node {
+	var out []*html.Node
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type != html.ElementNode {
+				continue
+			}
+			if nodeOwnTextContains(child, needle) {
+				out = append(out, child)
+			}
+			walk(child)
+		}
+	}
+	for _, n := range nodes {
+		if n.Type != html.DocumentNode {
+			continue
+		}
+		walk(n)
+	}
+	return out
+}
+
+// nodeOwnTextContains 判断元素的直接子文本节点拼接后是否包含 needle，
+// 语义与 ownText（goquery.Nodes[0] 的直接子文本）一致；单段时免 Join 分配。
+func nodeOwnTextContains(node *html.Node, needle string) bool {
+	var parts []string
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.TextNode {
+			if text := strings.TrimSpace(child.Data); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return false
+	}
+	if len(parts) == 1 {
+		return strings.Contains(parts[0], needle)
+	}
+	return strings.Contains(strings.Join(parts, " "), needle)
+}
+
 func trimLeadingAt(rule string) string {
 	rule = strings.TrimSpace(rule)
 	for strings.HasPrefix(rule, "@") {
@@ -290,17 +334,52 @@ func trimCSSPrefix(rule string) string {
 	return rule
 }
 
+// selectorIndexSegmentPattern 匹配规则尾部索引分段（如 0、-1、0:2、:2、0:、!0），
+// class./tag. 多段取值时保留这些分段（Legado findIndexSet 在整个 rule 上剥离索引）。
+var selectorIndexSegmentPattern = regexp.MustCompile(`^!?-?\d+(?::-?\d*)?$|^!?-?\d+:$|^!?-?\d*:-?\d+$|^!:-?\d+$|^!:-?\d+:$`)
+
+// selectorTokenWithIndex 对齐 Legado getElementsSingle 的 beforeRule.split(".")：
+// 取第一段命名（如 class.item.title → "item"，后续分段被忽略），
+// 段内空格保留（Legado getElementsByClass("a b") 对多 class 名生效），
+// 并保留其后的索引分段，保证 normalizeSelectorToken 与 findSelection 索引解析一致。
+// class 前缀（asClass=true）时空格分隔的多 class 名编译为 ".a.b"；
+// tag 前缀时按 getElementsByTag 语义只取首个空格前的标签名。
+func selectorTokenWithIndex(raw string, nameOffset int, asClass bool) string {
+	segments := strings.Split(strings.TrimSpace(raw[nameOffset:]), ".")
+	name := segments[0]
+	out := name
+	for _, segment := range segments[1:] {
+		if !selectorIndexSegmentPattern.MatchString(segment) {
+			break
+		}
+		out += "." + segment
+	}
+	if asClass {
+		classes := strings.Fields(name)
+		if len(classes) > 1 {
+			cascadiaSelector := "." + strings.Join(classes, ".")
+			if out != name {
+				cascadiaSelector += strings.TrimPrefix(out, name)
+			}
+			return cascadiaSelector
+		}
+		return "." + out
+	}
+	if idx := strings.IndexAny(name, " \t"); idx >= 0 {
+		out = name[:idx] + strings.TrimPrefix(out, name)
+	}
+	return out
+}
+
 func normalizeSelectorToken(raw string) string {
 	raw = strings.TrimSpace(raw)
 	switch {
 	case strings.HasPrefix(strings.ToLower(raw), "class."):
-		names := strings.Fields(strings.TrimSpace(raw[6:]))
-		if len(names) == 0 {
-			return "."
-		}
-		return "." + strings.Join(names, ".")
+		// 对齐 Legado getElementsSingle：class. 只取第一段（getElementsByClass(rules[1])）。
+		return selectorTokenWithIndex(raw, 6, true)
 	case strings.HasPrefix(strings.ToLower(raw), "tag."):
-		return strings.TrimSpace(raw[4:])
+		// 对齐 Legado getElementsByTag(rules[1])：tag. 只取第一段。
+		return selectorTokenWithIndex(raw, 4, false)
 	default:
 		return raw
 	}
@@ -401,9 +480,11 @@ func selectBase(root *goquery.Selection, rule string) *goquery.Selection {
 	var selected *goquery.Selection
 	switch {
 	case strings.HasPrefix(strings.ToLower(rule), "class."):
-		selected = root.FindMatcher(compileMatcher("." + strings.TrimSpace(rule[6:])))
+		// 对齐 Legado getElementsSingle：class. 只按第一段匹配（getElementsByClass(rules[1])）。
+		selected = root.FindMatcher(compileMatcher(selectorTokenWithIndex(rule, 6, true)))
 	case strings.HasPrefix(strings.ToLower(rule), "tag."):
-		selected = root.FindMatcher(compileMatcher(strings.TrimSpace(rule[4:])))
+		// 对齐 Legado getElementsByTag(rules[1])：tag. 只按第一段匹配。
+		selected = root.FindMatcher(compileMatcher(selectorTokenWithIndex(rule, 4, false)))
 	case strings.HasPrefix(strings.ToLower(rule), "id."):
 		selected = root.FindMatcher(compileMatcher("#" + strings.TrimSpace(rule[3:])))
 	case strings.HasPrefix(strings.ToLower(rule), "text."):

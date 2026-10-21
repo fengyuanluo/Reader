@@ -434,7 +434,7 @@ func TestBookHandlersLifecycleProgressChaptersContentAndDelete(t *testing.T) {
 }
 
 func TestBookHandlersRefreshInfoExposesDownloadURLs(t *testing.T) {
-	router, bookRepo, _ := newBookHandlerTestRouter(t)
+	_, bookRepo, _ := newBookHandlerTestRouter(t)
 	db := openHandlerTestDB(t)
 	sourceRepo := repositories.NewBookSourceRepository(db)
 	src := handlerTestSource(t, "https://file.example.test", "FileSource")
@@ -466,7 +466,7 @@ func TestBookHandlersRefreshInfoExposesDownloadURLs(t *testing.T) {
 	handler := NewSourceHandler(manager).WithBooks(bookService, contentApp)
 	r := chi.NewRouter()
 	generated.HandlerFromMuxWithBaseURL(handler, r, "/api/v1")
-	router = middleware.Trace(middleware.Auth("secret")(r))
+	router := middleware.Trace(middleware.Auth("secret")(r))
 
 	rec := authedRequest(router, http.MethodPost, "/api/v1/books/"+repositoryBookID("https://file.example.test/book/1")+"/refresh-info", "")
 	if rec.Code != http.StatusOK {
@@ -586,7 +586,7 @@ func TestProxyImageReturnsImageBytes(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "image/png" {
 		t.Fatalf("content-type = %q", got)
 	}
-	if string(rec.Body.Bytes()) != string([]byte{0x89, 'P', 'N', 'G'}) {
+	if rec.Body.String() != string([]byte{0x89, 'P', 'N', 'G'}) {
 		t.Fatalf("body = %v", rec.Body.Bytes())
 	}
 }
@@ -1051,7 +1051,7 @@ type concurrencyRecordingRunner struct {
 	concurrency int
 }
 
-func (r *concurrencyRecordingRunner) Start(ctx context.Context, checkTask *task.CheckTask, sources []*domainsource.BookSource, _ checkapp.Options, concurrency int) error {
+func (r *concurrencyRecordingRunner) Start(ctx context.Context, checkTask *task.CheckTask, sources []string, _ checkapp.Options, concurrency int) error {
 	r.concurrency = concurrency
 	checkTask.Total = len(sources)
 	if checkTask.Status == "" {
@@ -1085,7 +1085,7 @@ func TestCheckTaskEventsStreamPushesLiveEvents(t *testing.T) {
 		content,
 	)
 	events := checkapp.NewPublisher()
-	runner := checkworker.NewRunner(checkRepo, checker).WithEvents(events)
+	runner := checkworker.NewRunner(checkRepo, checker).WithSourceLoader(sourceRepo).WithEvents(events)
 	checkManager := checkapp.NewManager(checkRepo, sourceRepo, runner).WithEvents(events)
 	handler := NewSourceHandler(sourceapp.NewManager(sourceRepo)).WithCheck(checkManager)
 	handler.heartbeat = 20 * time.Millisecond
@@ -1440,7 +1440,7 @@ func newCheckHandlerTestRouter(t *testing.T) (http.Handler, *repositories.BookSo
 	manager := sourceapp.NewManager(sourceRepo)
 	checker := checkapp.NewChecker(&fakeAPISearcher{result: searchapp.MultiSearchResult{Items: []book.SearchBook{{BookURL: "https://book.test/1", Origin: "https://check.example.test", OriginName: "Check", Name: "斗破苍穹", Author: "天蚕土豆"}}}}, &fakeAPIDiscovery{}, &fakeCheckAPIBooks{}, &fakeCheckAPIContent{})
 	events := checkapp.NewPublisher()
-	runner := checkworker.NewRunner(checkRepo, checker).WithDiagnostics(checkapp.NewDiagnosticsUpdater(sourceRepo)).WithEvents(events)
+	runner := checkworker.NewRunner(checkRepo, checker).WithSourceLoader(sourceRepo).WithDiagnostics(checkapp.NewDiagnosticsUpdater(checkRepo)).WithEvents(events)
 	checkManager := checkapp.NewManager(checkRepo, sourceRepo, runner).WithEvents(events)
 	handler := NewSourceHandler(manager).WithCheck(checkManager)
 	handler.heartbeat = 10 * time.Millisecond

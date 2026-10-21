@@ -34,7 +34,12 @@ ON CONFLICT(domain, name) DO UPDATE SET
 }
 
 func (r *CookieRepository) ListByDomain(ctx context.Context, domain string) ([]fetch.Cookie, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT domain, name, value, coalesce(path, ''), expires_at FROM cookies WHERE domain = ? ORDER BY name ASC`, domain)
+	// 只返回未过期的 Cookie（S11-10）：expires_at 为 NULL 视为不过期，
+	// 以 RFC3339Nano UTC 文本比较，与写入格式一致。
+	rows, err := r.db.QueryContext(ctx, `
+SELECT domain, name, value, coalesce(path, ''), expires_at FROM cookies
+WHERE domain = ? AND (expires_at IS NULL OR expires_at > ?)
+ORDER BY name ASC`, domain, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err
 	}
@@ -62,4 +67,15 @@ func (r *CookieRepository) ListByDomain(ctx context.Context, domain string) ([]f
 func (r *CookieRepository) Delete(ctx context.Context, domain string, name string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM cookies WHERE domain = ? AND name = ?`, domain, name)
 	return err
+}
+
+// DeleteExpired 一次性删除 domain 下早于 before 的 Cookie（S08-07）：
+// 单条 SQL 一次往返，返回删除行数。供 fetcher.CookieManager 通过可选接口类型断言调用。
+func (r *CookieRepository) DeleteExpired(ctx context.Context, domain string, before time.Time) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM cookies WHERE domain = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
+		domain, before.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

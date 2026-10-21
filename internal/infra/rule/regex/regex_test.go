@@ -136,3 +136,39 @@ func TestCompilePatternIsCached(t *testing.T) {
 		t.Fatalf("MatchString() = %v, %v", matched, err)
 	}
 }
+
+// 替换文本中的 `$` 字面量（$ 后跟非组名字符）不被 Expand 展开异常，`$1` 分组引用语义不变（S07-10）。
+// 注：`$100` 属 `$\d` 组引用（$1 + "00"，缺组时 Go 展开为空），字面输出需 `$$100`（与 Legado Java 语义一致）。
+func TestReplaceLiteralDollar(t *testing.T) {
+	// $ 后跟非组名字符（空格）：保持字面 `$`，无异常。
+	got, err := Replace("a", "a", "$ x", false)
+	if err != nil {
+		t.Fatalf("Replace() error = %v", err)
+	}
+	if got != "$ x" {
+		t.Fatalf("Replace literal dollar = %q, want $ x", got)
+	}
+	first, err := Replace("a", "a", "$", true)
+	if err != nil {
+		t.Fatalf("Replace firstOnly error = %v", err)
+	}
+	if first != "$" {
+		t.Fatalf("Replace firstOnly dollar = %q, want $", first)
+	}
+	// 已转义的 `$$100` 输出字面 `$100`。
+	escaped, err := Replace("a", "a", "$$100", false)
+	if err != nil {
+		t.Fatalf("Replace escaped error = %v", err)
+	}
+	if escaped != "$100" {
+		t.Fatalf("Replace escaped dollar = %q, want $100", escaped)
+	}
+	// `$1` 分组引用语义不变。
+	group, err := Replace("ab", "(a)(b)", "$1$2", false)
+	if err != nil {
+		t.Fatalf("Replace group error = %v", err)
+	}
+	if group != "ab" {
+		t.Fatalf("Replace group refs = %q, want ab", group)
+	}
+}

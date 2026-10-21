@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -158,5 +159,74 @@ func TestDoReturnsErrorWithoutRunning(t *testing.T) {
 	}
 	if ran {
 		t.Fatal("fn must not run when the permit is not acquired")
+	}
+}
+
+// TestSourceChanEvictsIdleEntriesWhenOverCap 验证缓存超过 maxSourceChans 后淘汰空闲 chan，map 大小有界（S01-07）。
+func TestSourceChanEvictsIdleEntriesWhenOverCap(t *testing.T) {
+	limiter := New(Options{Source: 2})
+	over := maxSourceChans + 512
+	for i := range over {
+		_ = limiter.sourceChan("key-" + strconv.Itoa(i))
+	}
+	if got := limiter.SourceCount(); got > maxSourceChans {
+		t.Fatalf("SourceCount() = %d, want <= %d", got, maxSourceChans)
+	}
+}
+
+// TestSourceChanKeepsInUseEntries 验证正在使用的 chan 不被淘汰，释放后仍可正常回收许可（S01-07）。
+func TestSourceChanKeepsInUseEntries(t *testing.T) {
+	limiter := New(Options{Source: 2})
+	// 占用最早的 chan 的一个许可。
+	release, err := limiter.Acquire(context.Background(), "held")
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	// 冲进超过上限的 key 触发淘汰。
+	for i := range maxSourceChans + 512 {
+		_ = limiter.sourceChan("key-" + strconv.Itoa(i))
+	}
+	// 被占用的 chan 仍在，第二次 Acquire 同 key 仍受单源上限约束。
+	second, err := limiter.Acquire(context.Background(), "held")
+	if err != nil {
+		t.Fatalf("second Acquire() error = %v", err)
+	}
+	release()
+	second()
+	if limiter.SourceCount() == 0 {
+		t.Fatal("held chan should survive eviction")
+	}
+}
+
+// TestRemoveSourceDropsIdleChan 验证书源删除时空闲 chan 被移除（S09-02）。
+func TestRemoveSourceDropsIdleChan(t *testing.T) {
+	limiter := New(Options{Source: 2})
+	_ = limiter.sourceChan("a")
+	_ = limiter.sourceChan("b")
+	limiter.RemoveSource("a")
+	if limiter.SourceCount() != 1 {
+		t.Fatalf("SourceCount() = %d, want 1", limiter.SourceCount())
+	}
+	// 不存在的 key 是 no-op。
+	limiter.RemoveSource("missing")
+	if limiter.SourceCount() != 1 {
+		t.Fatalf("SourceCount() = %d, want 1", limiter.SourceCount())
+	}
+}
+
+// TestRemoveSourceKeepsInUseChan 验证许可被持有时 RemoveSource 不删除（避免持有者释放失败）。
+func TestRemoveSourceKeepsInUseChan(t *testing.T) {
+	limiter := New(Options{Source: 2})
+	release, err := limiter.Acquire(context.Background(), "busy")
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	limiter.RemoveSource("busy")
+	if limiter.SourceCount() != 1 {
+		t.Fatalf("SourceCount() = %d, want 1", limiter.SourceCount())
+	}
+	release()
+	if limiter.SourceCount() != 1 {
+		t.Fatalf("after release SourceCount() = %d, want 1", limiter.SourceCount())
 	}
 }

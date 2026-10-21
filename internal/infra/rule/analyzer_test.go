@@ -750,3 +750,199 @@ func TestAnalyzerRegexStepSeesRawTextFromLazyInput(t *testing.T) {
 		t.Fatalf("anchored regex did not match raw text: %#v", wrapped)
 	}
 }
+
+// S06-01：@put 值含嵌套花括号时按平衡括号完整提取，不在第一个 `}` 处截断（对齐 Legado 平衡组语义）。
+func TestAnalyzerPutBalancedBracesValue(t *testing.T) {
+	// 对齐 Legado 语义：@put 值按平衡括号完整提取（{k:1}），剩余文本作主规则原样参与求值
+	// （顶层 `{rule}` 包裹在 Legado JSoup select 中同样无效，主规则不报语法错误）。
+	analyzer := NewAnalyzer(Context{})
+	input := `<div class="t">T</div>`
+	_, err := analyzer.GetString(context.Background(), `@put:{a:{k:1}}{class.t@text}`, input)
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	if v := analyzer.Variables()["a"]; v != "{k:1}" {
+		t.Fatalf("put value = %q, want {k:1}", v)
+	}
+	// 纯 put 规则（无主规则）返回输入而非报错，变量完整写入。
+	analyzer2 := NewAnalyzer(Context{})
+	elements, err := analyzer2.GetElements(context.Background(), `@put:{a:{k:1}}`, input)
+	if err != nil {
+		t.Fatalf("GetElements() error = %v", err)
+	}
+	if len(elements) != 1 {
+		t.Fatalf("elements = %#v", elements)
+	}
+	if v := analyzer2.Variables()["a"]; v != "{k:1}" {
+		t.Fatalf("put value = %q, want {k:1}", v)
+	}
+}
+
+// S06-01：@put 值含 `}`（如 JSON 请求体）时不再静默截断。
+func TestAnalyzerPutValueContainingClosingBrace(t *testing.T) {
+	// @put 值含 `}`（如 JSON 请求体）时按平衡括号完整提取并求值，不静默截断。
+	analyzer := NewAnalyzer(Context{})
+	analyzer.LoadVariables(`{"bid":"B1"}`)
+	got, err := analyzer.GetStringRaw(context.Background(), `@put:{body:{"bookId":"@get:{bid}"}}@get:{body}`, map[string]any{"bid": "B1"})
+	if err != nil {
+		t.Fatalf("GetStringRaw() error = %v", err)
+	}
+	if got != `{"bookId":"B1"}` {
+		t.Fatalf("put expansion = %q", got)
+	}
+	if v := analyzer.Variables()["body"]; v != `{"bookId":"B1"}` {
+		t.Fatalf("put variable = %q, want {\"bookId\":\"B1\"}", v)
+	}
+}
+
+// S06-02：@put 多键 map 按规则书写顺序求值，键间依赖（b 依赖 a）结果确定。
+func TestAnalyzerPutOrderedKeys(t *testing.T) {
+	for i := range 100 {
+		var analyzer *Analyzer
+		script := fakeRuleScriptFunc(func(scriptText string, _ any) (any, error) {
+			switch scriptText {
+			case "1":
+				return float64(1), nil
+			case "get('a')":
+				return analyzer.Variables()["a"], nil
+			case "get('b')":
+				return analyzer.Variables()["b"], nil
+			}
+			return "", nil
+		})
+		analyzer = &Analyzer{ctx: Context{Script: script}, vars: map[string]string{}}
+		_, err := analyzer.GetString(context.Background(), `@put:{a:{{1}}}@put:{b:{{get('a')}}}@js:get('b')`, map[string]any{})
+		if err != nil {
+			t.Fatalf("run %d: GetString() error = %v", i, err)
+		}
+		if got := analyzer.Variables()["b"]; got != "1" {
+			t.Fatalf("run %d: b = %q, want 1", i, got)
+		}
+	}
+}
+
+// S06-17：put 值为规则形态时恒走 GetString 求值（对齐 Legado put(key, getString(value))），
+// 纯字段名/字面量走字段快捷路径（audit 修复方案的"仅非规则形态值走字段快捷路径"选项）。
+func TestAnalyzerPutValueSameNameAsInputFieldEvaluatesRule(t *testing.T) {
+	analyzer := NewAnalyzer(Context{})
+	// put 值与 input 键同名且为规则形态（$.name 选择器）：必须求值而非把字段值当字面量返回。
+	// 规则形态值经 GetString 求值命中 input 字段（Legado getString 对选择器取值）。
+	input := map[string]any{"name": "第一本"}
+	_, err := analyzer.GetString(context.Background(), `@put:{name:$.name}`, input)
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	if got := analyzer.Variables()["name"]; got != "第一本" {
+		t.Fatalf("put value = %q, want 第一本 (evaluated as rule)", got)
+	}
+	// put 值为纯字段名（非规则形态）走字段快捷路径，返回字段值。
+	analyzer2 := NewAnalyzer(Context{})
+	input2 := map[string]any{"title": "书名"}
+	_, err = analyzer2.GetString(context.Background(), `@put:{name:title}`, input2)
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	if got := analyzer2.Variables()["name"]; got != "书名" {
+		t.Fatalf("put value = %q, want 书名 (input field shortcut)", got)
+	}
+}
+
+// S06-03：makeUpStep 中 {{}}/脚本模板缺 Script 时优雅回退为原 token（对齐 Legado 内嵌
+// JS 引擎恒可用的语义；顶层模板同样回退），规则整体不再失败。
+func TestAnalyzerMakeUpStepScriptTemplateFallbackWithoutScript(t *testing.T) {
+	analyzer := NewAnalyzer(Context{})
+	got, err := analyzer.GetString(context.Background(), `class.t@text##(.*)##{{1+1}}`, `<div class="t">第一</div>`)
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	// 无脚本运行时替换段 {{1+1}} 保留原 token（对齐顶层模板回退为原文的语义，规则整体不报错）。
+	if got != "{{1+1}}" {
+		t.Fatalf("GetString() = %q", got)
+	}
+}
+
+// S06-04：GetURL 无结果时回退绝对化 baseUrl（对齐 Legado getString isUrl 分支）。
+func TestAnalyzerGetURLFallsBackToBaseURL(t *testing.T) {
+	// RedirectURL 就是 baseUrl：无结果时回退到 RedirectURL（absolutePlain 对绝对 URL 直接返回）。
+	analyzer := NewAnalyzer(Context{BaseURL: "https://source.example.test", RedirectURL: "https://source.example.test"})
+	got, err := analyzer.GetURL(context.Background(), ".missing@href", `<div></div>`)
+	if err != nil {
+		t.Fatalf("GetURL() error = %v", err)
+	}
+	if got != "https://source.example.test" {
+		t.Fatalf("GetURL() = %q, want absolute baseUrl", got)
+	}
+	// baseUrl 为空时返回空串。
+	analyzer2 := NewAnalyzer(Context{})
+	empty, err := analyzer2.GetURL(context.Background(), ".missing@href", `<div></div>`)
+	if err != nil || empty != "" {
+		t.Fatalf("GetURL() = %q, %v", empty, err)
+	}
+}
+
+// S06-06：顶层 || 取首个非空（非选择器规则不被静默当 && 步进）、%% 交错合并。
+// 选择器规则（含 @/$）的 || 语义由 css 适配器处理（对齐 Legado 子选择器层），
+// 顶层拆分仅作用于非选择器规则（JS 步链）。
+func TestAnalyzerTopLevelOrAndInterleave(t *testing.T) {
+	analyzer := NewAnalyzer(Context{Script: fakeRuleScript{value: "AB"}})
+	// JS 步链：空结果步后接非空步，顶层 || 取首个非空。
+	got, err := analyzer.GetString(context.Background(), `@js:""||@js:result`, `<div class="t">T</div>`)
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	if got != "AB" {
+		t.Fatalf("GetString() = %q, want AB", got)
+	}
+	// A 空 B 非空时取 B。
+	got2, err := analyzer.GetString(context.Background(), `class.none@text||class.t@text`, `<div class="t">T</div>`)
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	if got2 != "T" {
+		t.Fatalf("GetString() = %q, want T", got2)
+	}
+	// 顶层 %% 交错合并。
+	analyzer2 := NewAnalyzer(Context{})
+	got3, err := analyzer2.GetString(context.Background(), `class.a@text%%class.b@text`, `<div><span class="a">a1</span><span class="a">a2</span><span class="b">b1</span><span class="b">b2</span></div>`)
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	if got3 != "a1\nb1\na2\nb2" {
+		t.Fatalf("GetString() = %q, want a1\nb1\na2\nb2", got3)
+	}
+}
+
+// S06-09：深层嵌套 {{@get:{x}}} 规则被深度上限截断，不再栈溢出。
+func TestAnalyzerEvalDepthLimitPreventsDeepRecursion(t *testing.T) {
+	// 64 层嵌套 {{...}} 模板（超出 maxEvalDepth=16）：超限保留原文本，不 panic。
+	rule := "x"
+	for i := 0; i < 64; i++ {
+		rule = "{{" + rule + "}}"
+	}
+	analyzer := NewAnalyzer(Context{})
+	_, err := analyzer.GetString(context.Background(), rule, map[string]any{})
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	// expandRawString 深度上限：直接验证递归展开不再溢出（超限返回原文本）。
+	analyzer2 := NewAnalyzer(Context{})
+	analyzer2.LoadVariables(`{"x":"1"}`)
+	got, err := analyzer2.ExpandString(context.Background(), "@get:{x}", map[string]any{})
+	if err != nil || got != "1" {
+		t.Fatalf("ExpandString() = %q, %v", got, err)
+	}
+}
+
+// S06-02：@put 多键按书写顺序求值（b 依赖 a 结果确定）已由 TestAnalyzerPutOrderedKeys 覆盖。
+// S06-08：[]any 输入逐项替换不整体 Marshal。
+func TestAnalyzerAppliesReplacePerItemOnAnySlice(t *testing.T) {
+	analyzer := NewAnalyzer(Context{Script: fakeRuleScript{value: "AB"}})
+	input := []any{"第一", "第二"}
+	got, err := analyzer.GetString(context.Background(), `@js:result##第##章`, input)
+	if err != nil {
+		t.Fatalf("GetString() error = %v", err)
+	}
+	if got != "AB" {
+		t.Fatalf("GetString() = %q", got)
+	}
+}

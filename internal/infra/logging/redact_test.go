@@ -23,6 +23,16 @@ func TestRedactStringMasksSecrets(t *testing.T) {
 		{name: "api_key and secret", input: "api_key=a1 client_secret=c1 searchKey=book", secrets: []string{"a1", "c1"}, keep: []string{"searchKey=book"}},
 		{name: "url userinfo", input: "dial http://user:pa55@proxy.example.test:8080/ failed", secrets: []string{"pa55"}, keep: []string{"proxy.example.test:8080"}},
 		{name: "plain text untouched", input: "search completed in 12ms", keep: []string{"search completed in 12ms"}},
+		// S09-01：冒号分隔的 token（书源脚本日志 var token: ... 形态）。
+		{name: "colon separated token", input: "var token: abc123", secrets: []string{"abc123"}, keep: []string{"token"}},
+		{name: "colon space token", input: "token : abc123", secrets: []string{"abc123"}, keep: []string{"token"}},
+		// S09-01：带引号的凭证值。
+		{name: "quoted query token", input: `?token="abc123"`, secrets: []string{"abc123"}, keep: []string{"token"}},
+		{name: "single quoted token", input: "token='abc123'", secrets: []string{"abc123"}, keep: []string{"token"}},
+		// S09-01：自由文本中的裸认证 scheme 密钥。
+		{name: "free text bearer", input: "request failed: Bearer sk-live-abc123 rejected", secrets: []string{"sk-live-abc123"}, keep: []string{"request failed:"}},
+		{name: "free text jwt", input: "got 401 with Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig", secrets: []string{"eyJhbGciOiJIUzI1NiJ9"}, keep: []string{"got 401 with"}},
+		{name: "free text basic", input: "upstream replied Basic dXNlcjpwYXNz", secrets: []string{"dXNlcjpwYXNz"}, keep: []string{"upstream replied"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

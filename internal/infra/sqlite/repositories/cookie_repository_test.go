@@ -67,3 +67,40 @@ func TestCookieRepositoryTreatsCorruptExpiresAsExpired(t *testing.T) {
 		t.Fatalf("cookies = %#v, want corrupt expires_at treated as expired", cookies)
 	}
 }
+
+// TestCookieRepositoryListByDomainFiltersExpired 覆盖 S11-10：已过期 cookie 不再返回，
+// 未过期与无 expires_at（会话）的 cookie 正常返回。
+func TestCookieRepositoryListByDomainFiltersExpired(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := readersqlite.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repo := NewCookieRepository(db)
+	past := time.Now().UTC().Add(-time.Hour)
+	future := time.Now().UTC().Add(time.Hour)
+	if err := repo.Save(ctx, fetch.Cookie{Domain: "example.test", Name: "expired", Value: "e", ExpiresAt: &past}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if err := repo.Save(ctx, fetch.Cookie{Domain: "example.test", Name: "fresh", Value: "f", ExpiresAt: &future}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if err := repo.Save(ctx, fetch.Cookie{Domain: "example.test", Name: "session", Value: "s"}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	cookies, err := repo.ListByDomain(ctx, "example.test")
+	if err != nil {
+		t.Fatalf("ListByDomain() error = %v", err)
+	}
+	names := map[string]bool{}
+	for _, cookie := range cookies {
+		names[cookie.Name] = true
+	}
+	if len(cookies) != 2 || !names["fresh"] || !names["session"] || names["expired"] {
+		t.Fatalf("cookies = %#v, want only fresh and session", cookies)
+	}
+}

@@ -30,6 +30,7 @@ commands:
   serve [--addr <addr>]              start HTTP API server (empty READER_TOKEN only on loopback)
   import <path|URL|->                import book sources from file, URL, or stdin
   source list|show|enable|disable    manage imported book sources
+  check <source-ids|--all>           validate sources (foreground, progress + summary)
   search <keyword>                   search enabled sources (or --source ids)
   book add|list|info|refresh|rm      manage bookshelf
   toc <bookId>                       list chapters of a book
@@ -149,6 +150,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fn = runImport
 	case "source":
 		fn = runSource
+	case "check":
+		fn = runCheck
 	case "search":
 		fn = runSearch
 	case "book":
@@ -168,7 +171,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	context.AfterFunc(ctx, stop)
 	if fn == nil {
 		return ServeCommand(ctx, rest, stdout, stderr)
 	}

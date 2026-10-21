@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,10 +37,10 @@ func TestContentServiceParsesSinglePageAndCaches(t *testing.T) {
 	if got.Chapter.Title != "正文标题" {
 		t.Fatalf("title = %q", got.Chapter.Title)
 	}
-	if got.Content != "第一段" {
+	if got.Content != "\u3000\u3000第一段" {
 		t.Fatalf("content = %q", got.Content)
 	}
-	if chapters.savedContent != "第一段" || chapters.savedIndex != 0 {
+	if chapters.savedContent != "\u3000\u3000第一段" || chapters.savedIndex != 0 {
 		t.Fatalf("saved content = %q index=%d", chapters.savedContent, chapters.savedIndex)
 	}
 }
@@ -129,7 +130,7 @@ func TestContentServiceStillFetchesVolumeChapterWithRealURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetContent() error = %v", err)
 	}
-	if got.Content != "卷首语" {
+	if got.Content != "\u3000\u3000卷首语" {
 		t.Fatalf("content = %q, want parsed volume page", got.Content)
 	}
 	if fetcher.calls != 1 {
@@ -150,7 +151,7 @@ func TestContentServiceUsesBookTocHTMLBeforeFetching(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetContent() error = %v", err)
 	}
-	if got.Content != "缓存正文" || got.Chapter.Title != "缓存正文标题" {
+	if got.Content != "\u3000\u3000缓存正文" || got.Chapter.Title != "缓存正文标题" {
 		t.Fatalf("result = %#v", got)
 	}
 	if fetcher.calls != 0 {
@@ -232,7 +233,7 @@ func TestContentServiceContinuesWhenOptionalContentExtensionsAreConfigured(t *te
 	if err != nil {
 		t.Fatalf("GetContent() error = %v", err)
 	}
-	if got.Content != "正文" {
+	if got.Content != "\u3000\u3000正文" {
 		t.Fatalf("content = %q", got.Content)
 	}
 }
@@ -305,7 +306,7 @@ func TestContentServiceMergesNextContentPagesInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetContent() error = %v", err)
 	}
-	if got.Content != "第一页\n第二页" {
+	if got.Content != "\u3000\u3000第一页\n\u3000\u3000第二页" {
 		t.Fatalf("content = %q", got.Content)
 	}
 }
@@ -395,7 +396,7 @@ func TestContentServiceAppliesLoginCheckJS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetContent() error = %v", err)
 	}
-	if got.Content != "正文" {
+	if got.Content != "\u3000\u3000正文" {
 		t.Fatalf("content = %q", got.Content)
 	}
 }
@@ -414,7 +415,7 @@ func TestContentServiceAppliesContentWebJSAfterLoginCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetContent() error = %v", err)
 	}
-	if got.Content != "正文" {
+	if got.Content != "\u3000\u3000正文" {
 		t.Fatalf("content = %q", got.Content)
 	}
 }
@@ -435,7 +436,7 @@ func TestContentServiceAppliesContentWebJSToEachPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetContent() error = %v", err)
 	}
-	if got.Content != "第一页\n第二页" {
+	if got.Content != "\u3000\u3000第一页\n\u3000\u3000第二页" {
 		t.Fatalf("content = %q", got.Content)
 	}
 }
@@ -641,7 +642,8 @@ func TestContentServiceAppliesTwoPartReplaceRegexAsRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetContent() error = %v", err)
 	}
-	if got.Content != "第一段\n\n第二段" {
+	// S13-06：替换后逐行加“　　”全角缩进，末尾空行去除（Legado BookContent.kt:133-139）。
+	if got.Content != "\u3000\u3000第一段\n\u3000\u3000\n\u3000\u3000第二段" {
 		t.Fatalf("content = %q", got.Content)
 	}
 }
@@ -788,6 +790,7 @@ func testContentChapter() book.BookChapter {
 }
 
 type fakeContentFetcher struct {
+	mu      sync.Mutex
 	pages   map[string]fetch.Response
 	calls   int
 	lastReq fetch.Request
@@ -796,8 +799,10 @@ type fakeContentFetcher struct {
 }
 
 func (f *fakeContentFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
+	f.mu.Lock()
 	f.calls++
 	f.lastReq = req
+	f.mu.Unlock()
 	if err, ok := f.fail[req.URL]; ok {
 		return nil, err
 	}
@@ -814,6 +819,7 @@ func (f *fakeContentFetcher) Fetch(ctx context.Context, req fetch.Request) (*fet
 }
 
 type fakeChapterRepo struct {
+	mu           sync.Mutex
 	cached       string
 	cachedOK     bool
 	savedIndex   int
@@ -837,11 +843,15 @@ func (r *fakeChapterRepo) SaveTitle(ctx context.Context, bookID string, chapterI
 	return nil
 }
 func (r *fakeChapterRepo) SaveContent(ctx context.Context, bookID string, chapterIndex int, content string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.savedIndex = chapterIndex
 	r.savedContent = content
 	return nil
 }
 func (r *fakeChapterRepo) GetContent(ctx context.Context, bookID string, chapterIndex int) (string, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.cached, r.cachedOK, nil
 }
 
@@ -1097,14 +1107,14 @@ func TestBuildContentFetchRequestEncodesFormBodyOnce(t *testing.T) {
 	}
 }
 
-// 显式设置了 Content-Type 时正文原样发送（R-053）。
+// 显式设置了 Content-Type 时 charset 选项仍然生效（S09-05）：body 统一按 UTF-8 表单编码。
 func TestBuildContentFetchRequestKeepsBodyWhenContentTypeSet(t *testing.T) {
 	req, err := buildContentFetchRequest(context.Background(), `https://site.example.test/api,{"method":"POST","headers":{"Content-Type":"text/plain"},"body":"a=1&b=中文"}`, testContentSource(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildContentFetchRequest() error = %v", err)
 	}
-	if got := string(req.Body); got != "a=1&b=中文" {
-		t.Fatalf("body = %q, want 原样正文", got)
+	if got := string(req.Body); got != "a=1&b=%E4%B8%AD%E6%96%87" {
+		t.Fatalf("body = %q, want charset-encoded body", got)
 	}
 	if req.Headers["Content-Type"] != "text/plain" {
 		t.Fatalf("content-type = %q", req.Headers["Content-Type"])
@@ -1163,5 +1173,147 @@ func TestContentServicePaginationTruncationFailsWithoutCache(t *testing.T) {
 	}
 	if chapters.savedContent != "" {
 		t.Fatalf("truncated chapter must not be cached, got %q", chapters.savedContent)
+	}
+}
+
+// S13-02：title 规则只对首页执行一次，分页末页的“上一页 下一页”类文本不得覆盖章节标题。
+func TestContentServiceTitleRuleOnlyAppliesToFirstPage(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.ReplaceRegex = ""
+	src.RuleContent.Value.Title = "h1@text"
+	chapter := testContentChapter()
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL:                       {URL: chapter.URL, Body: []byte(`<h1>第一章 真标题</h1><div class="content">P1</div><a class="next" href="/c/1p2">下一页</a>`)},
+		"https://site.example.test/c/1p2": {URL: "https://site.example.test/c/1p2", Body: []byte(`<h1>上一页 下一页</h1><div class="content">P2</div>`)},
+	}}
+	service := NewService(&fakeChapterRepo{}, fetcher, nil)
+
+	got, err := service.GetContent(context.Background(), Input{
+		Source:  src,
+		Book:    testContentBook(),
+		Chapter: chapter,
+	})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	if got.Chapter.Title != "第一章 真标题" {
+		t.Fatalf("chapter title = %q, want first-page title", got.Chapter.Title)
+	}
+	if !strings.Contains(got.Content, "P1") || !strings.Contains(got.Content, "P2") {
+		t.Fatalf("content = %q, want both pages", got.Content)
+	}
+}
+
+// S13-03：列表型 nextContentUrl 返回超过上限的 URL 时整章失败，不发起无界抓取。
+func TestContentServiceConcurrentPaginationEnforcesPageLimit(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.ReplaceRegex = ""
+	chapter := testContentChapter()
+	// 首页返回 101+ 个分页 URL（并发分支），超限即失败且不发抓取请求。
+	var links strings.Builder
+	for i := 0; i < 101; i++ {
+		fmt.Fprintf(&links, `<a class="next" href="/c/1p%d">p%d</a>`, i, i)
+	}
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL: {URL: chapter.URL, Body: []byte(`<div class="content">P1</div>` + links.String())},
+	}}
+	service := NewService(&fakeChapterRepo{}, fetcher, nil)
+
+	_, err := service.GetContent(context.Background(), Input{
+		Source:  src,
+		Book:    testContentBook(),
+		Chapter: chapter,
+	})
+	if !errors.Is(err, ErrPaginationTruncated) {
+		t.Fatalf("err = %v, want ErrPaginationTruncated", err)
+	}
+	if fetcher.calls != 1 {
+		t.Fatalf("fetch calls = %d, want only the first page", fetcher.calls)
+	}
+}
+
+// S13-05：同一章节的并发 GetContent 经 singleflight 合并，只执行一次抓取。
+func TestContentServiceSingleflightMergesConcurrentFetches(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.ReplaceRegex = ""
+	chapter := testContentChapter()
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL: {URL: chapter.URL, Body: []byte(`<div class="content">P1</div>`)},
+	}}
+	service := NewService(&fakeChapterRepo{}, fetcher, nil)
+
+	const n = 10
+	var wg sync.WaitGroup
+	results := make(chan Result, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := service.GetContent(context.Background(), Input{
+				Source:  src,
+				Book:    testContentBook(),
+				Chapter: chapter,
+			})
+			if err != nil {
+				t.Errorf("GetContent() error = %v", err)
+				return
+			}
+			results <- got
+		}()
+	}
+	wg.Wait()
+	close(results)
+	count := 0
+	for got := range results {
+		count++
+		if got.Content != "P1" {
+			t.Fatalf("content = %q, want P1", got.Content)
+		}
+	}
+	if count != n {
+		t.Fatalf("results = %d, want %d", count, n)
+	}
+	if fetcher.calls != 1 {
+		t.Fatalf("fetch calls = %d, want 1 (merged by singleflight)", fetcher.calls)
+	}
+}
+
+// S13-06：replaceRegex 应用前逐行 trim，应用后每行加“　　”全角缩进（对齐 Legado）。
+func TestContentServiceReplaceRegexAddsFullWidthIndent(t *testing.T) {
+	src := testContentSource()
+	src.RuleContent.Value.ReplaceRegex = "##广告##"
+	chapter := testContentChapter()
+	fetcher := &fakeContentFetcher{pages: map[string]fetch.Response{
+		chapter.URL: {URL: chapter.URL, Body: []byte(`<div class="content">第一段 广告
+第二段
+广告
+第三段</div>`)},
+	}}
+	service := NewService(&fakeChapterRepo{}, fetcher, nil)
+
+	got, err := service.GetContent(context.Background(), Input{
+		Source:  src,
+		Book:    testContentBook(),
+		Chapter: chapter,
+	})
+	if err != nil {
+		t.Fatalf("GetContent() error = %v", err)
+	}
+	want := "\u3000\u3000第一段\n\u3000\u3000第二段\n\u3000\u3000\n\u3000\u3000第三段"
+	if got.Content != want {
+		t.Fatalf("content = %q, want %q", got.Content, want)
+	}
+}
+
+// S13-08：正文含 "__READER_IMG_0__" 字面文本时不得被替换成图片 HTML。
+func TestNormalizeContentHTMLDoesNotReplaceLiteralPlaceholder(t *testing.T) {
+	content := `文本 __READER_IMG_0__ 结尾 <img src="https://site.example.test/a.png">`
+	got := normalizeContentHTML(content, "https://site.example.test/")
+	want := `文本 __READER_IMG_0__ 结尾 <img src="https://site.example.test/a.png">`
+	if got != want {
+		t.Fatalf("content = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "\x00") {
+		t.Fatalf("sentinel placeholder leaked into output: %q", got)
 	}
 }

@@ -46,12 +46,31 @@ type HTTPFetcher struct {
 
 	mu      sync.Mutex
 	clients map[routeKey]*http.Client
+	// transports 记录每个路由对应的 Transport，路由被淘汰时回收其空闲连接（S08-12）。
+	transports map[routeKey]*http.Transport
+	// clientOrder 记录 client 插入顺序，超出 maxRouteClients 时按最旧淘汰。
+	clientOrder []routeKey
 
 	// dnsCache 按 host 缓存 DNS 解析结果（TTL dnsCacheTTL），避免每条新连接重复解析（C-024/C-025）。
 	// 只缓存解析结果：每次拨号仍对当次使用的 IP 重新执行 checkIPs 校验，SSRF 语义不变。
 	dnsCacheMu sync.Mutex
 	dnsCache   map[string]dnsCacheEntry
+	// resolveInflight 合并同一 host 的并发解析（S08-11），避免缓存 miss 时重复发起 DNS 查询。
+	resolveInflight map[string]*resolveCall
 }
+
+// resolveCall 表示一次进行中的 DNS 解析；并发调用者共享同一结果。
+type resolveCall struct {
+	done chan struct{}
+	ips  []net.IP
+	err  error
+}
+
+// maxRouteClients 限制按路由缓存的客户端数量，防止代理路由组合无界增长（S08-12）。
+const maxRouteClients = 64
+
+// maxDNSCacheEntries 限制 DNS 缓存条目数量（S08-11）。
+const maxDNSCacheEntries = 1024
 
 type dnsCacheEntry struct {
 	ips       []net.IP
@@ -78,7 +97,7 @@ type routeKey struct {
 type Option func(*HTTPFetcher)
 
 func NewHTTPFetcher(opts ...Option) *HTTPFetcher {
-	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	// 传输层参数在 opts 应用后再确定（S08-02：dialer 超时须跟随 f.timeout）。
 	f := &HTTPFetcher{
 		timeout:          30 * time.Second,
 		maxRedirects:     5,
@@ -87,14 +106,21 @@ func NewHTTPFetcher(opts ...Option) *HTTPFetcher {
 		resolver: func(ctx context.Context, host string) ([]net.IP, error) {
 			return net.DefaultResolver.LookupIP(ctx, "ip", host)
 		},
-		dial:        dialer.DialContext,
-		clients:     map[routeKey]*http.Client{},
-		dnsCache:    map[string]dnsCacheEntry{},
-		rateLimiter: newSourceRateLimiter(),
+		clients:         map[routeKey]*http.Client{},
+		transports:      map[routeKey]*http.Transport{},
+		dnsCache:        map[string]dnsCacheEntry{},
+		resolveInflight: map[string]*resolveCall{},
+		rateLimiter:     newSourceRateLimiter(),
 	}
 	for _, opt := range opts {
 		opt(f)
 	}
+	dialTimeout := f.timeout
+	if dialTimeout <= 0 || dialTimeout > 30*time.Second {
+		dialTimeout = 30 * time.Second
+	}
+	dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+	f.dial = dialer.DialContext
 	return f
 }
 
@@ -182,6 +208,9 @@ func (f *HTTPFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Resp
 			if ctx.Err() != nil {
 				return nil, err
 			}
+			if !retryable(req, err) {
+				return nil, err
+			}
 			continue
 		}
 		lastResp = resp
@@ -194,6 +223,54 @@ func (f *HTTPFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.Resp
 		return lastResp, nil
 	}
 	return nil, lastErr
+}
+
+// errRequestSent 表示服务器可能已收到并处理请求；非幂等方法重试会造成重复提交。
+type errRequestSent struct {
+	underlying error
+}
+
+func (e *errRequestSent) Error() string {
+	if e.underlying != nil {
+		return e.underlying.Error()
+	}
+	return "request may have been sent"
+}
+
+func (e *errRequestSent) Unwrap() error { return e.underlying }
+
+// retryable 判断错误是否值得重试（S08-03）：非幂等方法（POST 等）在请求可能已发送时不重试，
+// 确定性错误（超限、被封禁、不支持的 scheme、重定向过多、非 2xx 状态）直接返回。
+func retryable(req fetch.Request, err error) bool {
+	method := req.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	if method != http.MethodGet && method != http.MethodHead && errors.As(err, new(*errRequestSent)) {
+		// 非幂等请求且连接可能已建立，重试有重复提交风险。
+		return false
+	}
+	if errors.Is(err, fetch.ErrBlocked) {
+		return false
+	}
+	// body 超限 / 重定向过多 / 不支持的 scheme 等确定性错误重试不会改变结果。
+	// 非 2xx 状态按 Legado newCallResponse 语义仍重试（existing 行为）。
+	var msg string
+	if errors.As(err, new(*errRequestSent)) {
+		msg = ""
+	} else {
+		msg = err.Error()
+	}
+	switch {
+	case strings.Contains(msg, "response body too large"),
+		strings.Contains(msg, "too many redirects"):
+		return false
+	}
+	// gzip 截断产生的 unexpected EOF：内容已达 maxBodyBytes，重试只会重复下载。
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return false
+	}
+	return true
 }
 
 // clientFor 按请求的代理 / DNS 固定配置返回缓存的 http.Client。
@@ -225,10 +302,11 @@ func (f *HTTPFetcher) clientFor(req fetch.Request) (*http.Client, error) {
 		key.pinIP = pinIP.String()
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if client, ok := f.clients[key]; ok {
+		f.mu.Unlock()
 		return client, nil
 	}
+	f.mu.Unlock()
 	transport := &http.Transport{
 		// 显式不读取 HTTP(S)_PROXY 环境变量，避免环境代理改变实际连接目标。
 		Proxy:             nil,
@@ -240,18 +318,58 @@ func (f *HTTPFetcher) clientFor(req fetch.Request) (*http.Client, error) {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: time.Second,
+		// 响应头独立超时，慢响应头不再占满整个 Client.Timeout（S08-01）。
+		ResponseHeaderTimeout: f.timeout,
 	}
 	if proxyURL != nil {
 		transport.Proxy = f.proxyFunc(proxyURL)
 	}
 	client := &http.Client{Transport: transport, Timeout: f.timeout, CheckRedirect: f.checkRedirect}
+	f.mu.Lock()
+	if existing, ok := f.clients[key]; ok {
+		// 并发下已由其他 goroutine 创建，回收本 transport 避免重复连接池。
+		f.mu.Unlock()
+		transport.CloseIdleConnections()
+		return existing, nil
+	}
 	f.clients[key] = client
+	f.transports[key] = transport
+	f.clientOrder = append(f.clientOrder, key)
+	// 超出容量上限时按最旧淘汰路由并回收其空闲连接（S08-12）。
+	for len(f.clientOrder) > maxRouteClients {
+		oldest := f.clientOrder[0]
+		f.clientOrder = f.clientOrder[1:]
+		if evicted, ok := f.transports[oldest]; ok {
+			evicted.CloseIdleConnections()
+			delete(f.transports, oldest)
+		}
+		delete(f.clients, oldest)
+	}
+	f.mu.Unlock()
 	return client, nil
+}
+
+// CloseIdleConnections 立即回收所有路由的空闲持久连接（S03-15），供校验任务收尾调用。
+func (f *HTTPFetcher) CloseIdleConnections() {
+	f.mu.Lock()
+	transports := make([]*http.Transport, 0, len(f.transports))
+	for _, t := range f.transports {
+		transports = append(transports, t)
+	}
+	f.mu.Unlock()
+	for _, t := range transports {
+		t.CloseIdleConnections()
+	}
 }
 
 func (f *HTTPFetcher) checkRedirect(_ *http.Request, via []*http.Request) error {
 	if len(via) >= f.maxRedirects {
 		return errors.New("too many redirects")
+	}
+	// 重定向目标 scheme 必须仍为 http/https（S08-13），防止回落到 file:/data:/ftp: 等。
+	last := via[len(via)-1]
+	if last != nil && last.URL != nil && last.URL.Scheme != "http" && last.URL.Scheme != "https" {
+		return fmt.Errorf("%w: unsupported redirect scheme", fetch.ErrBlocked)
 	}
 	// 重定向目标会重新拨号，SSRF 校验由 dialContext / proxyFunc 完成。
 	return nil
@@ -327,6 +445,7 @@ func (f *HTTPFetcher) allowedIPs(ctx context.Context, host string) ([]net.IP, er
 }
 
 // cachedResolve 返回主机的 DNS 解析结果；命中未过期缓存则不再次解析。
+// 同一 host 的并发解析通过 in-flight 合并（S08-11），只发起一次 resolver 调用。
 // 解析失败或结果为空时不写缓存，并把原始错误（含 context.Canceled）返回给调用方，避免吞掉 DNS 具体原因。
 func (f *HTTPFetcher) cachedResolve(ctx context.Context, host string) ([]net.IP, error) {
 	now := time.Now()
@@ -335,18 +454,50 @@ func (f *HTTPFetcher) cachedResolve(ctx context.Context, host string) ([]net.IP,
 		f.dnsCacheMu.Unlock()
 		return entry.ips, nil
 	}
+	if call, ok := f.resolveInflight[host]; ok {
+		f.dnsCacheMu.Unlock()
+		select {
+		case <-call.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if call.err != nil {
+			return nil, call.err
+		}
+		return call.ips, nil
+	}
+	call := &resolveCall{done: make(chan struct{})}
+	f.resolveInflight[host] = call
 	f.dnsCacheMu.Unlock()
+	defer func() {
+		f.dnsCacheMu.Lock()
+		delete(f.resolveInflight, host)
+		f.dnsCacheMu.Unlock()
+	}()
 	resolved, err := f.resolver(ctx, host)
 	if err != nil {
 		// 解析失败不缓存，保持原有错误路径。
+		call.err = err
+		close(call.done)
 		return nil, err
 	}
 	if len(resolved) == 0 {
-		return nil, fmt.Errorf("no addresses for host %s", host)
+		call.err = fmt.Errorf("no addresses for host %s", host)
+		close(call.done)
+		return nil, call.err
 	}
 	f.dnsCacheMu.Lock()
+	// 超出容量上限时淘汰最旧条目（S08-11：map 无界增长）。
+	if len(f.dnsCache) >= maxDNSCacheEntries {
+		for k := range f.dnsCache {
+			delete(f.dnsCache, k)
+			break
+		}
+	}
 	f.dnsCache[host] = dnsCacheEntry{ips: resolved, expiresAt: now.Add(dnsCacheTTL)}
 	f.dnsCacheMu.Unlock()
+	call.ips = resolved
+	close(call.done)
 	return resolved, nil
 }
 
@@ -459,38 +610,61 @@ func (f *HTTPFetcher) fetchOnce(ctx context.Context, client *http.Client, req fe
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, err
+		// 标记请求可能已发送（连接/TLS 已建立），供重试幂等判断使用（S08-03）。
+		return nil, &errRequestSent{underlying: err}
 	}
 	defer resp.Body.Close()
-	reader := resp.Body
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		gzipReader, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-		defer gzipReader.Close()
-		reader = gzipReader
+	rawBody, readErr := io.ReadAll(io.LimitReader(resp.Body, f.maxBodyBytes+1))
+	if readErr != nil {
+		return nil, readErr
 	}
-	respBody, err := io.ReadAll(io.LimitReader(reader, f.maxBodyBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if resp.Header.Get("Content-Encoding") != "gzip" && hasGzipMagic(respBody) {
-		gzipReader, err := gzip.NewReader(bytes.NewReader(respBody))
-		if err != nil {
-			return nil, err
-		}
-		respBody, err = io.ReadAll(io.LimitReader(gzipReader, f.maxBodyBytes+1))
-		_ = gzipReader.Close()
-		if err != nil {
-			return nil, err
-		}
-	}
-	if int64(len(respBody)) > f.maxBodyBytes {
+	if int64(len(rawBody)) > f.maxBodyBytes {
+		// 超限是确定性错误，不重试（S08-05）。
 		return nil, errors.New("response body too large")
 	}
+	respBody := rawBody
+	decodeGzip := func(data []byte) ([]byte, error) {
+		gzipReader, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			// 非 gzip magic 或损坏头部：与 Legado 一致按原文本处理，不报错（S08-04）。
+			return data, nil
+		}
+		out, err := io.ReadAll(io.LimitReader(gzipReader, f.maxBodyBytes+1))
+		_ = gzipReader.Close()
+		if err != nil && int64(len(out)) <= f.maxBodyBytes {
+			// 解压中途出错（非超限），按原始错误返回。
+			return nil, err
+		}
+		return out, nil
+	}
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		decoded, err := decodeGzip(rawBody)
+		if err != nil {
+			return nil, err
+		}
+		respBody = decoded
+		if int64(len(respBody)) > f.maxBodyBytes {
+			return nil, errors.New("response body too large")
+		}
+	} else if hasGzipMagic(rawBody) {
+		decoded, err := decodeGzip(rawBody)
+		if err != nil {
+			return nil, err
+		}
+		respBody = decoded
+		if int64(len(respBody)) > f.maxBodyBytes {
+			return nil, errors.New("response body too large")
+		}
+	}
 	if !req.EncodeBodyAsHex {
-		if decoded, err := decodeTextResponseBody(respBody, resp.Header.Get("Content-Type"), f.maxBodyBytes); err == nil {
+		if decoded, err := decodeTextResponseBody(respBody, resp.Header.Get("Content-Type"), f.maxBodyBytes); err != nil {
+			if strings.Contains(err.Error(), "response body too large") {
+				// 超限错误必须向上传播，不得静默透传原始截断字节（S08-15）。
+				return nil, err
+			}
+			// 真正的编码错误：降级为原始字节并告警（S08-15）。
+			slog.WarnContext(ctx, "charset decode failed, falling back to raw body", "error", err)
+		} else {
 			respBody = decoded
 		}
 	}
@@ -637,11 +811,16 @@ func sniffCharset(body []byte) string {
 	return label
 }
 
+// mergeQuery 合并查询参数；不修改调用方传入的 base（S08-09），顺序按 base 原序 + extra 新键稳定排序。
 func mergeQuery(base url.Values, extra map[string]string) string {
-	for key, value := range extra {
-		base.Set(key, value)
+	merged := make(url.Values, len(base)+len(extra))
+	for key, values := range base {
+		merged[key] = append([]string(nil), values...)
 	}
-	return base.Encode()
+	for key, value := range extra {
+		merged.Set(key, value)
+	}
+	return merged.Encode()
 }
 
 func decodeDataURI(raw string) ([]byte, error) {

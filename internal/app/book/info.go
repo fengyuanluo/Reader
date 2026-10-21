@@ -55,7 +55,11 @@ func (s *InfoService) RefreshInfo(ctx context.Context, input InfoInput) (book.Bo
 	if b.OriginName == "" {
 		b.OriginName = src.BookSourceName
 	}
-	b.Type = src.BookSourceType
+	// 对齐 Legado BookInfo.kt:47-115：analyzeBookInfo 从不修改 book.type——类型只在 BookList
+	// 添加书籍时设置一次（S12-04），用户之后设定的类型（音频/webFile/本地书）不被刷新冲掉。
+	if b.Type == 0 {
+		b.Type = src.BookSourceType
+	}
 	if b.OriginOrder == 0 {
 		b.OriginOrder = src.CustomOrder
 	}
@@ -201,7 +205,9 @@ func PreviewSearchBookFromInfo(ctx context.Context, src *source.BookSource, redi
 	if b.OriginName == "" {
 		b.OriginName = src.BookSourceName
 	}
-	if err := parseInfo(ctx, src, &b, b.BookURL, redirectURL, body, true, scriptRuntime); err != nil {
+	// 对齐 Legado BookList.kt:175-183：搜索/发现回退到详情页解析时 canReName=false（S12-09），
+	// 书源声明了 canReName 也只用解析结果填补空缺，不覆盖搜索结果已有的 name/author。
+	if err := parseInfo(ctx, src, &b, b.BookURL, redirectURL, body, false, scriptRuntime); err != nil {
 		return seed, err
 	}
 	seed.BookURL = b.BookURL

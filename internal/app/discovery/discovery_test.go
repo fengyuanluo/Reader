@@ -534,7 +534,6 @@ func (f *blockingFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.
 		f.max = f.running
 	}
 	f.mu.Unlock()
-	time.Sleep(10 * time.Millisecond)
 	f.mu.Lock()
 	f.running--
 	f.mu.Unlock()
@@ -545,4 +544,133 @@ func (f *blockingFetcher) maxConcurrent() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.max
+}
+
+// S14-09：`<js>` 结束检测不要求完整 </js>，从第 4 字节后最后一个 '<' 截取（对齐 Legado
+// BookSourceExtensions.kt:60）；JS 失败返回 ERROR 类目，分类页仍可见错误信息而非源失败。
+func TestCategoriesParsesJSScriptWithGarbageTail(t *testing.T) {
+	src := &source.BookSource{
+		SourceID:       "s1",
+		BookSourceURL:  "https://source.example.test",
+		BookSourceName: "S1",
+		ExploreURL:     `<js>var r = '[{"title":"玄幻","url":"/xuanhuan"}]'; r<//garbage>`,
+		EnabledExplore: true,
+	}
+	runtime := script.NewRuntime(script.Policy{Timeout: time.Second, SourceKey: src.BookSourceURL})
+	service := NewService(&fakeSourceRepo{items: []*source.BookSource{src}}, fakeFetcher{}, runtime)
+
+	categories, err := service.Categories(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("Categories() error = %v", err)
+	}
+	if len(categories) != 1 || categories[0].Title != "玄幻" || categories[0].URL != "/xuanhuan" {
+		t.Fatalf("categories = %#v", categories)
+	}
+}
+
+// S14-09：JS 抛错的源 Categories 返回非空 ERROR 类目。
+func TestCategoriesReturnsErrorCategoryWhenJSFails(t *testing.T) {
+	src := &source.BookSource{
+		SourceID:       "s1",
+		BookSourceURL:  "https://source.example.test",
+		BookSourceName: "S1",
+		ExploreURL:     `@js:throw new Error("boom")`,
+		EnabledExplore: true,
+	}
+	runtime := script.NewRuntime(script.Policy{Timeout: time.Second, SourceKey: src.BookSourceURL})
+	service := NewService(&fakeSourceRepo{items: []*source.BookSource{src}}, fakeFetcher{}, runtime)
+
+	categories, err := service.Categories(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("Categories() error = %v, want nil (ERROR category instead)", err)
+	}
+	if len(categories) != 1 || !strings.HasPrefix(categories[0].Title, "ERROR:") {
+		t.Fatalf("categories = %#v, want ERROR category", categories)
+	}
+}
+
+// S14-10：URL 为空的类目不充当 URL，不把中文类目名当 URL 发起 fetch。
+func TestDiscoverDoesNotUseCategoryTitleAsURL(t *testing.T) {
+	src := &source.BookSource{
+		SourceID:       "s1",
+		BookSourceURL:  "https://source.example.test/base/",
+		BookSourceName: "S1",
+		ExploreURL:     "玄幻::https://source.example.test/list",
+		EnabledExplore: true,
+		RuleExplore: rule.Flexible[rule.ExploreRule]{Value: &rule.ExploreRule{
+			BookList: ".item",
+			Name:     ".name@text",
+			Author:   ".author@text",
+			BookURL:  ".name@href",
+		}},
+	}
+	lastURL := ""
+	fetcher := fakeFetcher{body: `<div class="item"><a class="name" href="/book/1">发现书</a><span class="author">作者</span></div>`, url: "https://source.example.test/list", lastURL: &lastURL}
+	service := NewService(&fakeSourceRepo{items: []*source.BookSource{src}}, fetcher, nil)
+
+	result, err := service.Discover(context.Background(), Input{SourceIDs: []string{"s1"}, Page: 1})
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if lastURL != "https://source.example.test/list" {
+		t.Fatalf("fetched URL = %q, want category URL", lastURL)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+}
+
+// S14-10：JS 类目并发首次调用单飞——同一脚本只执行一次（对齐 Legado per-source Mutex）。
+func TestCategoriesSingleFlightsJSConcurrentCalls(t *testing.T) {
+	src := countingExploreSource()
+	runtime := script.NewRuntime(script.Policy{Timeout: time.Second, SourceKey: src.BookSourceURL})
+	service := NewService(&fakeSourceRepo{items: []*source.BookSource{src}}, fakeFetcher{}, runtime)
+
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := service.Categories(context.Background(), "s1"); err != nil {
+				t.Errorf("Categories() error = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := exploreRunCount(runtime, src); got != "1" {
+		t.Fatalf("script runs = %s, want 1 (single-flight)", got)
+	}
+}
+
+// S14-07：parseBookList 复用单个 itemAnalyzer，逐元素重绑定书籍；JS 规则的 book 绑定
+// 与基线变量恢复仍要正确（旧实现在变量规则下逐元素新建 Analyzer）。
+func TestDiscoverRebindsBookVariablesPerElement(t *testing.T) {
+	src := &source.BookSource{
+		SourceID:       "s1",
+		BookSourceURL:  "https://source.example.test/base/",
+		BookSourceName: "S1",
+		ExploreURL:     "https://source.example.test/list",
+		EnabledExplore: true,
+		RuleExplore: rule.Flexible[rule.ExploreRule]{Value: &rule.ExploreRule{
+			BookList: "$.data[*]",
+			Name:     `@js:book.putVariable("bid", result.id); result.name`,
+			Author:   "$.author",
+			BookURL:  `https://source.example.test/book/{{java.get('bid')}}`,
+		}},
+	}
+	service := NewService(&fakeSourceRepo{items: []*source.BookSource{src}}, fakeFetcher{
+		body: `{"data":[{"id":"88","name":"发现书","author":"作者"},{"id":"99","name":"第二书","author":"作者2"}]}`,
+		url:  "https://source.example.test/list",
+	}, script.NewRuntime(script.Policy{Timeout: time.Second}))
+
+	result, err := service.Discover(context.Background(), Input{SourceIDs: []string{"s1"}, Page: 1})
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	if result.Items[0].BookURL != "https://source.example.test/book/88" || result.Items[1].BookURL != "https://source.example.test/book/99" {
+		t.Fatalf("book variable not rebound per element: %#v", result.Items)
+	}
 }

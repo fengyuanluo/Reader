@@ -19,21 +19,23 @@ import (
 
 func bookSourceFromDTO(dto generated.BookSource, raw json.RawMessage) (*source.BookSource, error) {
 	src := &source.BookSource{
-		SourceID:         dto.SourceId,
-		BookSourceURL:    dto.BookSourceUrl,
-		BookSourceName:   dto.BookSourceName,
-		BookSourceType:   dto.BookSourceType,
-		CustomOrder:      dto.CustomOrder,
-		Enabled:          dto.Enabled,
-		EnabledExplore:   dto.EnabledExplore,
-		EnabledCookieJar: dto.EnabledCookieJar,
-		LastUpdateTime:   dto.LastUpdateTime,
-		RuleExplore:      flexibleFromRuleObject[rule.ExploreRule](dto.RuleExplore),
-		RuleSearch:       flexibleFromRuleObject[rule.SearchRule](dto.RuleSearch),
-		RuleBookInfo:     flexibleFromRuleObject[rule.BookInfoRule](dto.RuleBookInfo),
-		RuleToc:          flexibleFromRuleObject[rule.TocRule](dto.RuleToc),
-		RuleContent:      flexibleFromRuleObject[rule.ContentRule](dto.RuleContent),
+		SourceID:       dto.SourceId,
+		BookSourceURL:  dto.BookSourceUrl,
+		BookSourceName: dto.BookSourceName,
+		BookSourceType: dto.BookSourceType,
+		CustomOrder:    dto.CustomOrder,
+		Enabled:        dto.Enabled,
+		EnabledExplore: dto.EnabledExplore,
+		RuleExplore:    flexibleFromRuleObject[rule.ExploreRule](dto.RuleExplore),
+		RuleSearch:     flexibleFromRuleObject[rule.SearchRule](dto.RuleSearch),
+		RuleBookInfo:   flexibleFromRuleObject[rule.BookInfoRule](dto.RuleBookInfo),
+		RuleToc:        flexibleFromRuleObject[rule.TocRule](dto.RuleToc),
+		RuleContent:    flexibleFromRuleObject[rule.ContentRule](dto.RuleContent),
 	}
+	// enabledCookieJar/lastUpdateTime 现为可选字段（省略按 Legado 默认值处理），
+	// 先用零值，Normalize/ApplyLegadoDefaults 会按缺失语义回填。
+	src.EnabledCookieJar = boolValue(dto.EnabledCookieJar)
+	src.LastUpdateTime = int64Value(dto.LastUpdateTime)
 	if dto.EventListener != nil {
 		src.EventListener = *dto.EventListener
 	}
@@ -142,10 +144,10 @@ func mapBookSource(src *source.BookSource) generated.BookSource {
 		CustomOrder:      src.CustomOrder,
 		Enabled:          src.Enabled,
 		EnabledExplore:   src.EnabledExplore,
-		EnabledCookieJar: src.EnabledCookieJar,
+		EnabledCookieJar: boolPtr(src.EnabledCookieJar),
 		EventListener:    boolPtr(src.EventListener),
 		CustomButton:     boolPtr(src.CustomButton),
-		LastUpdateTime:   src.LastUpdateTime,
+		LastUpdateTime:   int64Ptr(src.LastUpdateTime),
 		RuleExplore:      ruleObjectFromFlexible(src.RuleExplore),
 		RuleSearch:       ruleObjectFromFlexible(src.RuleSearch),
 		RuleBookInfo:     ruleObjectFromFlexible(src.RuleBookInfo),
@@ -359,6 +361,20 @@ func ruleObjectFromFlexible[T any](flex rule.Flexible[T]) *generated.RuleObject 
 func stringValue(value *string) string {
 	if value == nil {
 		return ""
+	}
+	return *value
+}
+
+func boolValue(value *bool) bool {
+	if value == nil {
+		return false
+	}
+	return *value
+}
+
+func int64Value(value *int64) int64 {
+	if value == nil {
+		return 0
 	}
 	return *value
 }

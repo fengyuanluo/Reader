@@ -144,3 +144,75 @@ checked + "|" + String(cache.getFromMemory("temporary"))
 		t.Fatalf("body = %q, want %q", got.Body, want)
 	}
 }
+
+// TestScriptIntegrationLoginCheckNilRuntimeSkipsScript 验证 runtime 为 nil 时 LoginCheck
+// 原样返回响应而非 panic，与 HeaderMap 的 nil 守卫语义一致（S15-03）。
+func TestScriptIntegrationLoginCheckNilRuntimeSkipsScript(t *testing.T) {
+	integration := NewScriptIntegration(nil)
+	src := &domainsource.BookSource{
+		BookSourceURL: "https://source.example.test",
+		LoginCheckJS:  "result.body()",
+	}
+	resp := &fetch.Response{StatusCode: http.StatusOK, Body: []byte("body")}
+	got, err := integration.LoginCheck(context.Background(), src, resp)
+	if err != nil {
+		t.Fatalf("LoginCheck() error = %v", err)
+	}
+	if string(got.Body) != "body" {
+		t.Fatalf("body = %q, want original body", got.Body)
+	}
+}
+
+// TestScriptIntegrationLoginRejectsPlainURLLoginUrl 验证 loginUrl 为纯 URL 且 loginUi 非空时
+// 返回 ErrUnsupportedLoginFlow 而非把 URL 当脚本文本执行（S15-04）。
+func TestScriptIntegrationLoginRejectsPlainURLLoginUrl(t *testing.T) {
+	integration := NewScriptIntegration(script.NewRuntime(script.Policy{Timeout: time.Second}))
+	src := &domainsource.BookSource{
+		BookSourceURL:  "https://source.example.test",
+		BookSourceName: "URL Login Source",
+		LoginURL:       "https://login.example.test/signin",
+		LoginUI:        `[{"name":"username","type":"text"}]`,
+	}
+	if err := src.Normalize(); err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	err := integration.Login(context.Background(), src, map[string]string{"username": "u"})
+	if !errors.Is(err, ErrUnsupportedLoginFlow) {
+		t.Fatalf("Login() error = %v, want ErrUnsupportedLoginFlow", err)
+	}
+}
+
+// TestScriptIntegrationLoginAcceptsBareJSText 验证无前缀的裸 JS loginUrl 仍按脚本执行（Legado 语义）。
+func TestScriptIntegrationLoginAcceptsBareJSText(t *testing.T) {
+	integration := NewScriptIntegration(script.NewRuntime(script.Policy{Timeout: time.Second}))
+	src := &domainsource.BookSource{
+		BookSourceURL:  "https://source.example.test",
+		BookSourceName: "Bare JS Source",
+		LoginURL:       `var ok = 1;`,
+		LoginUI:        `[{"name":"username","type":"text"}]`,
+	}
+	if err := src.Normalize(); err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	// 裸 JS 没有 login 函数，应得到脚本层面的错误而非 ErrUnsupportedLoginFlow。
+	err := integration.Login(context.Background(), src, map[string]string{"username": "u"})
+	if errors.Is(err, ErrUnsupportedLoginFlow) {
+		t.Fatalf("Login() error = %v, bare JS should be executed as script", err)
+	}
+}
+
+// TestScriptIntegrationLooseHeaderKeepsCase 验证 loose（非严格 JSON）头对象经
+// urlrule.ParseHeaderObject 解析后头名保持原大小写（User-Agent 等），后键覆盖前键。
+func TestScriptIntegrationLooseHeaderKeepsCase(t *testing.T) {
+	integration := NewScriptIntegration(script.NewRuntime(script.Policy{Timeout: time.Second}))
+	headers, err := integration.HeaderMap(context.Background(), &domainsource.BookSource{Header: `@js:JSON.parse('{"User-Agent":"Reader","X-Token":"first","X-Token":"second"}')`})
+	if err != nil {
+		t.Fatalf("HeaderMap() error = %v", err)
+	}
+	if headers["User-Agent"] != "Reader" {
+		t.Fatalf("headers = %#v, want User-Agent kept in original case", headers)
+	}
+	if headers["X-Token"] != "second" {
+		t.Fatalf("headers = %#v, want later duplicate key to win", headers)
+	}
+}

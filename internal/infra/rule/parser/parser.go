@@ -41,10 +41,21 @@ func Split(rule string, separators ...string) (Chain, error) {
 		r, width := nextRune(rule, i)
 		current.WriteRune(r)
 		i += width
+		// 引号外 `\` 与 validateBalanced 对齐：转义下一 rune（S06-11：`a\&&b` 不切分）。
+		if r == '\\' {
+			_, escapedWidth := nextRune(rule, i)
+			current.WriteString(rule[i : i+escapedWidth])
+			i += escapedWidth
+			continue
+		}
 		if r == '\'' || r == '"' {
 			end, quoted, err := consumeQuoted(rule, i, r)
 			if err != nil {
-				return Chain{}, err
+				// S07-04：未闭合引号降级为字面量继续（对齐 Legado RuleAnalyzer 容错），
+				// 不再让整条选择器链失败。
+				current.WriteString(quoted)
+				i = end
+				continue
 			}
 			current.WriteString(quoted)
 			i = end
@@ -53,10 +64,13 @@ func Split(rule string, separators ...string) (Chain, error) {
 		if r == '(' || r == '[' || r == '{' {
 			end, balanced, err := consumeBalanced(rule, i, r, closeFor(r))
 			if err != nil {
-				return Chain{}, err
+				// 平衡组未闭合时按字面量继续消费剩余文本（对齐 Legado 容错）。
+				current.WriteString(balanced)
+				i = end
+			} else {
+				current.WriteString(balanced)
+				i = end
 			}
-			current.WriteString(balanced)
-			i = end
 		}
 	}
 	parts = append(parts, Step{Raw: strings.TrimSpace(current.String())})
@@ -94,7 +108,8 @@ func validateBalanced(rule string) error {
 		if r == '\'' || r == '"' {
 			end, _, err := consumeQuoted(rule, i, r)
 			if err != nil {
-				return err
+				// S07-04：未闭合引号容错继续（对齐 Legado RuleAnalyzer），仅平衡括号校验失败报错。
+				continue
 			}
 			i = end
 			continue

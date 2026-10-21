@@ -502,9 +502,29 @@ func TestBuildSearchRequestAcceptsWebJSURLOption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSearchRequest() error = %v", err)
 	}
-	// webJs 只接受不生效：webView 生效，webJs 不写入 BodyJS。
-	if !req.WebViewFallback || req.BodyJS != "" {
+	// 对齐 Legado AnalyzeUrl.kt：webJs 只在 useWebView 分支执行——webView:true 时 webJs 生效（S07-09）。
+	if !req.WebViewFallback || req.BodyJS != "document.body.innerText" {
 		t.Fatalf("request = %#v", req)
+	}
+	// 未声明 webView 时 webJs 完全不生效，丢弃 BodyJS。
+	noWebView := searchTestSource()
+	noWebView.SearchURL = `https://example.test/search,{"webJs":"document.body.innerText"}`
+	reqNoWebView, err := buildSearchRequest(context.Background(), nil, noWebView, "斗破", 1)
+	if err != nil {
+		t.Fatalf("buildSearchRequest() error = %v", err)
+	}
+	if reqNoWebView.WebViewFallback || reqNoWebView.BodyJS != "" {
+		t.Fatalf("request without webView = %#v", reqNoWebView)
+	}
+	// webView:false 时 webJs 同样不生效。
+	falseWebView := searchTestSource()
+	falseWebView.SearchURL = `https://example.test/search,{"webView":false,"webJs":"document.body.innerText"}`
+	reqFalse, err := buildSearchRequest(context.Background(), nil, falseWebView, "斗破", 1)
+	if err != nil {
+		t.Fatalf("buildSearchRequest() error = %v", err)
+	}
+	if reqFalse.WebViewFallback || reqFalse.BodyJS != "" {
+		t.Fatalf("request with webView false = %#v", reqFalse)
 	}
 }
 
@@ -940,11 +960,15 @@ func TestSingleSourceSearchFormatsFieldsLikeLegado(t *testing.T) {
 
 func TestSingleSourceSearchRespectsLimiterGlobalLimit(t *testing.T) {
 	src := searchTestSource()
-	fetcher := &blockingFetcher{resp: &fetch.Response{
-		StatusCode: 200,
-		URL:        "https://example.test/search?q=斗破&page=1",
-		Body:       []byte(`<div class="book"><a class="name" href="/b/1">斗破苍穹</a><span class="author">天蚕土豆</span></div>`),
-	}}
+	fetcher := &blockingFetcher{
+		resp: &fetch.Response{
+			StatusCode: 200,
+			URL:        "https://example.test/search?q=斗破&page=1",
+			Body:       []byte(`<div class="book"><a class="name" href="/b/1">斗破苍穹</a><span class="author">天蚕土豆</span></div>`),
+		},
+		barrier: make(chan struct{}),
+		once:    &sync.Once{},
+	}
 	searcher := NewSingleSourceSearcher(fetcher, nil).WithLimiter(ratelimit.New(ratelimit.Options{Global: 1}))
 
 	var wg sync.WaitGroup
@@ -957,6 +981,17 @@ func TestSingleSourceSearchRespectsLimiterGlobalLimit(t *testing.T) {
 			}
 		}()
 	}
+	// 两个请求都到达 barrier（第二个会因限流被阻塞在 Acquire，单次放开即可观察串行化）。
+	deadline := time.After(5 * time.Second)
+	for fetcher.maxConcurrent() < 1 {
+		select {
+		case <-deadline:
+			t.Fatal("no fetch reached barrier")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	close(fetcher.barrier)
 	wg.Wait()
 	if max := fetcher.maxConcurrent(); max > 1 {
 		t.Fatalf("max concurrent fetches = %d, want <= 1", max)
@@ -964,8 +999,12 @@ func TestSingleSourceSearchRespectsLimiterGlobalLimit(t *testing.T) {
 }
 
 // blockingFetcher 记录同时进行的抓取数，用于验证限流器确实生效。
+// Fetch 用 barrier 让并发爬升与调度无关：先到 barrier 再返回（S17-06，避免固定 sleep flaky）。
 type blockingFetcher struct {
 	resp *fetch.Response
+
+	barrier chan struct{}
+	once    *sync.Once
 
 	mu      sync.Mutex
 	running int
@@ -979,7 +1018,7 @@ func (f *blockingFetcher) Fetch(ctx context.Context, req fetch.Request) (*fetch.
 		f.max = f.running
 	}
 	f.mu.Unlock()
-	time.Sleep(10 * time.Millisecond)
+	<-f.barrier
 	f.mu.Lock()
 	f.running--
 	f.mu.Unlock()
@@ -1047,8 +1086,10 @@ func TestBuildSearchRequestKeepsBodyWithExplicitContentType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSearchRequest() error = %v", err)
 	}
-	if string(req.Body) != "a=1&b=斗破" {
-		t.Fatalf("body = %q, want raw body", string(req.Body))
+	// 对齐 Legado AnalyzeUrl：显式 Content-Type 时保留该头，body 由 Build 统一按 charset 选项
+	// 表单编码（S09-05）；无 charset 选项时按 URL percent 编码（urlencode 默认）。
+	if string(req.Body) != "a=1&b=%E6%96%97%E7%A0%B4" {
+		t.Fatalf("body = %q, want form-encoded body", string(req.Body))
 	}
 	if req.Headers["Content-Type"] != "text/plain" {
 		t.Fatalf("headers = %#v", req.Headers)
@@ -1077,8 +1118,9 @@ func TestBuildSearchRequestHexEncodingForTypeKeyPresence(t *testing.T) {
 		option string
 		want   bool
 	}{
-		{`{"type":""}`, true},
+		{`{"type":""}`, false},
 		{`{"type":null}`, false},
+		{`{"type":"   "}`, false},
 		{`{"type":123}`, true},
 		{`{"type":"x"}`, true},
 	}
@@ -1094,5 +1136,89 @@ func TestBuildSearchRequestHexEncodingForTypeKeyPresence(t *testing.T) {
 		if req.EncodeBodyAsHex != tt.want {
 			t.Fatalf("option %s: EncodeBodyAsHex = %v, want %v", tt.option, req.EncodeBodyAsHex, tt.want)
 		}
+	}
+}
+
+// TestSingleSourceSearchBookURLPatternNoStubOnParseFailure 验证 bookUrlPattern 命中但解析失败
+// （无 ruleBookInfo）或 name 为空时返回空结果而非空名 stub 条目（S02-01，对齐 Legado BookList.kt）。
+func TestSingleSourceSearchBookURLPatternNoStubOnParseFailure(t *testing.T) {
+	src := searchTestSource()
+	src.BookURLPattern = `https://example\.test/book/\d+`
+	// 无 ruleBookInfo 时 PreviewSearchBookFromInfo 返回 ErrBookInfoRuleMissing，应返回空结果。
+	src.RuleBookInfo = rule.Flexible[rule.BookInfoRule]{}
+	fetcher := fakeFetcher{resp: &fetch.Response{StatusCode: 200, URL: "https://example.test/book/1", Body: []byte("<html></html>")}}
+	searcher := NewSingleSourceSearcher(fetcher, nil)
+
+	books, err := searcher.Search(context.Background(), SearchInput{Source: src, Keyword: "斗破", Page: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("books = %#v, want empty (no nameless stub)", books)
+	}
+}
+
+// TestSingleSourceSearchDedupesByWholeObject 验证单源去重按 bookUrl+name+author 对象级去重（S02-09），
+// bookUrl 相同但 name 不同的条目保留，与 Legado LinkedHashSet 语义一致。
+func TestSingleSourceSearchDedupesByWholeObject(t *testing.T) {
+	src := searchTestSource()
+	fetcher := fakeFetcher{resp: &fetch.Response{
+		StatusCode: 200,
+		URL:        "https://example.test/search?q=书&page=1",
+		Body: []byte(`<div class="book"><a class="name" href="/b/1">书一</a></div>
+			<div class="book"><a class="name" href="/b/1">书二</a></div>
+			<div class="book"><a class="name" href="/b/1">书一</a></div>`),
+	}}
+	searcher := NewSingleSourceSearcher(fetcher, nil)
+
+	books, err := searcher.Search(context.Background(), SearchInput{Source: src, Keyword: "书", Page: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(books) != 2 {
+		t.Fatalf("books = %#v, want 2 (same bookUrl+name deduped, different names kept)", books)
+	}
+	if books[0].Name != "书一" || books[1].Name != "书二" {
+		t.Fatalf("books = %#v", books)
+	}
+}
+
+// TestRenderSearchURLTrimsTrailingSlashConsistently 验证 {{source.key}} 与 {{source.bookSourceUrl}}
+// 尾斜杠处理一致（S02-11），书源 URL 以 / 结尾时不拼出双斜杠。
+func TestRenderSearchURLTrimsTrailingSlashConsistently(t *testing.T) {
+	src := searchTestSource()
+	src.BookSourceURL = "https://example.test/base/"
+	src.SearchURL = "{{source.key}}/search?q={{key}}&page={{page}}"
+	withKey, err := renderSearchURL(context.Background(), nil, src, "斗破", 1)
+	if err != nil {
+		t.Fatalf("renderSearchURL(key) error = %v", err)
+	}
+	src.SearchURL = "{{source.bookSourceUrl}}/search?q={{key}}&page={{page}}"
+	withURL, err := renderSearchURL(context.Background(), nil, src, "斗破", 1)
+	if err != nil {
+		t.Fatalf("renderSearchURL(bookSourceUrl) error = %v", err)
+	}
+	if withKey != withURL {
+		t.Fatalf("inconsistent base: key=%q bookSourceUrl=%q", withKey, withURL)
+	}
+	if strings.Contains(withKey, "//search") {
+		t.Fatalf("double slash in %q", withKey)
+	}
+}
+
+// TestBuildSearchRequestKeepsNonOptionBuildErrors 验证非 URL 选项类 Build 错误不再挂
+// ErrUnsupportedSearchURL（S02-06），错误分类不失真。
+func TestBuildSearchRequestKeepsNonOptionBuildErrors(t *testing.T) {
+	src := searchTestSource()
+	// searchUrl 带不支持的 URL 选项仍报 ErrUnsupportedSearchURL。
+	src.SearchURL = `https://example.test,{"foo":1}`
+	_, err := buildSearchRequest(context.Background(), nil, src, "斗破", 1)
+	if !errors.Is(err, ErrUnsupportedSearchURL) {
+		t.Fatalf("unsupported option error = %v, want ErrUnsupportedSearchURL", err)
+	}
+	// 普通 URL（无脚本无选项）不报 ErrUnsupportedSearchURL。
+	src.SearchURL = "https://example.test/search?q={{key}}"
+	if _, err := buildSearchRequest(context.Background(), nil, src, "斗破", 1); err != nil {
+		t.Fatalf("plain url error = %v, want nil", err)
 	}
 }

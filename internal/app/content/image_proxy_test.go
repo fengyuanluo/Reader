@@ -83,7 +83,7 @@ func TestImageProxySavesFetchedImageToCache(t *testing.T) {
 	if _, err := proxy.Fetch(context.Background(), ImageProxyInput{URL: "https://img.example.test/cover.png"}); err != nil {
 		t.Fatalf("Fetch() error = %v", err)
 	}
-	if cache.savedURL != "https://img.example.test/cover.png|||" || string(cache.saved.Body) != "png" || cache.saved.ContentType != "image/png" {
+	if cache.savedURL != "https://img.example.test/cover.png|" || string(cache.saved.Body) != "png" || cache.saved.ContentType != "image/png" {
 		t.Fatalf("cache = %#v url=%q", cache.saved, cache.savedURL)
 	}
 }
@@ -192,8 +192,11 @@ var errBrokenBookRepo = errors.New("book repository unavailable")
 
 type brokenImageBookRepo struct{}
 
-func (r *brokenImageBookRepo) Save(ctx context.Context, item *book.Book) error { return nil }
+func (r *brokenImageBookRepo) Save(ctx context.Context, item *book.Book) error       { return nil }
 func (r *brokenImageBookRepo) UpdateInfo(ctx context.Context, item *book.Book) error { return nil }
+func (r *brokenImageBookRepo) UpdateTocStats(ctx context.Context, bookID string, stats book.TocStats) error {
+	return nil
+}
 func (r *brokenImageBookRepo) FindByID(ctx context.Context, id string) (*book.Book, error) {
 	return nil, errBrokenBookRepo
 }
@@ -301,6 +304,11 @@ func (r *fakeImageBookRepo) Save(ctx context.Context, item *book.Book) error { r
 
 // UpdateInfo 满足 book.BookRepository 接口：图片代理路径不刷新信息。
 func (r *fakeImageBookRepo) UpdateInfo(ctx context.Context, item *book.Book) error { return nil }
+
+// UpdateTocStats 满足 book.BookRepository 接口：图片代理路径不刷新目录元数据。
+func (r *fakeImageBookRepo) UpdateTocStats(ctx context.Context, bookID string, stats book.TocStats) error {
+	return nil
+}
 func (r *fakeImageBookRepo) FindByID(ctx context.Context, id string) (*book.Book, error) {
 	if item, ok := r.byID[id]; ok {
 		return item, nil
@@ -316,4 +324,51 @@ func (r *fakeImageBookRepo) List(ctx context.Context, filter book.BookFilter) ([
 func (r *fakeImageBookRepo) Delete(ctx context.Context, id string) error { return nil }
 func (r *fakeImageBookRepo) SaveProgress(ctx context.Context, id string, progress book.BookProgress) error {
 	return nil
+}
+
+// S13-01：image/svg+xml 可携带 script，经代理内联回传构成反射型 XSS 向量，必须直接拒绝。
+func TestImageProxyRejectsSVGContentType(t *testing.T) {
+	proxy := NewImageProxy(&fakeImageFetcher{response: &fetch.Response{
+		URL:        "https://img.example.test/vector.svg",
+		Headers:    fetch.Headers{"Content-Type": []string{"image/svg+xml"}},
+		Body:       []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`),
+		StatusCode: http.StatusOK,
+	}}, nil, nil, nil)
+
+	_, err := proxy.Fetch(context.Background(), ImageProxyInput{URL: "https://img.example.test/vector.svg"})
+	if !errors.Is(err, ErrInvalidImageType) {
+		t.Fatalf("err = %v, want ErrInvalidImageType for SVG", err)
+	}
+}
+
+// S13-09：缓存键只用 URL+DecodeMode，同 URL 不同 BookID 共享同一份缓存。
+func TestImageProxyCacheKeyIgnoresBookID(t *testing.T) {
+	if imageCacheKey(ImageProxyInput{URL: "https://img.example.test/a.png", BookID: "b1"}) !=
+		imageCacheKey(ImageProxyInput{URL: "https://img.example.test/a.png", BookID: "b2"}) {
+		t.Fatal("cache key differs across BookID for the same URL")
+	}
+	if imageCacheKey(ImageProxyInput{URL: "https://img.example.test/a.png"}) ==
+		imageCacheKey(ImageProxyInput{URL: "https://img.example.test/a.png", DecodeMode: DecodeModeCover}) {
+		t.Fatal("cache key must include decode mode")
+	}
+}
+
+// S13-10：图片代理请求必须带固定 SourceKey 与并发限速配置，使 fetcher 按源限速兜底。
+func TestImageProxyAppliesRateLimitSourceKey(t *testing.T) {
+	fetcher := &fakeImageFetcher{response: &fetch.Response{
+		URL:        "https://img.example.test/a.png",
+		Headers:    fetch.Headers{"Content-Type": []string{"image/png"}},
+		Body:       []byte("png"),
+		StatusCode: http.StatusOK,
+	}}
+	proxy := NewImageProxy(fetcher, nil, nil, nil)
+	if _, err := proxy.Fetch(context.Background(), ImageProxyInput{URL: "https://img.example.test/a.png"}); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if fetcher.request.SourceKey != "image-proxy" {
+		t.Fatalf("SourceKey = %q, want image-proxy", fetcher.request.SourceKey)
+	}
+	if fetcher.request.ConcurrentRate == "" {
+		t.Fatal("ConcurrentRate is empty, image proxy requests would bypass rate limiting")
+	}
 }

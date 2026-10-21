@@ -55,7 +55,9 @@ func TestProcessorAppliesTitleAndContentRules(t *testing.T) {
 
 // 对齐 Legado ContentProcessor.kt:160-180：单条规则正则超限时禁用该规则并继续，
 // 不中止整章净化（旧实现返回错误，让一次正文请求整体失败）。
-func TestProcessorDisablesRegexRuleAndContinuesWhenRegexLimitExceeded(t *testing.T) {
+// S14-01：输入超过 maxRegexInputBytes 与规则合法性无关，不得永久禁用规则
+// （旧实现把它折叠加进 ErrRegexLimitExceeded 后统一禁用并持久化）。
+func TestProcessorDoesNotDisableRuleForOversizedInput(t *testing.T) {
 	rule := &replace.ReplaceRule{ID: 3, Name: "regex", Pattern: `坏(\d+)`, Replacement: "好$1", IsRegex: true, IsEnabled: true, ScopeContent: true}
 	repo := &fakeReplaceRepo{
 		content: []*replace.ReplaceRule{rule},
@@ -71,8 +73,8 @@ func TestProcessorDisablesRegexRuleAndContinuesWhenRegexLimitExceeded(t *testing
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
-	if repo.saved == nil || repo.saved.ID != rule.ID || repo.saved.IsEnabled {
-		t.Fatalf("saved rule = %#v", repo.saved)
+	if repo.saved != nil {
+		t.Fatalf("oversized input must not disable rules, saved = %#v", repo.saved)
 	}
 	if len(result.EffectiveRuleIDs) != 0 {
 		t.Fatalf("effective rules = %#v", result.EffectiveRuleIDs)
@@ -138,8 +140,13 @@ func TestProcessorReSegmentsDialogueContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "第一章\n　　萧炎说：“你好。”\n　　药老回答：“不错。”") {
+	// 对齐 Legado ContentHelp.kt：Go 版不再额外做 QuoteNarrationCut/QuoteAfterNarrator 切分（S14-04），
+	// 对话断行仅来自 findNewLines 的引号配对逻辑。
+	if !strings.Contains(result.Content, "药老回答：“不错。”\n　　然后两人继续前行。") {
 		t.Fatalf("content = %q", result.Content)
+	}
+	if strings.Contains(result.Content, "“你好。”\n") {
+		t.Fatalf("content unexpectedly split narration: %q", result.Content)
 	}
 }
 
@@ -149,12 +156,13 @@ func TestProcessorReSegmentsDialogueWhenSpeakerCueStartsNewParagraph(t *testing.
 	result, err := processor.Process(context.Background(), ProcessInput{
 		Book:    book.Book{Name: "斗破苍穹", Origin: "source"},
 		Chapter: book.BookChapter{Title: "第一章"},
-		Content: "第一章\n“你好。”药老回答：“不错。”",
+		Content: "第一章\n“你好。”“不错。”",
 	})
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "　　“你好。”\n　　药老回答：“不错。”") {
+	// 对齐 Legado ContentHelp.kt:58 预分段：相邻引号对被拆为 ”\n“。
+	if !strings.Contains(result.Content, "　　“你好。”\n　　“不错。”") {
 		t.Fatalf("content = %q", result.Content)
 	}
 }
@@ -184,13 +192,17 @@ func TestProcessorReSegmentsLongDialogueWithTrailingQuoteSplit(t *testing.T) {
 	result, err := processor.Process(context.Background(), ProcessInput{
 		Book:    book.Book{Name: "斗破苍穹", Origin: "source"},
 		Chapter: book.BookChapter{Title: "第一章"},
-		Content: "第一章\n“第一句。第二句。第三句。第四句。第五句。”他终于停下。",
+		Content: "第一章\n“第一句。第二句。第三句。第四句。第五句。”他终于停下。\n“下一句。”“再下一句。”",
 	})
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "第五句。”\n　　他终于停下。") {
+	// 对齐 Legado：相邻引号对在预分段即拆行；不在叙述语后强插段（S14-04 已删除该变换）。
+	if !strings.Contains(result.Content, "“下一句。”\n　　“再下一句。”") {
 		t.Fatalf("content = %q", result.Content)
+	}
+	if strings.Contains(result.Content, "“第一句。第二句。第三句。第四句。第五句。”\n") {
+		t.Fatalf("content unexpectedly split narration: %q", result.Content)
 	}
 }
 
@@ -247,6 +259,8 @@ func TestProcessorConvertsSimplifiedChineseWhenConfigured(t *testing.T) {
 	}
 }
 
+// fakeReplaceRepo 模仿仓储层语义：FindEnabledBy* 返回全部已启用（IsEnabled=true）规则，
+// 禁用过滤与 scope 匹配由 SQL 完成；Save 记录被持久化的规则拷贝，供断言禁用是否落库。
 type fakeReplaceRepo struct {
 	title   []*replace.ReplaceRule
 	content []*replace.ReplaceRule

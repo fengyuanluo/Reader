@@ -260,6 +260,8 @@ func TestAdapterSupportsLeadingAtExtractor(t *testing.T) {
 	}
 }
 
+// `class.a.b` / `tag.p.q` 对齐 Legado getElementsSingle：只按第一段匹配，
+// 后续分段被忽略（getElementsByClass(rules[1]) / getElementsByTag(rules[1])）。
 func TestAdapterSupportsClassSugarWithMultipleClasses(t *testing.T) {
 	adapter, err := New(`<div class="entry-content clearfix"><p>第一段</p><p>第二段</p></div>`)
 	if err != nil {
@@ -271,6 +273,37 @@ func TestAdapterSupportsClassSugarWithMultipleClasses(t *testing.T) {
 	}
 	if got != `<div class="entry-content clearfix"><p>第一段</p><p>第二段</p></div>` {
 		t.Fatalf("got = %q", got)
+	}
+}
+
+// class. 多段只取第一段（Legado rules[1]）：class.item.title 等价于 class.item，
+// 命中所有含 class "item" 的元素。
+func TestAdapterClassSugarMatchesFirstSegmentOnly(t *testing.T) {
+	adapter, err := New(`<div class="item title extra">命中</div><div class="item">不命中</div>`)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	got, err := adapter.String("class.item.title@text")
+	if err != nil {
+		t.Fatalf("String() error = %v", err)
+	}
+	if got != "命中\n不命中" {
+		t.Fatalf("got = %q, want 命中\\n不命中", got)
+	}
+}
+
+// tag. 多段只按第一段匹配：tag.p.q 对 <p class="q">X</p><p>Y</p> 应得 X 与 Y。
+func TestAdapterTagSugarMatchesFirstSegmentOnly(t *testing.T) {
+	adapter, err := New(`<p class="q">X</p><p>Y</p>`)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	got, err := adapter.String("tag.p.q@text")
+	if err != nil {
+		t.Fatalf("String() error = %v", err)
+	}
+	if got != "X\nY" {
+		t.Fatalf("got = %q, want X\\nY", got)
 	}
 }
 
@@ -520,5 +553,59 @@ func TestSelectStepTextRuleKeepsAncestorWithoutDeeperMatch(t *testing.T) {
 	}
 	if got := goquery.NodeName(selected); got != "p" {
 		t.Fatalf("selected = %q, want ancestor p", got)
+	}
+}
+
+// buildDeepTextDoc 构造 depth 层嵌套、每层 elements 个叶节点的文档，用于 text. 规则基准。
+func buildDeepTextDoc(depth, elements int) string {
+	var b strings.Builder
+	b.WriteString("<html><body><div class='root'>")
+	for range elements {
+		for range depth {
+			b.WriteString("<div><p>普通段落内容</p><div>")
+		}
+		b.WriteString("<p>第3章 标题</p>")
+		for range depth {
+			b.WriteString("</div></div>")
+		}
+	}
+	b.WriteString("</div></body></html>")
+	return b.String()
+}
+
+// `text.` 规则在 2000 元素×3 层文档上应保持线性开销（S07-01：此前逐元素 ownText 为 O(docsize×命中数)）。
+func BenchmarkFilterDeepestTextMatchHit(b *testing.B) {
+	doc := buildDeepTextDoc(3, 100)
+	adapter, err := New(doc)
+	if err != nil {
+		b.Fatalf("New() error = %v", err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		selected, err := adapter.Elements(`text.第3章`)
+		if err != nil {
+			b.Fatalf("Elements() error = %v", err)
+		}
+		if selected.Length() != 100 {
+			b.Fatalf("selected length = %d, want 100", selected.Length())
+		}
+	}
+}
+
+func BenchmarkFilterDeepestTextMatchCommaBaseline(b *testing.B) {
+	doc := buildDeepTextDoc(3, 100)
+	adapter, err := New(doc)
+	if err != nil {
+		b.Fatalf("New() error = %v", err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		selected, err := adapter.Elements(`p`)
+		if err != nil {
+			b.Fatalf("Elements() error = %v", err)
+		}
+		if selected.Length() == 0 {
+			b.Fatalf("empty selection")
+		}
 	}
 }

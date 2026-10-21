@@ -397,8 +397,8 @@ func TestPrepareBookFetchRequestAcceptsWebJSURLOption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareBookFetchRequest() error = %v", err)
 	}
-	// webJs 只接受不生效：webView 生效，webJs 不写入 BodyJS。
-	if !req.WebViewFallback || req.BodyJS != "" {
+	// 对齐 Legado AnalyzeUrl.kt useWebView 分支：webJs 与 webView 一起声明时生效，写入 BodyJS（S07-09 新语义）。
+	if !req.WebViewFallback || req.BodyJS != "document.body.innerText" {
 		t.Fatalf("request = %#v", req)
 	}
 }
@@ -541,6 +541,11 @@ func (r *fakeBookRepo) Save(ctx context.Context, b *domainbook.Book) error {
 func (r *fakeBookRepo) UpdateInfo(ctx context.Context, b *domainbook.Book) error {
 	return r.Save(ctx, b)
 }
+
+// UpdateTocStats 与 Save 等价记录：fake 仓库不区分列级更新。
+func (r *fakeBookRepo) UpdateTocStats(ctx context.Context, bookID string, stats domainbook.TocStats) error {
+	return nil
+}
 func (r *fakeBookRepo) FindByID(ctx context.Context, id string) (*domainbook.Book, error) {
 	return nil, nil
 }
@@ -611,5 +616,90 @@ func TestBookServiceFetchInfoSkipsBooksTable(t *testing.T) {
 	}
 	if repo.saved != nil {
 		t.Fatalf("book was saved: %#v", repo.saved)
+	}
+}
+
+// TestInfoParserPreservesUserSetType 对齐 Legado BookInfo.analyzeBookInfo（S12-04）：
+// 类型只在 BookList 添加书籍时设置一次，用户/流程设定的类型不被详情刷新冲掉。
+func TestInfoParserPreservesUserSetType(t *testing.T) {
+	src := testInfoSource()
+	repo := &fakeBookRepo{}
+	service := NewInfoService(repo, &fakeInfoFetcher{body: detailHTML(), url: "https://site.example.test/book/1"}, nil)
+
+	got, err := service.RefreshInfo(context.Background(), InfoInput{
+		Source: src,
+		Book: domainbook.Book{
+			BookURL:    "https://site.example.test/book/1",
+			Origin:     src.BookSourceURL,
+			OriginName: src.BookSourceName,
+			Type:       3, // webFile：用户/流程设定的类型
+		},
+		CanRename: true,
+	})
+	if err != nil {
+		t.Fatalf("RefreshInfo() error = %v", err)
+	}
+	if got.Type != 3 {
+		t.Fatalf("Type = %d, want 3 (user-set type preserved)", got.Type)
+	}
+}
+
+// TestInfoParserSetsTypeWhenUnset 对齐 Legado BookList：类型仅在未设置时取书源声明值。
+func TestInfoParserSetsTypeWhenUnset(t *testing.T) {
+	src := testInfoSource()
+	repo := &fakeBookRepo{}
+	service := NewInfoService(repo, &fakeInfoFetcher{body: detailHTML(), url: "https://site.example.test/book/1"}, nil)
+
+	got, err := service.RefreshInfo(context.Background(), InfoInput{
+		Source: src,
+		Book: domainbook.Book{
+			BookURL:    "https://site.example.test/book/1",
+			Origin:     src.BookSourceURL,
+			OriginName: src.BookSourceName,
+		},
+		CanRename: true,
+	})
+	if err != nil {
+		t.Fatalf("RefreshInfo() error = %v", err)
+	}
+	if got.Type != src.BookSourceType {
+		t.Fatalf("Type = %d, want source type %d", got.Type, src.BookSourceType)
+	}
+}
+
+// TestPreviewSearchBookFromInfoDoesNotRename 对齐 Legado BookList.kt:175-183（S12-09）：
+// 搜索→详情回退路径 canReName=false，书源声明了 canReName 也不覆盖搜索结果已有的 name/author。
+func TestPreviewSearchBookFromInfoDoesNotRename(t *testing.T) {
+	src := testInfoSource()
+	seed := domainbook.SearchBook{
+		BookURL: "https://site.example.test/book/1",
+		Name:    "A",
+		Author:  "B",
+	}
+
+	got, err := PreviewSearchBookFromInfo(context.Background(), src, "https://site.example.test/book/1", detailHTML(), seed, nil)
+	if err != nil {
+		t.Fatalf("PreviewSearchBookFromInfo() error = %v", err)
+	}
+	if got.Name != "A" {
+		t.Fatalf("Name = %q, want A (search result name preserved)", got.Name)
+	}
+	if got.Author != "B" {
+		t.Fatalf("Author = %q, want B (search result author preserved)", got.Author)
+	}
+}
+
+// TestPreviewSearchBookFromInfoFillsMissingFields：canReName=false 只填补空缺字段，
+// 搜索结果缺失的 name/author 仍由详情规则提供。
+func TestPreviewSearchBookFromInfoFillsMissingFields(t *testing.T) {
+	src := testInfoSource()
+	seed := domainbook.SearchBook{BookURL: "https://site.example.test/book/1"}
+
+	got, err := PreviewSearchBookFromInfo(context.Background(), src, "https://site.example.test/book/1", detailHTML(), seed, nil)
+	if err != nil {
+		t.Fatalf("PreviewSearchBookFromInfo() error = %v", err)
+	}
+	if got.Name == "" {
+		t.Fatalf("Name = %q, want filled from detail rule", got.Name)
 	}
 }

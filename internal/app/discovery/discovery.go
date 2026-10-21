@@ -62,10 +62,13 @@ type Service struct {
 	script  *script.Runtime
 	limiter *ratelimit.Limiter
 	cache   *categoryCache
+	// categoryFlight 对同一 (源, exploreURL) 的分类解析做单飞（对齐 Legado per-source Mutex），
+	// Discover 多源 + Categories 并发首次调用时同一 JS 脚本只执行一次（S14-10）。
+	categoryFlight *singleflight
 }
 
 func NewService(repo source.BookSourceRepository, fetcher fetch.Fetcher, scriptRuntime *script.Runtime) *Service {
-	return &Service{repo: repo, fetcher: fetcher, script: scriptRuntime, cache: newCategoryCache(defaultCategoryCacheTTL, defaultCategoryCacheMaxItems)}
+	return &Service{repo: repo, fetcher: fetcher, script: scriptRuntime, cache: newCategoryCache(defaultCategoryCacheTTL, defaultCategoryCacheMaxItems), categoryFlight: newSingleflight()}
 }
 
 // WithLimiter 注入全局与单源并发上限；按源 concurrentRate 的限速由 fetcher（fetch.Request.SourceKey/
@@ -78,6 +81,12 @@ func (s *Service) WithLimiter(limiter *ratelimit.Limiter) *Service {
 // WithCategoryCache 覆盖探索分类缓存参数（TTL 与最大条目数），仅用于测试或按需调优。
 func (s *Service) WithCategoryCache(ttl time.Duration, maxItems int) *Service {
 	s.cache = newCategoryCache(ttl, maxItems)
+	return s
+}
+
+// WithCategoryFlight 覆盖分类单飞实现，仅用于测试。
+func (s *Service) WithCategoryFlight(flight *singleflight) *Service {
+	s.categoryFlight = flight
 	return s
 }
 
@@ -198,9 +207,20 @@ func (s *Service) discoverSource(ctx context.Context, src *source.BookSource, in
 		if len(categories) == 0 {
 			return nil, ErrEmptyDiscovery
 		}
-		discoveryURL = categories[0].URL
+		// 对齐 Legado CheckSourceService.kt:176-180：只取第一个 URL 非空的类目，不把中文类目名
+		// 当 URL 发请求（Legado filter { !it.url.isNullOrBlank() }）。类目均无 URL 时回退用
+		// exploreUrl 本身（对齐 Legado ExploreShowViewModel.kt:71 直接使用 exploreUrl），仍为空才失败。
+		for _, category := range categories {
+			if strings.TrimSpace(category.URL) != "" {
+				discoveryURL = category.URL
+				break
+			}
+		}
 		if strings.TrimSpace(discoveryURL) == "" {
-			discoveryURL = categories[0].Title
+			discoveryURL = strings.TrimSpace(src.ExploreURL)
+		}
+		if strings.TrimSpace(discoveryURL) == "" {
+			return nil, ErrEmptyDiscovery
 		}
 	}
 	discoveryURL = buildPageURL(discoveryURL, input.Page)
@@ -246,6 +266,16 @@ func (s *Service) categoriesForSource(ctx context.Context, src *source.BookSourc
 	if raw == "" {
 		return nil, ErrEmptyExploreURL
 	}
+	if key, ok := categoryCacheKeyFor(src, raw); ok {
+		// 单飞同 (源, exploreURL) 的解析（对齐 Legado per-source Mutex，S14-10）。
+		return s.categoryFlight.do(key.sourceURL+"\x00"+key.exploreURL, func() ([]Category, error) {
+			return s.resolveCategories(ctx, src, raw)
+		})
+	}
+	return s.resolveCategories(ctx, src, raw)
+}
+
+func (s *Service) resolveCategories(ctx context.Context, src *source.BookSource, raw string) ([]Category, error) {
 	if strings.HasPrefix(strings.ToLower(raw), "@js:") || strings.HasPrefix(strings.ToLower(raw), "<js>") {
 		if cached, ok := s.loadCategoryCache(src, raw); ok {
 			return cached, nil
@@ -256,12 +286,16 @@ func (s *Service) categoriesForSource(ctx context.Context, src *source.BookSourc
 		scriptText := raw
 		if strings.HasPrefix(strings.ToLower(raw), "@js:") {
 			scriptText = raw[4:]
-		} else if end := strings.LastIndex(strings.ToLower(raw), "</js>"); end > 4 {
+		} else if end := strings.LastIndex(strings.ToLower(raw), "<"); end > 4 {
+			// 对齐 Legado BookSourceExtensions.kt:60：从 4 之后起找最后一个 '<'，
+			// 不要求完整 </js>（书源常见 <js>...<js2> 或注释残留也能解析）。
 			scriptText = raw[4:end]
 		}
 		value, err := s.script.EvalWithBindings(ctx, scriptText, script.Bindings{"source": src})
 		if err != nil {
-			return nil, err
+			// 对齐 Legado BookSourceExtensions.kt:82：JS 失败返回 ERROR 类目，分类页仍可见错误信息，
+			// 而不是让整个源失败。
+			return []Category{{Title: "ERROR:" + err.Error()}}, nil
 		}
 		raw = strings.TrimSpace(toString(value))
 	}
@@ -336,6 +370,15 @@ func parseBookList(ctx context.Context, src *source.BookSource, listRule rule.Se
 	out := []book.SearchBook{}
 	seen := map[string]struct{}{}
 	baseVars := analyzer.Variables()
+	// 对齐 Legado BookList.kt:250-290：element 循环外建一个 itemAnalyzer（单次规则编译），
+	// 循环内仅重绑定书籍与基线变量，避免 条目数×规则数 次解析（S14-07）。
+	sourceBindings := scriptRuntime.SourceBindings(ctx, src)
+	itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
+		RedirectURL: redirectURL,
+		SourceURL:   src.BookSourceURL,
+		Script:      sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL, Source: src, Src: body},
+		Source:      sourceBindings,
+	})
 	for _, element := range elements {
 		searchBook := book.SearchBook{
 			Origin:      src.BookSourceURL,
@@ -345,13 +388,7 @@ func parseBookList(ctx context.Context, src *source.BookSource, listRule rule.Se
 			Origins:     []string{src.BookSourceURL},
 			Variable:    encodeDiscoveryVariables(baseVars),
 		}
-		itemAnalyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
-			RedirectURL: redirectURL,
-			SourceURL:   src.BookSourceURL,
-			Script:      sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL, Source: src, Src: body, Book: &searchBook},
-			Book:        &searchBook,
-			Source:      scriptRuntime.SourceBindings(ctx, src),
-		})
+		itemAnalyzer.SetBook(&searchBook, sourceapp.ScriptAdapter{Runtime: scriptRuntime, BaseURL: redirectURL, Source: src, Src: body, Book: &searchBook})
 		itemAnalyzer.SetVariables(baseVars)
 		name, _ := itemAnalyzer.GetString(ctx, listRule.Name, element)
 		name = bookapp.FormatBookName(name)

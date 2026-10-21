@@ -2,6 +2,7 @@ package debugapp
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -22,10 +23,25 @@ type Runner struct {
 	flow *KeywordFlow
 	mu   sync.Mutex
 	runs map[string]*runHandle
+	// slots 是运行中会话的并发上限信号量：Start 无条件 go func 会堆积任意数量
+	// 的后台 goroutine 与多阶段网络抓取，满时直接把会话置 failed。
+	slots chan struct{}
 }
 
+// defaultMaxRunningSessions 是未显式配置时的默认并发上限。
+const defaultMaxRunningSessions = 4
+
 func NewRunner(flow *KeywordFlow, repo task.DebugRepository) *Runner {
-	return &Runner{repo: repo, flow: flow, runs: map[string]*runHandle{}}
+	return &Runner{repo: repo, flow: flow, runs: map[string]*runHandle{}, slots: make(chan struct{}, defaultMaxRunningSessions)}
+}
+
+// WithMaxRunningSessions 设置运行中调试会话的并发上限（参照 WithCheckConcurrency 惯例）。
+func (r *Runner) WithMaxRunningSessions(max int) *Runner {
+	if max <= 0 {
+		max = defaultMaxRunningSessions
+	}
+	r.slots = make(chan struct{}, max)
+	return r
 }
 
 func (r *Runner) Start(ctx context.Context, session *task.DebugSession) {
@@ -37,8 +53,23 @@ func (r *Runner) Start(ctx context.Context, session *task.DebugSession) {
 	}
 	r.runs[session.SessionID] = handle
 	r.mu.Unlock()
+	// 非阻塞获取并发槽：满时不再排队，直接把会话置 failed，
+	// 避免脚本刷接口堆积任意数量的后台抓取 goroutine。
+	select {
+	case r.slots <- struct{}{}:
+	default:
+		cancel()
+		r.mu.Lock()
+		if r.runs[session.SessionID] == handle {
+			delete(r.runs, session.SessionID)
+		}
+		r.mu.Unlock()
+		go r.finish(session, errors.New("too many running debug sessions"), false)
+		return
+	}
 	go func() {
 		defer func() {
+			<-r.slots
 			r.mu.Lock()
 			// 只有仍属于本次运行的句柄才删除，避免误删同 ID 新运行的 cancel。
 			if r.runs[session.SessionID] == handle {

@@ -42,9 +42,13 @@ func Build(ctx context.Context, rawURL string, baseURL string, base fetch.Reques
 	if value, ok := optionValue(custom.Attribute, "headers"); ok {
 		mergeHeaders(base.Headers, value)
 	}
-	// 对齐 Legado AnalyzeUrl：type 键存在且值非 null 时按 hex 二进制处理响应。
+	// 对齐 Legado AnalyzeUrl：type 键存在且值为非空白非 null 字符串时按 hex 二进制处理响应。
+	// Legado setType 将 isNullOrBlank 的 type 归为 null（AnalyzeUrl.kt:746-759），
+	// 空白串（如 `{"type":""}`）与 null 视为未设置，不触发 hex 编码（S07-06/S09-04）。
 	if value, ok := optionValue(custom.Attribute, "type"); ok && value != nil {
-		base.EncodeBodyAsHex = true
+		if typeText := strings.TrimSpace(fmt.Sprint(value)); typeText != "" && typeText != "<nil>" {
+			base.EncodeBodyAsHex = true
+		}
 	}
 	if value, ok := optionValue(custom.Attribute, "origin"); ok {
 		if origin := strings.TrimSpace(fmt.Sprint(value)); origin != "" {
@@ -63,6 +67,17 @@ func Build(ctx context.Context, rawURL string, baseURL string, base fetch.Reques
 	}
 	if value, ok := optionValue(custom.Attribute, "bodyjs"); ok {
 		base.BodyJS = strings.TrimSpace(fmt.Sprint(value))
+	}
+	if value, ok := optionValue(custom.Attribute, "webjs"); ok {
+		webJs := strings.TrimSpace(fmt.Sprint(value))
+		if webJs != "" {
+			// 对齐 Legado：webJs 只在 WebView 生效（AnalyzeUrl.kt getStrResponse 的 useWebView 分支）。
+			// 未声明 webView 时 webJs 完全不执行，丢弃 BodyJS（S07-09）。
+			if webView, ok := optionValue(custom.Attribute, "webview"); ok && optionTruthy(webView) {
+				base.BodyJS = webJs
+				base.WebViewFallback = true
+			}
+		}
 	}
 	if value, ok := optionValue(custom.Attribute, "webview"); ok {
 		base.WebViewFallback = optionTruthy(value)
@@ -93,6 +108,9 @@ func Build(ctx context.Context, rawURL string, baseURL string, base fetch.Reques
 
 func Fetch(ctx context.Context, fetcher fetch.Fetcher, req fetch.Request, eval Evaluator) (*fetch.Response, error) {
 	resp, err := fetcher.Fetch(ctx, req)
+	// webJs→BodyJS 的写入已被 Build 的 webView 门限制（S07-09：非 WebView 不生效）；
+	// bodyJs 是 Reader 独立扩展选项（docs/Design.md/Requirement.md 的"响应体后处理 JS"），
+	// 与 WebViewFallback 无关，这里只按 BodyJS 是否非空判断。
 	if err != nil || strings.TrimSpace(req.BodyJS) == "" {
 		return resp, err
 	}
@@ -202,7 +220,9 @@ func applyBody(req *fetch.Request, value any) string {
 	case string:
 		req.Body = []byte(body)
 		if headerValue(req.Headers, "Content-Type") != "" {
-			return ""
+			// 已有 Content-Type 时保留该头，但仍返回 body 原文，
+			// 由 Build 统一按 charset 选项做表单编码（S09-05），charset 不因显式头而失效。
+			return body
 		}
 		if isStructuredBody(body) {
 			setHeader(req.Headers, "Content-Type", "application/json; charset=UTF-8")

@@ -7,8 +7,10 @@ import (
 	"html"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"golang.org/x/sync/singleflight"
 	replaceapp "reader/internal/app/replace"
 	sourceapp "reader/internal/app/source"
 	"reader/internal/domain/book"
@@ -75,6 +77,9 @@ type Service struct {
 	fetcher   fetch.Fetcher
 	script    *script.Runtime
 	processor *replaceapp.Processor
+	// inflight 合并同一章节的并发抓取（S13-05）：预下载与阅读同时到达时共享一次
+	// 多页抓取结果，避免重复带宽消耗与对书源站点的请求放大、缓存双写。
+	inflight singleflight.Group
 }
 
 func NewService(chapters book.ChapterRepository, fetcher fetch.Fetcher, scriptRuntime *script.Runtime) *Service {
@@ -131,57 +136,25 @@ func (s *Service) GetContent(ctx context.Context, input Input) (Result, error) {
 	if chapterURL == "" {
 		chapterURL = chapter.AbsoluteURL()
 	}
-	var content string
-	if chapterURL == bookValue.BookURL && strings.TrimSpace(bookValue.TocHTML) != "" {
-		parsed, err := s.parseAllPages(ctx, src, &bookValue, &chapter, chapterURL, chapterURL, bookValue.TocHTML, input.NextChapterURL)
-		if err != nil {
-			return Result{}, err
-		}
-		content = parsed
-	} else {
-		expander := ruleinfra.NewAnalyzer(ruleinfra.Context{
-			BaseURL:     chapter.BaseURL,
-			RedirectURL: chapter.BaseURL,
-			SourceURL:   src.BookSourceURL,
-			Script:      sourceapp.ScriptAdapter{Runtime: s.script, BaseURL: chapter.BaseURL, Source: src, Book: &bookValue, Chapter: &chapter},
-			Chapter:     &chapter,
-			Book:        &bookValue,
-			Source:      s.script.SourceBindings(ctx, src),
-		})
-		expander.LoadVariables(bookValue.Variable)
-		expander.LoadVariables(chapter.Variable)
-		if expanded, err := expander.ExpandString(ctx, chapterURL, map[string]any{}); err == nil && strings.TrimSpace(expanded) != "" {
-			chapterURL = expanded
-		}
-		req, err := buildContentFetchRequest(ctx, chapterURL, src, &bookValue, &chapter, s.script)
-		if err != nil {
-			return Result{}, err
-		}
-		if len(req.Body) > 0 {
-			if expandedBody, err := expander.ExpandString(ctx, string(req.Body), map[string]any{}); err == nil && strings.TrimSpace(expandedBody) != "" {
-				req.Body = []byte(expandedBody)
-			}
-		}
-		resp, err := executeContentFetchRequest(ctx, s.fetcher, req, src, &bookValue, &chapter, input.NextChapterURL, s.script)
-		if err != nil {
-			return Result{}, err
-		}
-		if s.script != nil {
-			resp, err = sourceapp.NewScriptIntegration(s.script).LoginCheck(ctx, src, resp)
-			if err != nil {
-				return Result{}, err
-			}
-			resp, err = s.applyContentWebJS(ctx, src, &bookValue, &chapter, resp, input.NextChapterURL)
-			if err != nil {
-				return Result{}, err
-			}
-		}
-		parsed, err := s.parseAllPages(ctx, src, &bookValue, &chapter, req.URL, resp.URL, string(resp.Body), input.NextChapterURL)
-		if err != nil {
-			return Result{}, err
-		}
-		content = parsed
+	// S13-05：同一章节的并发请求（如预下载与阅读同时到达）以 bookID:index 合并抓取，
+	// 共享一次完整多页抓取结果，避免重复带宽与缓存双写。
+	type fetchOutcome struct {
+		content string
+		chapter book.BookChapter
 	}
+	outcomeAny, err, _ := s.inflight.Do(strings.Join([]string{bookID, strconv.Itoa(chapter.Index)}, "\x1f"), func() (any, error) {
+		content, err := s.fetchChapterContent(ctx, src, &bookValue, &chapter, chapterURL, input.NextChapterURL)
+		if err != nil {
+			return nil, err
+		}
+		return fetchOutcome{content: content, chapter: chapter}, nil
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	outcome := outcomeAny.(fetchOutcome)
+	chapter = outcome.chapter
+	content := outcome.content
 	if !chapter.IsVolume && strings.TrimSpace(content) == "" {
 		return Result{}, ErrContentEmpty
 	}
@@ -216,8 +189,55 @@ func (s *Service) ProcessContent(ctx context.Context, b book.Book, chapter book.
 	return processed.Content, nil
 }
 
+// fetchChapterContent 执行一次完整的多页正文抓取（缓存未命中路径）：
+// TocHTML 内联解析或请求抓取 + 登录检查 + WebJS + 分页解析与替换。
+// 由 GetContent 经 singleflight 调用（S13-05），同一章节并发请求只执行一次。
+func (s *Service) fetchChapterContent(ctx context.Context, src *source.BookSource, b *book.Book, chapter *book.BookChapter, chapterURL string, nextChapterURL string) (string, error) {
+	if chapterURL == b.BookURL && strings.TrimSpace(b.TocHTML) != "" {
+		return s.parseAllPages(ctx, src, b, chapter, chapterURL, chapterURL, b.TocHTML, nextChapterURL)
+	}
+	expander := ruleinfra.NewAnalyzer(ruleinfra.Context{
+		BaseURL:     chapter.BaseURL,
+		RedirectURL: chapter.BaseURL,
+		SourceURL:   src.BookSourceURL,
+		Script:      sourceapp.ScriptAdapter{Runtime: s.script, BaseURL: chapter.BaseURL, Source: src, Book: b, Chapter: chapter},
+		Chapter:     chapter,
+		Book:        b,
+		Source:      s.script.SourceBindings(ctx, src),
+	})
+	expander.LoadVariables(b.Variable)
+	expander.LoadVariables(chapter.Variable)
+	if expanded, err := expander.ExpandString(ctx, chapterURL, map[string]any{}); err == nil && strings.TrimSpace(expanded) != "" {
+		chapterURL = expanded
+	}
+	req, err := buildContentFetchRequest(ctx, chapterURL, src, b, chapter, s.script)
+	if err != nil {
+		return "", err
+	}
+	if len(req.Body) > 0 {
+		if expandedBody, err := expander.ExpandString(ctx, string(req.Body), map[string]any{}); err == nil && strings.TrimSpace(expandedBody) != "" {
+			req.Body = []byte(expandedBody)
+		}
+	}
+	resp, err := executeContentFetchRequest(ctx, s.fetcher, req, src, b, chapter, nextChapterURL, s.script)
+	if err != nil {
+		return "", err
+	}
+	if s.script != nil {
+		resp, err = sourceapp.NewScriptIntegration(s.script).LoginCheck(ctx, src, resp)
+		if err != nil {
+			return "", err
+		}
+		resp, err = s.applyContentWebJS(ctx, src, b, chapter, resp, nextChapterURL)
+		if err != nil {
+			return "", err
+		}
+	}
+	return s.parseAllPages(ctx, src, b, chapter, req.URL, resp.URL, string(resp.Body), nextChapterURL)
+}
+
 func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *book.Book, chapter *book.BookChapter, baseURL string, redirectURL string, body string, nextChapterURL string) (string, error) {
-	content, nextURLs, err := s.parsePage(ctx, src, b, chapter, baseURL, redirectURL, body, true, nextChapterURL)
+	content, nextURLs, err := s.parsePage(ctx, src, b, chapter, baseURL, redirectURL, body, true, true, nextChapterURL)
 	if err != nil {
 		return "", err
 	}
@@ -247,7 +267,7 @@ func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *
 		if err != nil {
 			return "", err
 		}
-		pageContent, pageNext, err := s.parsePage(ctx, src, b, chapter, next, resp.URL, string(resp.Body), true, nextChapterURL)
+		pageContent, pageNext, err := s.parsePage(ctx, src, b, chapter, next, resp.URL, string(resp.Body), true, false, nextChapterURL)
 		if err != nil {
 			return "", err
 		}
@@ -268,6 +288,13 @@ func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *
 			targets = append(targets, next)
 		}
 		// 对齐 Legado BookContent.kt:103-130：多页并发抓取，结果按规则返回顺序拼接。
+		// 列表型 nextContentUrl 规则可能返回任意多行，与串行分支同一上限语义：
+		// 超限即整章失败，不对同一书源站点发起无界请求。
+		if len(targets) > maxContentPages {
+			slog.WarnContext(ctx, "content pagination exceeded limit, failing chapter",
+				"source_id", src.BookSourceURL, "limit", maxContentPages, "targets", len(targets))
+			return "", ErrPaginationTruncated
+		}
 		// 每个分页用 book/chapter 快照，避免并发解析时脚本写变量造成数据竞争。
 		// 单个分页失败即整章失败：不写缓存、向上报错，避免残缺正文被当作成功持久化，
 		// 下次命中缓存后永远不会再重抓。首页失败同样由上方直接返回错误。
@@ -279,7 +306,7 @@ func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *
 				slog.WarnContext(ctx, "content page fetch failed", "source_id", src.BookSourceURL, "url", target, "error", err)
 				return "", err
 			}
-			pageContent, _, err := s.parsePage(ctx, src, &pageBook, &pageChapter, target, resp.URL, string(resp.Body), false, nextChapterURL)
+			pageContent, _, err := s.parsePage(ctx, src, &pageBook, &pageChapter, target, resp.URL, string(resp.Body), false, false, nextChapterURL)
 			if err != nil {
 				slog.WarnContext(ctx, "content page parse failed", "source_id", src.BookSourceURL, "url", target, "error", err)
 				return "", err
@@ -293,11 +320,24 @@ func (s *Service) parseAllPages(ctx context.Context, src *source.BookSource, b *
 	}
 	content = strings.Join(pages, "\n")
 	if strings.TrimSpace(src.RuleContent.Value.ReplaceRegex) != "" {
+		// 对齐 Legado BookContent.kt:133-139：替换前逐行 trim，替换后每行加“　　”全角缩进。
+		lines := strings.Split(content, "\n")
+		for i, line := range lines {
+			lines[i] = strings.TrimSpace(line)
+		}
+		content = strings.Join(lines, "\n")
 		replaced, err := applyContentReplace(ctx, redirectURL, src.RuleContent.Value.ReplaceRegex, content, s.script)
 		if err != nil {
 			return "", err
 		}
-		content = strings.TrimSpace(replaced)
+		// 对齐 Legado BookContent.kt:133-139：替换前逐行 trim，替换后每行加“　　”全角缩进，
+		// 末尾空行去除（BookContent.kt:139 trim()）。
+		trimmed := strings.Split(replaced, "\n")
+		out := make([]string, 0, len(trimmed))
+		for _, line := range trimmed {
+			out = append(out, "\u3000\u3000"+strings.TrimSpace(line))
+		}
+		content = strings.TrimRight(strings.Join(out, "\n"), "\u3000\n")
 	}
 	return content, nil
 }
@@ -330,9 +370,13 @@ func (s *Service) applyContentWebJS(ctx context.Context, src *source.BookSource,
 	if scriptText == "" {
 		return resp, nil
 	}
+	// S13-07：同一响应体只转换一次并复用，避免逐绑定各拷贝一次。
+	respBody := string(resp.Body)
 	value, err := s.script.EvalWithBindings(ctx, scriptText, script.Bindings{
-		"result":         string(resp.Body),
-		"src":            string(resp.Body),
+		// S13-07：同一响应体只转换一次，三个绑定共享同一个 string，避免 3 次拷贝。
+		"body":           respBody,
+		"result":         respBody,
+		"src":            respBody,
 		"baseUrl":        resp.URL,
 		"source":         src,
 		"book":           b,
@@ -341,7 +385,7 @@ func (s *Service) applyContentWebJS(ctx context.Context, src *source.BookSource,
 		"nextChapterUrl": nextChapterURL,
 		"response": map[string]any{
 			"statusCode": resp.StatusCode,
-			"body":       string(resp.Body),
+			"body":       respBody,
 			"url":        resp.URL,
 		},
 	})
@@ -403,7 +447,7 @@ func applyContentReplace(ctx context.Context, redirectURL string, rule string, c
 	return analyzer.GetString(ctx, rule, content)
 }
 
-func (s *Service) parsePage(ctx context.Context, src *source.BookSource, b *book.Book, chapter *book.BookChapter, baseURL string, redirectURL string, body string, getNext bool, nextChapterURL string) (string, []string, error) {
+func (s *Service) parsePage(ctx context.Context, src *source.BookSource, b *book.Book, chapter *book.BookChapter, baseURL string, redirectURL string, body string, getNext bool, applyTitle bool, nextChapterURL string) (string, []string, error) {
 	contentRule := src.RuleContent.Value
 	analyzer := ruleinfra.NewAnalyzer(ruleinfra.Context{
 		BaseURL:     baseURL,
@@ -416,7 +460,9 @@ func (s *Service) parsePage(ctx context.Context, src *source.BookSource, b *book
 	})
 	analyzer.LoadVariables(b.Variable)
 	analyzer.LoadVariables(chapter.Variable)
-	if strings.TrimSpace(contentRule.Title) != "" {
+	// 对齐 Legado BookContent.kt:60-71：title 规则只在最外层对首页执行一次，
+	// 分页末页解析出的“第N页/上一页 下一页”类文本不得覆盖首页章节标题。
+	if applyTitle && strings.TrimSpace(contentRule.Title) != "" {
 		if title, err := analyzer.GetString(ctx, contentRule.Title, body); err == nil && strings.TrimSpace(title) != "" {
 			chapter.Title = strings.TrimSpace(title)
 		}
@@ -442,15 +488,25 @@ func normalizeContent(content string, redirectURL string) string {
 	content = normalizeContentHTML(content, redirectURL)
 	content = html.UnescapeString(content)
 	content = contentNoPrintReplacer.Replace(content)
-	lines := strings.Split(content, "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
+	// S13-07：单次扫描写入 builder，替代 Split/Join 与逐行 TrimSpace 的多轮中间串分配。
+	var out strings.Builder
+	out.Grow(len(content))
+	for line := range strings.Lines(content) {
 		line = strings.TrimSpace(line)
-		if line != "" {
-			out = append(out, line)
+		if line == "" {
+			continue
 		}
+		out.WriteString(line)
+		out.WriteByte('\n')
 	}
-	return strings.Join(out, "\n")
+	result := out.String()
+	return strings.TrimSuffix(result, "\n")
+}
+
+// imgPlaceholder 为图片占位符的不可打印控制字符哨兵（S13-08）：正文文本不会自然出现
+// \x00 包裹的字面串，避免书源正文含 "__READER_IMG_N__" 字面文本时被误替换成图片 HTML。
+func imgPlaceholder(index int) string {
+	return "\x00READER_IMG_" + strconv.Itoa(index) + "\x00"
 }
 
 func normalizeContentHTML(content string, redirectURL string) string {
@@ -469,7 +525,7 @@ func normalizeContentHTML(content string, redirectURL string) string {
 			normalized = strings.TrimSpace(src)
 		}
 		images = append(images, `<img src="`+html.EscapeString(normalized)+`">`)
-		return fmt.Sprintf("__READER_IMG_%d__", len(images)-1)
+		return imgPlaceholder(len(images) - 1)
 	})
 	content = contentCommentPattern.ReplaceAllString(content, "")
 	content = contentBlockTagPattern.ReplaceAllString(content, "\n")
@@ -477,10 +533,12 @@ func normalizeContentHTML(content string, redirectURL string) string {
 	content = contentTrimStartPattern.ReplaceAllString(content, "")
 	content = contentTrimEndPattern.ReplaceAllString(content, "")
 	content = contentLineBreakPattern.ReplaceAllString(content, "\n")
+	// S13-07：单次 NewReplacer 还原全部图片占位符，替代每张图一次全文 strings.ReplaceAll。
+	pairs := make([]string, 0, len(images)*2)
 	for i, image := range images {
-		content = strings.ReplaceAll(content, fmt.Sprintf("__READER_IMG_%d__", i), image)
+		pairs = append(pairs, imgPlaceholder(i), image)
 	}
-	return content
+	return strings.NewReplacer(pairs...).Replace(content)
 }
 
 func extractContentImageSource(tag string) string {

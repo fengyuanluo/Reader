@@ -11,9 +11,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/PuerkitoBio/goquery"
 
+	domainbook "reader/internal/domain/book"
 	domainrule "reader/internal/domain/rule"
 	"reader/internal/infra/rule/css"
 	"reader/internal/infra/rule/internal/lru"
@@ -51,10 +53,85 @@ type Context struct {
 type Analyzer struct {
 	ctx  Context
 	vars map[string]string
+	// shared 标记 vars 为调用方传入的共享只读表（ShareVariables）：首次写入前写时复制为私有。
+	shared bool
+	// baseline 为最近一次 SetVariables/ShareVariables 的基线拷贝，SetChapter 恢复用。
+	baseline map[string]string
+	// evalDepth 为当前求值递归深度，超上限返回原 token（防恶意规则深递归栈溢出）。
+	evalDepth int
 }
+
+// maxEvalDepth 限制规则展开的递归深度（expandRawString→GetString→evalStep→makeUpString
+// 循环通路）；书源规则来自用户导入属不可信输入。
+const maxEvalDepth = 16
 
 func NewAnalyzer(ctx Context) *Analyzer {
 	return &Analyzer{ctx: ctx, vars: map[string]string{}}
+}
+
+// SetBook 重绑书籍载体与脚本适配器（S14-07：discovery 逐元素复用单个 Analyzer 时更新
+// Context.Book；脚本侧 book 绑定来自 ScriptAdapter.Book，必须同步更新，否则 @js: 内
+// book.putVariable 等规则在脚本侧读到 nil book）。
+func (a *Analyzer) SetBook(book any, script domainrule.ScriptRuntime) {
+	a.ctx.Book = book
+	if script != nil {
+		a.ctx.Script = script
+	}
+}
+
+// SetChapter 逐章替换章节载体与脚本适配器（S12-06：逐章解析复用同一 Analyzer，仅 Chapter
+// 与 Script 变化），并把 vars 重置为基线拷贝（上一章 chapter 级 @put 变量不得泄漏到下一章）。
+// 基线在 ShareVariables/SetVariables 时记录。
+func (a *Analyzer) SetChapter(chapter any, script domainrule.ScriptRuntime) {
+	a.ctx.Chapter = chapter
+	a.ctx.Script = script
+	a.resetVarsToBaseline()
+}
+
+// resetVarsToBaseline 把 vars 恢复为最近一次 SetVariables/ShareVariables 的基线拷贝。
+func (a *Analyzer) resetVarsToBaseline() {
+	if a.baseline == nil {
+		a.vars = map[string]string{}
+		a.shared = false
+		return
+	}
+	vars := make(map[string]string, len(a.baseline))
+	for key, value := range a.baseline {
+		vars[key] = value
+	}
+	a.vars = vars
+	a.shared = false
+}
+
+// ShareVariables 与其他 Analyzer 共享同一份只读变量表（写时复制：首次写入前不拷贝），
+// 供万章目录逐章解析复用顶层 baseVars，避免每章一次完整 map 深拷贝。
+// 并发安全由调用方保证（目录逐章为串行）。
+func (a *Analyzer) ShareVariables(vars map[string]string) {
+	a.vars = vars
+	a.shared = true
+	if len(vars) == 0 {
+		a.baseline = nil
+	} else {
+		baseline := make(map[string]string, len(vars))
+		for key, value := range vars {
+			baseline[key] = value
+		}
+		a.baseline = baseline
+	}
+}
+
+// writeVar 写入 analyzer 级变量：共享表写时复制，并把写入同步进基线之外的章节级变量
+// （基线内容不覆盖，保证 SetChapter 恢复基线后章节级 @put 不跨章泄漏）。
+func (a *Analyzer) writeVar(key string, value string) {
+	if a.shared {
+		vars := make(map[string]string, len(a.vars)+1)
+		for k, v := range a.vars {
+			vars[k] = v
+		}
+		a.vars = vars
+		a.shared = false
+	}
+	a.vars[key] = value
 }
 
 // GetString 求值规则并返回合并后的文本；结果含 & 时反转义 HTML 实体（对齐 Legado getString 默认 unescape=true）。
@@ -85,7 +162,8 @@ func (a *Analyzer) GetStringRaw(ctx context.Context, rule string, input any) (st
 }
 
 // GetURL 求值 URL 类规则（对应 Legado getString(rule, isUrl=true)）：取首个非空结果，
-// 反转义实体后按 RedirectURL 绝对化；无结果返回空串，由调用方决定回退值。
+// 反转义实体后按 RedirectURL 绝对化；无结果时回退绝对化 baseUrl（对齐 Legado
+// AnalyzeRule.getString 尾部 isUrl 分支：str 为空返回 baseUrl ?: ""）。
 func (a *Analyzer) GetURL(ctx context.Context, rule string, input any) (string, error) {
 	values, err := a.GetStringList(ctx, rule, input)
 	if err != nil {
@@ -97,11 +175,16 @@ func (a *Analyzer) GetURL(ctx context.Context, rule string, input any) (string, 
 			return strings.TrimSpace(urlrule.Absolute(a.ctx.RedirectURL, value)), nil
 		}
 	}
+	// 无结果回退 baseUrl（Legado 语义）；baseUrl 也为空时返回空串。
+	if a.ctx.BaseURL != "" {
+		return strings.TrimSpace(urlrule.Absolute(a.ctx.RedirectURL, a.ctx.BaseURL)), nil
+	}
 	return "", nil
 }
 
 // GetURLList 求值 URL 列表规则（对应 Legado getStringList(rule, isUrl=true)）：
-// 每项按 RedirectURL 绝对化，丢弃空值并去重，保持首次出现顺序。
+// 每项按 RedirectURL 绝对化，丢弃空项并去重（Legado AnalyzeRule.kt:231-240 urlList
+// 同样 contains 去重），保持首次出现顺序。
 func (a *Analyzer) GetURLList(ctx context.Context, rule string, input any) ([]string, error) {
 	values, err := a.GetStringList(ctx, rule, input)
 	if err != nil {
@@ -164,6 +247,56 @@ func (a *Analyzer) getStringList(ctx context.Context, rule string, input any, no
 }
 
 func (a *Analyzer) evalStringSteps(ctx context.Context, rule string, input any, normalizeURLs bool) ([]string, error) {
+	// 顶层 || 取首个非空、%% 交错合并（对齐 Legado AnalyzeByJSonPath 的 splitRule("&&","||")
+	// 语义：非选择器规则下 || 不应被静默当 && 步进）。选择器规则（含 @/$/css 前缀）的
+	// ||/%% 语义由 css/jsonpath 适配器处理（对齐 Legado 子选择器层），不在顶层拆分。
+	if !strings.ContainsAny(rule, "@$") {
+		if chain, sep, ok := splitTopLevelChain(rule); ok {
+			switch sep {
+			case "||":
+				for _, part := range chain {
+					if strings.TrimSpace(part) == "" {
+						continue
+					}
+					values, err := a.evalStringSteps(ctx, part, input, normalizeURLs)
+					if err != nil {
+						return nil, err
+					}
+					if hasNonEmpty(values) {
+						return values, nil
+					}
+				}
+				return nil, nil
+			case "%%":
+				all := [][]string{}
+				for _, part := range chain {
+					if strings.TrimSpace(part) == "" {
+						continue
+					}
+					values, err := a.evalStringSteps(ctx, part, input, normalizeURLs)
+					if err != nil {
+						return nil, err
+					}
+					if len(values) > 0 {
+						all = append(all, values)
+					}
+				}
+				out := []string{}
+				for i := 0; ; i++ {
+					added := false
+					for _, values := range all {
+						if i < len(values) {
+							out = append(out, values[i])
+							added = true
+						}
+					}
+					if !added {
+						return out, nil
+					}
+				}
+			}
+		}
+	}
 	steps := splitSourceRules(rule, false)
 	var current any = input
 	// 链首把 string 输入包成惰性解析载体，链内各步复用同一份解析结果。
@@ -181,6 +314,98 @@ func (a *Analyzer) evalStringSteps(ctx context.Context, rule string, input any, 
 	}
 	values := stringList(current, normalizeURLs)
 	return values, nil
+}
+
+// hasNonEmpty 判断值列表是否含非空项（顶层 || 短路判定）。
+func hasNonEmpty(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// splitTopLevelChain 按顶层 || 或 %% 切分规则串（引号/平衡组内的分隔符不参与）；
+// 无顶层分隔符或同时存在 && 时返回 false（保持步进语义）。
+func splitTopLevelChain(rule string) ([]string, string, bool) {
+	sep := ""
+	for _, candidate := range []string{"||", "%%"} {
+		if containsTopLevelSeparator(rule, candidate) {
+			sep = candidate
+			break
+		}
+	}
+	if sep == "" {
+		return nil, "", false
+	}
+	// && 与 ||/%% 混排时保持步进语义（Legado splitRule 同样按首段分隔符处理，
+	// Reader 保守处理：含 && 时不做顶层取或）。
+	if containsTopLevelSeparator(rule, "&&") {
+		return nil, "", false
+	}
+	parts := []string{}
+	depth := 0
+	inString := false
+	escaped := false
+	partStart := 0
+	for i := range rule {
+		c := rule[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch {
+		case c == '\\' && inString:
+			escaped = true
+		case c == '"' || c == '\'':
+			if c == '"' || !inString {
+				inString = !inString
+			}
+		case c == '(' || c == '[' || c == '{':
+			depth++
+		case c == ')' || c == ']' || c == '}':
+			depth--
+		case depth == 0 && !inString && strings.HasPrefix(rule[i:], sep):
+			parts = append(parts, rule[partStart:i])
+			partStart = i + len(sep)
+			i += len(sep) - 1
+		}
+	}
+	parts = append(parts, rule[partStart:])
+	if len(parts) <= 1 {
+		return nil, "", false
+	}
+	return parts, sep, true
+}
+
+// containsTopLevelSeparator 判断规则串中是否存在引号/平衡组外的分隔符。
+func containsTopLevelSeparator(rule string, sep string) bool {
+	depth := 0
+	inString := false
+	escaped := false
+	for i := range rule {
+		c := rule[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch {
+		case c == '\\' && inString:
+			escaped = true
+		case c == '"' || c == '\'':
+			if c == '"' || !inString {
+				inString = !inString
+			}
+		case c == '(' || c == '[' || c == '{':
+			depth++
+		case c == ')' || c == ']' || c == '}':
+			depth--
+		case depth == 0 && !inString && strings.HasPrefix(rule[i:], sep):
+			return true
+		}
+	}
+	return false
 }
 
 // htmlEntityPattern 仅匹配以分号结尾的命名/数字实体，与 Legado StringEscapeUtils.unescapeHtml4 一致，
@@ -281,14 +506,24 @@ func (a *Analyzer) evalStep(ctx context.Context, step sourceRule, input any, wan
 	case ModeRegex:
 		adapter := regex.New(a.ctx.MaxRegexIn)
 		patterns := splitRegexChain(step.rule)
+		// []any 输入先逐项扁平化为 []string（join 前逐项 asString），避免整体 json.Marshal
+		// （S06-08：大 jsonpath 列表逐元素序列化开销）。
+		regexInput := asString(input)
+		if items, ok := input.([]any); ok {
+			strs := make([]string, 0, len(items))
+			for _, item := range items {
+				strs = append(strs, asString(item))
+			}
+			regexInput = strings.Join(strs, "\n")
+		}
 		if wantElements {
-			groups, e := adapter.Elements(asString(input), patterns...)
+			groups, e := adapter.Elements(regexInput, patterns...)
 			if e != nil {
 				return nil, e
 			}
 			result = groupsToAny(groups)
 		} else {
-			groups, e := adapter.Element(asString(input), patterns...)
+			groups, e := adapter.Element(regexInput, patterns...)
 			if e != nil {
 				return nil, e
 			}
@@ -340,6 +575,11 @@ func (a *Analyzer) evalStep(ctx context.Context, step sourceRule, input any, wan
 		return nil, err
 	}
 	if text, ok := result.(string); ok {
+		// makeUpStep 已在完整 raw 上展开时跳过重复 expandRawString（S06-07），
+		// 但 JS/脚本步骤的返回值不是来自 step.raw 展开，仍需展开（结果中可能含 @get/{{}}）。
+		if step.expanded && step.mode != ModeJS {
+			return text, nil
+		}
 		text = a.makeUpString(ctx, text, input)
 		return text, nil
 	}
@@ -361,6 +601,13 @@ func (a *Analyzer) expandRawString(ctx context.Context, text string, input any) 
 	if strings.TrimSpace(text) == "" {
 		return text, nil
 	}
+	// 递归深度保护：expandRawString→GetString→evalStep→makeUpString 可自引用循环，
+	// 恶意/畸形规则（如自引用 @put 或深层 {{@get:...}}）可造成深递归，超限保留原文本。
+	if a.evalDepth >= maxEvalDepth {
+		return text, nil
+	}
+	a.evalDepth++
+	defer func() { a.evalDepth-- }()
 	text = getRulePattern.ReplaceAllStringFunc(text, func(token string) string {
 		// ReplaceAllStringFunc 传入的 token 就是完整匹配，直接用位置切分避免二次 FindStringSubmatch。
 		loc := getRulePattern.FindStringIndex(token)
@@ -616,6 +863,16 @@ func (a *Analyzer) SetVariables(vars map[string]string) {
 	for key, value := range vars {
 		a.vars[key] = value
 	}
+	a.shared = false
+	if len(vars) == 0 {
+		a.baseline = nil
+		return
+	}
+	baseline := make(map[string]string, len(vars))
+	for key, value := range vars {
+		baseline[key] = value
+	}
+	a.baseline = baseline
 }
 
 func (a *Analyzer) VariablesJSON() string {
@@ -661,16 +918,20 @@ type sourceRule struct {
 	replaceRegex string
 	replacement  string
 	replaceFirst bool
-	putMap       map[string]string
+	putMap       []putEntry
 	// raw 为去掉 @put 后、按 ## 拆分前的完整规则；含 @get/{{}} 时在求值前整体展开再拆分（对齐 Legado makeUpRule）。
 	raw     string
 	hasEval bool
 	// literal 表示主规则（首个 ## 之前）含 @get/{{}}，按 Legado 视为文本模板而非选择器。
 	literal bool
+	// expanded 标记 makeUpStep 已在完整 raw 上展开，makeUpString 跳过重复展开。
+	expanded bool
 }
 
 var (
-	putRulePattern  = regexp.MustCompile(`(?i)@put:(\{[^}]+?\})`)
+	// putPrefix 为 @put: 前缀的字节形态（大小写不敏感比对用），配合 scanPutBlocks 的平衡括号提取
+	// 取代旧的正则 `@put:(\{[^}]+?\})`：旧正则会在第一个 `}` 处截断，嵌套对象/含 `}` 的值静默丢失。
+	putPrefix       = []byte{'@', 'p', 'u', 't', ':'}
 	getRulePattern  = regexp.MustCompile(`(?i)@get:\{([^}]+?)\}`)
 	jsRulePattern   = regexp.MustCompile(`(?is)\{\{([\w\W]*?)\}\}`)
 	evalRulePattern = regexp.MustCompile(`(?is)@get:\{[^}]+?\}|\{\{[\w\W]*?\}\}`)
@@ -708,22 +969,61 @@ func parseSourceRules(rule string, allInOne bool) []sourceRule {
 	return splitEmbeddedJSRules(rule, mode)
 }
 
+// hasPrefixIgnoreCase 大小写不敏感地判断 s 是否以 prefix 开头（ASCII，无分配）。
+func hasPrefixIgnoreCase(s string, prefix string) bool {
+	if len(s) < len(prefix) {
+		return false
+	}
+	for i := range prefix {
+		a := s[i]
+		b := prefix[i]
+		if a >= 'A' && a <= 'Z' {
+			a += 'a' - 'A'
+		}
+		if a != b {
+			return false
+		}
+	}
+	return true
+}
+
+// hasSuffixIgnoreCase 大小写不敏感地判断 s 是否以 suffix 结尾（ASCII，无分配）。
+func hasSuffixIgnoreCase(s string, suffix string) bool {
+	if len(s) < len(suffix) {
+		return false
+	}
+	offset := len(s) - len(suffix)
+	for i := range suffix {
+		a := s[offset+i]
+		b := suffix[i]
+		if a >= 'A' && a <= 'Z' {
+			a += 'a' - 'A'
+		}
+		if a != b {
+			return false
+		}
+	}
+	return true
+}
+
 func parseSourceRule(raw string, mode Mode) sourceRule {
 	rule := strings.TrimSpace(raw)
+	// S06-14：用前缀字节比较（'@'/'j'/'p'…大小写判断）替代 6+ 次 strings.ToLower 整串分配；
+	// 分词只在缓存未命中时执行，数百书源首次搜索时整串 ToLower 是热点小分配。
 	switch {
 	case mode == ModeRegex:
-	case strings.HasPrefix(strings.ToLower(rule), "@js:"):
+	case hasPrefixIgnoreCase(rule, "@js:"):
 		mode = ModeJS
 		rule = strings.TrimSpace(rule[4:])
-	case strings.HasPrefix(strings.ToLower(rule), "<js>") && strings.HasSuffix(strings.ToLower(rule), "</js>"):
+	case hasPrefixIgnoreCase(rule, "<js>") && hasSuffixIgnoreCase(rule, "</js>"):
 		mode = ModeJS
 		rule = strings.TrimSpace(rule[4 : len(rule)-5])
-	case strings.HasPrefix(strings.ToLower(rule), "@xpath:"):
+	case hasPrefixIgnoreCase(rule, "@xpath:"):
 		mode = ModeXPath
 		rule = strings.TrimSpace(rule[7:])
-	case strings.HasPrefix(strings.ToLower(rule), "@css:"):
+	case hasPrefixIgnoreCase(rule, "@css:"):
 		rule = strings.TrimSpace(rule[5:])
-	case strings.HasPrefix(strings.ToLower(rule), "@json:"):
+	case hasPrefixIgnoreCase(rule, "@json:"):
 		mode = ModeJSON
 		rule = strings.TrimSpace(rule[6:])
 	case strings.HasPrefix(rule, "$."):
@@ -735,8 +1035,9 @@ func parseSourceRule(raw string, mode Mode) sourceRule {
 	case strings.HasPrefix(rule, "@@"):
 		rule = strings.TrimPrefix(rule, "@@")
 	}
+	// 按平衡括号提取并移除全部 @put:{...} 段（含 `}` 的值不截断），按出现顺序保留键值对。
 	putMap := parsePutRules(rule)
-	rule = putRulePattern.ReplaceAllString(rule, "")
+	rule = removePutBlocks(rule)
 	step := sourceRule{mode: mode, putMap: putMap, raw: rule}
 	if loc := evalRulePattern.FindStringIndex(rule); loc != nil {
 		step.hasEval = true
@@ -825,18 +1126,316 @@ func splitRegexChain(rule string) []string {
 	return out
 }
 
-func parsePutRules(rule string) map[string]string {
-	matches := putRulePattern.FindAllStringSubmatch(rule, -1)
-	if len(matches) == 0 {
+// putEntry 是一条 @put 键值对，保持规则书写顺序（对齐 Legado putMap 的书写语义，
+// 使键间依赖 b 依赖 a 时求值结果确定）。
+type putEntry struct {
+	Key   string
+	Value string
+}
+
+// parsePutRules 提取规则中全部 @put:{...} 段并按出现顺序返回键值对。
+// 对齐 Legado 的平衡组语义（RuleAnalyzer.chompCodeBalanced/splitPutRule）：
+// 用括号平衡提取完整 {...}（忽略引号内括号与转义），支持含 `}` 的嵌套值；
+// 同名后键覆盖前键（对齐 GSON 后键覆盖语义）。
+func parsePutRules(rule string) []putEntry {
+	blocks := scanPutBlocks(rule)
+	if len(blocks) == 0 {
 		return nil
 	}
-	out := map[string]string{}
-	for _, match := range matches {
-		for key, value := range parseRuleObject(match[1]) {
-			out[key] = value
+	out := make([]putEntry, 0, len(blocks))
+	for _, block := range blocks {
+		for _, entry := range parseRuleObjectOrdered(block) {
+			replaced := false
+			for i := range out {
+				if out[i].Key == entry.Key {
+					out[i].Value = entry.Value
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				out = append(out, entry)
+			}
 		}
 	}
 	return out
+}
+
+// scanPutBlocks 扫描规则串中每个 @put: 后的完整平衡 {...} 段（引号内括号与 `\` 转义不参与平衡），
+// 返回各段花括号内内容；未闭合时返回已找到的段（容错对齐 Legado）。
+func scanPutBlocks(rule string) []string {
+	blocks := []string{}
+	for i := 0; i < len(rule); {
+		if !hasPutPrefix(rule[i:]) {
+			i++
+			continue
+		}
+		start := i + len(putPrefix)
+		for start < len(rule) && (rule[start] == ' ' || rule[start] == '\t') {
+			start++
+		}
+		if start >= len(rule) || rule[start] != '{' {
+			i = start
+			continue
+		}
+		content, next := consumeBalancedBraces(rule, start+1)
+		blocks = append(blocks, content)
+		i = next
+	}
+	return blocks
+}
+
+// hasPutPrefix 大小写不敏感地判断 s 是否以 @put: 开头。
+func hasPutPrefix(s string) bool {
+	if len(s) < len(putPrefix) {
+		return false
+	}
+	return (s[0] == '@') &&
+		(s[1] == 'p' || s[1] == 'P') &&
+		(s[2] == 'u' || s[2] == 'U') &&
+		(s[3] == 't' || s[3] == 'T') &&
+		s[4] == ':'
+}
+
+// consumeBalancedBraces 从 pos（首个 `{` 之后）提取平衡 {...} 段的内容与结束位置；
+// 引号内的括号与 `\` 转义字符不参与平衡（对齐 parser.consumeBalanced/chompRuleBalanced）。
+func consumeBalancedBraces(rule string, pos int) (string, int) {
+	start := pos
+	depth := 1
+	for pos < len(rule) {
+		r, width := utf8.DecodeRuneInString(rule[pos:])
+		if r == utf8.RuneError && width == 0 {
+			width = 1
+		}
+		pos += width
+		switch r {
+		case '\\':
+			if pos < len(rule) {
+				_, w := utf8.DecodeRuneInString(rule[pos:])
+				if w == 0 {
+					w = 1
+				}
+				pos += w
+			}
+		case '\'', '"':
+			// 引号内括号不参与平衡；未闭合引号按 Legado 容错继续扫描。
+			for pos < len(rule) {
+				q, qw := utf8.DecodeRuneInString(rule[pos:])
+				if q == utf8.RuneError && qw == 0 {
+					qw = 1
+				}
+				pos += qw
+				if q == r {
+					break
+				}
+			}
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return rule[start : pos-1], pos
+			}
+		}
+	}
+	return rule[start:], pos
+}
+
+// parseRuleObjectOrdered 按出现顺序解析 put 值对象的键值对：优先走严格 JSON（json.Unmarshal
+// 不保证键顺序，故严格路径也按键出现顺序解析），失败后按宽松 k:v 解析。
+func parseRuleObjectOrdered(raw string) []putEntry {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	strict := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &strict); err == nil {
+		out := make([]putEntry, 0, len(strict))
+		for _, key := range objectKeyOrder(raw) {
+			if value, ok := strict[key]; ok {
+				out = append(out, putEntry{Key: key, Value: value})
+			}
+		}
+		return out
+	}
+	// 宽松路径：按平衡括号切分 k:v（嵌套对象/引号内冒号不切分）。仅当 raw 以 { 开头时剥外层
+	// 花括号（平衡提取，不用 TrimSuffix 以免截断值内 `}`）；键前缀形态（key:{...}）不剥。
+	if strings.HasPrefix(raw, "{") {
+		if content, ok := balancedOuterBraces(raw); ok {
+			raw = content
+		}
+	}
+	out := []putEntry{}
+	for _, part := range splitLooseObjectParts(raw) {
+		key, value, ok := cutLooseKeyValue(part)
+		if !ok {
+			continue
+		}
+		key = strings.Trim(strings.TrimSpace(key), `"'`)
+		value = strings.TrimSpace(value)
+		// 宽松 JSON 值两侧成对引号剥去（对齐 GSON 引号字符串语义），值内引号保留。
+		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+			value = value[1 : len(value)-1]
+		}
+		if key != "" {
+			out = append(out, putEntry{Key: key, Value: value})
+		}
+	}
+	return out
+}
+
+// balancedOuterBraces 剥去 raw 的最外层平衡花括号（raw 以 { 开头时）；非平衡返回 false。
+func balancedOuterBraces(raw string) (string, bool) {
+	content, next := consumeBalancedBraces(raw, 1)
+	if next != len(raw) {
+		return "", false
+	}
+	return content, true
+}
+
+// cutLooseKeyValue 切分宽松对象的单个 k:v 片段：首个不在引号/花括号内的冒号为分隔，
+// 值原样保留（含嵌套花括号与引号），仅去除首尾空白；两侧成对引号剥去（值内 `}` 不截断）。
+func cutLooseKeyValue(part string) (string, string, bool) {
+	depth := 0
+	inString := false
+	escaped := false
+	for i := range part {
+		c := part[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch {
+		case c == '\\' && inString:
+			escaped = true
+		case c == '"' || c == '\'':
+			if c == '"' || !inString {
+				inString = !inString
+			}
+		case c == '{':
+			depth++
+		case c == '}':
+			depth--
+		case c == ':' && depth == 0 && !inString:
+			return part[:i], part[i+1:], true
+		}
+	}
+	return "", "", false
+}
+
+// objectKeyOrder 从严格 JSON 对象文本中按出现顺序提取顶层键名（引号内冒号/逗号不切分）。
+func objectKeyOrder(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "{") || !strings.HasSuffix(raw, "}") {
+		return nil
+	}
+	raw = raw[1 : len(raw)-1]
+	keys := []string{}
+	inString := false
+	escaped := false
+	partStart := 0
+	for i := range raw {
+		c := raw[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch {
+		case c == '\\' && inString:
+			escaped = true
+		case c == '"':
+			inString = !inString
+		case c == ',' && !inString:
+			key := decodeJSONKey(raw[partStart:i])
+			if key != "" {
+				keys = append(keys, key)
+			}
+			partStart = i + 1
+		}
+	}
+	if key := decodeJSONKey(raw[partStart:]); key != "" {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// decodeJSONKey 从 "key": 前缀片段解析键名。
+func decodeJSONKey(part string) string {
+	part = strings.TrimSpace(part)
+	key, _, ok := strings.Cut(part, ":")
+	if !ok {
+		key = part
+	}
+	key = strings.TrimSpace(key)
+	var decoded string
+	if err := json.Unmarshal([]byte(key), &decoded); err != nil {
+		return strings.Trim(key, `"'`)
+	}
+	return decoded
+}
+
+// splitLooseObjectParts 按逗号切分宽松对象文本，引号与嵌套花括号内的逗号不切分。
+func splitLooseObjectParts(raw string) []string {
+	parts := []string{}
+	depth := 0
+	inString := false
+	escaped := false
+	partStart := 0
+	for i := range raw {
+		c := raw[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch {
+		case c == '\\' && inString:
+			escaped = true
+		case c == '"' || c == '\'':
+			if c == '"' || !inString {
+				inString = !inString
+			}
+		case c == '{':
+			depth++
+		case c == '}':
+			depth--
+		case c == ',' && depth == 0 && !inString:
+			parts = append(parts, raw[partStart:i])
+			partStart = i + 1
+		}
+	}
+	parts = append(parts, raw[partStart:])
+	return parts
+}
+
+// removePutBlocks 从规则串中移除全部 @put:{...} 段（平衡括号提取，含 `}` 的值不截断），
+// 返回剩余规则文本。
+func removePutBlocks(rule string) string {
+	for {
+		start, end := findPutBlock(rule)
+		if end == 0 {
+			return rule
+		}
+		rule = rule[:start] + rule[end:]
+	}
+}
+
+// findPutBlock 定位首个 @put:{...} 段的起止位置；未找到时 end 返回 0。
+func findPutBlock(rule string) (start, end int) {
+	for i := range rule {
+		if !hasPutPrefix(rule[i:]) {
+			continue
+		}
+		bodyStart := i + len(putPrefix)
+		for bodyStart < len(rule) && (rule[bodyStart] == ' ' || rule[bodyStart] == '\t') {
+			bodyStart++
+		}
+		if bodyStart >= len(rule) || rule[bodyStart] != '{' {
+			continue
+		}
+		_, next := consumeBalancedBraces(rule, bodyStart+1)
+		return i, next
+	}
+	return 0, 0
 }
 
 func isJSONInput(input any) bool {
@@ -908,39 +1507,14 @@ func parseSingleQuotedCall(expr string, name string) (string, bool) {
 	return "", false
 }
 
-func parseRuleObject(raw string) map[string]string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	strict := map[string]string{}
-	if err := json.Unmarshal([]byte(raw), &strict); err == nil {
-		return strict
-	}
-	raw = strings.TrimPrefix(strings.TrimSuffix(raw, "}"), "{")
-	out := map[string]string{}
-	for _, part := range strings.Split(raw, ",") {
-		key, value, ok := strings.Cut(part, ":")
-		if !ok {
-			continue
-		}
-		key = strings.Trim(strings.TrimSpace(key), `"'`)
-		value = strings.Trim(strings.TrimSpace(value), `"'`)
-		if key != "" {
-			out[key] = value
-		}
-	}
-	return out
-}
-
 func (a *Analyzer) putStepVars(ctx context.Context, step sourceRule, input any) error {
-	for key, rule := range step.putMap {
-		value, err := a.evalPutRule(ctx, rule, input)
+	for _, entry := range step.putMap {
+		value, err := a.evalPutRule(ctx, entry.Value, input)
 		if err != nil {
 			return err
 		}
-		a.storeVariable(input, key, value)
-		a.vars[key] = value
+		a.storeVariable(input, entry.Key, value)
+		a.writeVar(entry.Key, value)
 	}
 	return nil
 }
@@ -950,8 +1524,15 @@ func (a *Analyzer) evalPutRule(ctx context.Context, rule string, input any) (str
 	if rule == "" {
 		return "", nil
 	}
-	if value, ok := lookupInputField(input, rule); ok {
-		return value, nil
+	// 对齐 Legado putRule 的 getString 求值语义，同时保持字面量兼容：
+	// 仅当 put 值为规则形态（@get/@js/{{/$ 选择器前缀）时走 GetString 求值；
+	// 纯字面量（如 {k:1}）直接返回原值（Legado getString 对该类文本同样无法命中选择器，
+	// Reader 按字面量保留以支持 @put 字面量与字段引用）。
+	if !isRuleShapedValue(rule) {
+		if value, ok := lookupInputField(input, rule); ok {
+			return value, nil
+		}
+		return rule, nil
 	}
 	value, err := a.GetString(ctx, rule, input)
 	if err != nil {
@@ -960,12 +1541,32 @@ func (a *Analyzer) evalPutRule(ctx context.Context, rule string, input any) (str
 	return value, nil
 }
 
+// isRuleShapedValue 判断 put 值是否为规则形态：@前缀、$ 选择器前缀、{{ 模板，
+// 或两侧成对引号包裹的选择器（如 "[property$=book_name]@content"，Legado put 值经
+// getString 求值，宽松 JSON 引号剥去后即选择器）。
+func isRuleShapedValue(rule string) bool {
+	if strings.HasPrefix(rule, "@") || strings.HasPrefix(rule, "$") || strings.HasPrefix(rule, "{{") {
+		return true
+	}
+	if strings.Contains(rule, "{{") || strings.Contains(rule, "@get:{") {
+		return true
+	}
+	if len(rule) >= 2 && (rule[0] == '"' || rule[0] == '\'') && rule[len(rule)-1] == rule[0] {
+		// 引号包裹的值剥引号后再判断（@put 值 JSON 引号剥去后是选择器）。
+		return isRuleShapedValue(rule[1 : len(rule)-1])
+	}
+	return strings.Contains(rule, "@") || strings.Contains(rule, "{{")
+}
+
 // makeUpStep 对齐 Legado SourceRule.makeUpRule：在完整规则（含 ## 替换段）上一次性展开 @get:{}/{{}}，
 // 再重新按 ## 拆分主规则与替换段。
 func (a *Analyzer) makeUpStep(ctx context.Context, step sourceRule, input any) (sourceRule, error) {
 	if !step.hasEval {
 		return step, nil
 	}
+	// 标记 makeUpStep 已在完整 raw 上展开 @get/{{}}，evalStep 尾部 makeUpString 跳过
+	// 重复展开（S06-07：含 {{}}/@get 的规则全串被展开两次的开销）。
+	step.expanded = true
 	var err error
 	expanded := evalRulePattern.ReplaceAllStringFunc(step.raw, func(token string) string {
 		if err != nil {
@@ -981,8 +1582,10 @@ func (a *Analyzer) makeUpStep(ctx context.Context, step sourceRule, input any) (
 			return value
 		}
 		if a.ctx.Script == nil {
-			err = ErrScriptUnavailable
-			return ""
+			// 对齐顶层模板的优雅回退（expandRawString/evalTemplateExpr）：无脚本运行时时
+			// 保留原 token 求值结果为原文，不再让整条规则失败（Legado 内嵌 JS 引擎恒可用，
+			// 未配置脚本运行时的部署下 {{js}} 模板不应使规则整体失败）。
+			return token
 		}
 		var value any
 		value, err = a.ctx.Script.Eval(ctx, expr, input)
@@ -1023,6 +1626,18 @@ func applyReplace(input any, step sourceRule) (any, error) {
 		out := make([]string, 0, len(value))
 		for _, item := range value {
 			replaced, err := regex.Replace(item, step.replaceRegex, step.replacement, step.replaceFirst)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, replaced)
+		}
+		return out, nil
+	case []any:
+		// 逐项 asString 后逐项替换，避免整体 json.Marshal（S06-08：大 jsonpath 列表
+		// 每经过一个正则/替换步骤就整体序列化一次的开销）。
+		out := make([]any, 0, len(value))
+		for _, item := range value {
+			replaced, err := regex.Replace(asString(item), step.replaceRegex, step.replacement, step.replaceFirst)
 			if err != nil {
 				return nil, err
 			}
@@ -1127,6 +1742,7 @@ func lookupInputField(input any, key string) (string, bool) {
 
 func (a *Analyzer) lookupVariable(input any, key string) string {
 	// 对齐 Legado AnalyzeRule.get：bookName/title 优先取当前书籍名与章节标题。
+	// S06-12：常见键用类型断言直取（替代反射 FieldByName），逐元素热点路径避免反射开销。
 	switch key {
 	case "bookName":
 		if value, ok := carrierStringField(a.ctx.Book, "Name", "name"); ok {
@@ -1138,6 +1754,10 @@ func (a *Analyzer) lookupVariable(input any, key string) string {
 		}
 	}
 	if value, ok := lookupInputField(input, key); ok && value != "" {
+		return value
+	}
+	// 常见变量键先查 a.vars（Legado get 的 map 直查路径）。
+	if value, ok := a.vars[key]; ok && value != "" {
 		return value
 	}
 	if value, ok := lookupVariableFromContext(input, key); ok {
@@ -1223,12 +1843,21 @@ func lookupVariableFromCarrier(carrier any, key string) (string, bool) {
 			}
 		}
 	default:
-		return lookupVariableFromStructCarrier(carrier, key)
+		if value, ok := lookupVariableFromStructCarrier(carrier, key); ok {
+			return value, true
+		}
 	}
 	return "", false
 }
 
 func lookupVariableFromStructCarrier(carrier any, key string) (string, bool) {
+	// S06-12：domain 载体类型断言直取 Variable 字段，避免反射 FieldByName（热点路径）。
+	switch typed := carrier.(type) {
+	case *domainbook.Book:
+		return decodeVariableEntry(typed.Variable, key)
+	case *domainbook.BookChapter:
+		return decodeVariableEntry(typed.Variable, key)
+	}
 	rv := reflect.ValueOf(carrier)
 	if !rv.IsValid() {
 		return "", false
