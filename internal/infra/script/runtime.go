@@ -1644,25 +1644,6 @@ func (s *javaGZIPInputStream) read(target goja.Value) int {
 
 func (s *javaGZIPInputStream) close() {}
 
-func aesCBCDecrypt(cipherText []byte, key []byte, iv []byte, transformation string) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	if len(iv) != block.BlockSize() || len(cipherText)%block.BlockSize() != 0 {
-		return nil, fmt.Errorf("invalid AES/CBC input")
-	}
-	plain := make([]byte, len(cipherText))
-	cipher.NewCBCDecrypter(block, iv).CryptBlocks(plain, cipherText)
-	if strings.Contains(strings.ToUpper(transformation), "PKCS5") || strings.Contains(strings.ToUpper(transformation), "PKCS7") {
-		plain, err = pkcs7Unpad(plain, block.BlockSize())
-		if err != nil {
-			return nil, err
-		}
-	}
-	return plain, nil
-}
-
 func decodeSymmetricInput(value any) []byte {
 	switch typed := value.(type) {
 	case string:
@@ -2448,26 +2429,6 @@ func (r *Runtime) fetchScriptCall(runCtx evalContext, vm *goja.Runtime, method s
 		}
 	}
 	return requestoption.Fetch(runCtx.ctx, r.policy.Fetcher, req, vmRequestEvaluator(r, vm))
-}
-
-type scriptHTTPRequest struct {
-	requestURL string
-}
-
-func (r scriptHTTPRequest) URL() string {
-	return r.requestURL
-}
-
-func (r scriptHTTPRequest) Url() string {
-	return r.requestURL
-}
-
-type scriptHTTPRawResponse struct {
-	request scriptHTTPRequest
-}
-
-func (r scriptHTTPRawResponse) Request() scriptHTTPRequest {
-	return r.request
 }
 
 func newScriptHTTPResponse(vm *goja.Runtime, resp *fetch.Response, err error) goja.Value {
@@ -3348,75 +3309,6 @@ func androidBase64Encoding(flags int) *base64.Encoding {
 	return encoding
 }
 
-func chineseNumber(value string) (int, bool) {
-	digits := map[rune]int{'零': 0, '〇': 0, '一': 1, '壹': 1, '二': 2, '贰': 2, '两': 2, '三': 3, '叁': 3, '四': 4, '肆': 4, '五': 5, '伍': 5, '六': 6, '陆': 6, '七': 7, '柒': 7, '八': 8, '捌': 8, '九': 9, '玖': 9}
-	units := map[rune]int{'十': 10, '拾': 10, '百': 100, '佰': 100, '千': 1000, '仟': 1000, '万': 10000, '亿': 100000000}
-	runes := []rune(strings.TrimSpace(value))
-	if len(runes) == 0 {
-		return 0, false
-	}
-	onlyDigits := true
-	for _, r := range runes {
-		if _, ok := units[r]; ok {
-			onlyDigits = false
-			break
-		}
-	}
-	if onlyDigits {
-		var b strings.Builder
-		for _, r := range runes {
-			switch {
-			case r >= '0' && r <= '9':
-				b.WriteRune(r)
-			case r >= '０' && r <= '９':
-				b.WriteRune('0' + (r - '０'))
-			default:
-				digit, ok := digits[r]
-				if !ok {
-					return 0, false
-				}
-				b.WriteByte(byte('0' + digit))
-			}
-		}
-		parsed, err := strconv.Atoi(b.String())
-		return parsed, err == nil
-	}
-	total, section, current := 0, 0, 0
-	for _, r := range runes {
-		if r >= '0' && r <= '9' {
-			current = current*10 + int(r-'0')
-			continue
-		}
-		if r >= '０' && r <= '９' {
-			current = current*10 + int(r-'０')
-			continue
-		}
-		if digit, ok := digits[r]; ok {
-			current = digit
-			continue
-		}
-		unit, ok := units[r]
-		if !ok {
-			return 0, false
-		}
-		if unit < 10000 {
-			if current == 0 {
-				current = 1
-			}
-			section += current * unit
-		} else {
-			section += current
-			if section == 0 {
-				section = 1
-			}
-			total += section * unit
-			section = 0
-		}
-		current = 0
-	}
-	return total + section + current, true
-}
-
 func decodeBase64Bytes(value string) []byte {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -3505,18 +3397,6 @@ func normalizeCharsetName(charsetName string) string {
 	return charsetName
 }
 
-func putRuntimeVariable(vm *goja.Runtime, key string, value any) {
-	vars := vm.Get("__variables")
-	if goja.IsUndefined(vars) || goja.IsNull(vars) {
-		obj := vm.NewObject()
-		_ = vm.Set("__variables", obj)
-		vars = obj
-	}
-	if obj := vars.ToObject(vm); obj != nil {
-		_ = obj.Set(key, value)
-	}
-}
-
 func selectionFromBinding(value any) *goquery.Selection {
 	if selection, ok := value.(*goquery.Selection); ok {
 		return selection
@@ -3534,20 +3414,6 @@ func stringFromJavaValue(value any, charsetName string) string {
 		return text
 	}
 	return decodeStringBytes(value, charsetName)
-}
-
-var chapterNumberPattern = regexp.MustCompile(`第([^章]+)章`)
-
-func toNumericChapter(value string) string {
-	match := chapterNumberPattern.FindStringSubmatchIndex(value)
-	if len(match) != 4 {
-		return value
-	}
-	number, ok := chineseNumber(value[match[2]:match[3]])
-	if !ok {
-		return value
-	}
-	return value[:match[2]] + strconv.Itoa(number) + value[match[3]:]
 }
 
 func (s *javaByteArrayOutputStream) ToString() string {

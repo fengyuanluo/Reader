@@ -216,8 +216,6 @@ type programCache struct {
 type programEntry struct {
 	key     [sha256.Size]byte
 	program *goja.Program
-	// rewritten 是 rewriteJavaCompatScript 之后的文本（S05-02）：原文哈希命中时跳过改写。
-	rewritten string
 }
 
 func newProgramCache(capacity int) *programCache {

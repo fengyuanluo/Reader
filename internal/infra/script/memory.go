@@ -34,10 +34,9 @@ const (
 var errScriptOutOfMemory = fmt.Errorf("%w: 脚本内存预算超限（process heap budget exceeded）", ErrScriptFailed)
 
 type memoryWatchdog struct {
-	mu       sync.Mutex
-	live     map[*goja.Runtime]struct{}
-	stop     chan struct{}
-	stopOnce sync.Once
+	mu   sync.Mutex
+	live map[*goja.Runtime]struct{}
+	stop chan struct{}
 	// overCount 连续超预算的采样次数：连续 memoryWatchdogOverSamples 次都超预算才中断。
 	overCount int
 }
