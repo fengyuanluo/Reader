@@ -37,6 +37,37 @@ var migrations = []migration{
 CREATE INDEX IF NOT EXISTS idx_books_dur_chapter_time ON books(dur_chapter_time DESC);
 CREATE INDEX IF NOT EXISTS idx_cache_entries_namespace_expires ON cache_entries(namespace, expires_at);
 `)},
+	// chapters 主键从 (book_id,url) 改为 (book_id,chapter_index)：目录写库以
+	// chapter_index 为准整表替换（S12-02 语义），同书源多章同 URL 属合法数据，
+	// (book_id,url) 唯一约束会导致真实目录写库失败。url 降级为普通列并建非唯一索引。
+	{version: 10, name: "chapters primary key to book_id,chapter_index", apply: execSQL(`
+CREATE TABLE IF NOT EXISTS chapters_new (
+  book_id TEXT NOT NULL,
+  book_url TEXT NOT NULL,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  is_volume INTEGER NOT NULL DEFAULT 0,
+  base_url TEXT,
+  chapter_index INTEGER NOT NULL,
+  is_vip INTEGER NOT NULL DEFAULT 0,
+  is_pay INTEGER NOT NULL DEFAULT 0,
+  resource_url TEXT,
+  tag TEXT,
+  word_count TEXT,
+  variable TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(book_id, chapter_index),
+  FOREIGN KEY(book_id) REFERENCES books(book_id) ON DELETE CASCADE
+);
+INSERT OR REPLACE INTO chapters_new
+  (book_id, book_url, url, title, is_volume, base_url, chapter_index, is_vip, is_pay, resource_url, tag, word_count, variable, created_at, updated_at)
+SELECT book_id, book_url, url, title, is_volume, base_url, chapter_index, is_vip, is_pay, resource_url, tag, word_count, variable, created_at, updated_at
+FROM chapters;
+DROP TABLE chapters;
+ALTER TABLE chapters_new RENAME TO chapters;
+CREATE INDEX IF NOT EXISTS idx_chapters_book_url ON chapters(book_id, url);
+`)},
 }
 
 // Migrate 把数据库升级到最新版本。连接级 PRAGMA（外键、busy_timeout、WAL）由 Open 通过 DSN 设置。

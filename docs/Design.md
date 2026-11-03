@@ -1202,7 +1202,7 @@ READER_DATA_DIR                     默认 data
 READER_SQLITE_DSN                   默认 data/reader.db
 READER_TOKEN                        默认空
 READER_ENV                          默认 development
-READER_DEFAULT_USER_AGENT           默认 Reader/0.1.0
+READER_DEFAULT_USER_AGENT           默认 Legado 同形 Chrome UA（Chrome/124.0.0.0，R5）
 READER_FETCH_TIMEOUT                默认 30s
 READER_FETCH_MAX_BODY_BYTES         默认 10 MiB
 READER_FETCH_MAX_REDIRECTS          默认 5

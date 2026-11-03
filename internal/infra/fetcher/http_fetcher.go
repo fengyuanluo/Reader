@@ -99,9 +99,10 @@ type Option func(*HTTPFetcher)
 func NewHTTPFetcher(opts ...Option) *HTTPFetcher {
 	// 传输层参数在 opts 应用后再确定（S08-02：dialer 超时须跟随 f.timeout）。
 	f := &HTTPFetcher{
-		timeout:          30 * time.Second,
-		maxRedirects:     5,
-		defaultUserAgent: "Reader/0.1.0",
+		timeout:      30 * time.Second,
+		maxRedirects: 5,
+		// R5：对齐 Legado 同形稳定 Chrome UA，与 config.Load 默认值一致。
+		defaultUserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 		maxBodyBytes:     10 * 1024 * 1024,
 		resolver: func(ctx context.Context, host string) ([]net.IP, error) {
 			return net.DefaultResolver.LookupIP(ctx, "ip", host)

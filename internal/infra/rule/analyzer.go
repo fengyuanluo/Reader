@@ -349,7 +349,9 @@ func splitTopLevelChain(rule string) ([]string, string, bool) {
 	inString := false
 	escaped := false
 	partStart := 0
-	for i := range rule {
+	// 显式下标循环：连续分隔符（如 a|||b）时 partStart 可能追上 i，
+	// range 循环无法跳过剩余分隔符字节，rule[partStart:i] 会越界 panic（R2）。
+	for i := 0; i < len(rule); i++ {
 		c := rule[i]
 		if escaped {
 			escaped = false
@@ -366,7 +368,7 @@ func splitTopLevelChain(rule string) ([]string, string, bool) {
 			depth++
 		case c == ')' || c == ']' || c == '}':
 			depth--
-		case depth == 0 && !inString && strings.HasPrefix(rule[i:], sep):
+		case depth == 0 && !inString && partStart <= i && strings.HasPrefix(rule[i:], sep):
 			parts = append(parts, rule[partStart:i])
 			partStart = i + len(sep)
 			i += len(sep) - 1

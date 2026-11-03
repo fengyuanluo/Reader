@@ -23,7 +23,7 @@
 
 1. 默认抓取 UA：
    - `internal/infra/fetcher/http_fetcher.go`
-   - 默认值是 `Reader/0.1.0`
+   - 默认值是 `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36`（R5 对齐 Legado 同形稳定 Chrome UA）
 
 2. 默认 WebView UA 兼容字符串：
    - `internal/infra/script/runtime.go`

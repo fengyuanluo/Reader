@@ -104,12 +104,17 @@ func TestAdapterSupportsSelectorListWithInvalidFallbackBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	got, err := adapter.String(`@css:div.forum-content.mt-3,div[class =d_post_content j_d_post_content]@all`)
+	// R1：非法分支不再静默 matchNothing；合法分支必须仍然生效。
+	got, err := adapter.String(`@css:div.forum-content.mt-3@all`)
 	if err != nil {
 		t.Fatalf("String() error = %v", err)
 	}
 	if got == "" || !strings.Contains(got, "第一章") {
 		t.Fatalf("got = %q", got)
+	}
+	_, err = adapter.String(`@css:div.forum-content.mt-3,div[class =d_post_content j_d_post_content]@all`)
+	if !errors.Is(err, ErrInvalidSelector) {
+		t.Fatalf("error = %v, want ErrInvalidSelector", err)
 	}
 }
 
@@ -607,5 +612,55 @@ func BenchmarkFilterDeepestTextMatchCommaBaseline(b *testing.B) {
 		if selected.Length() == 0 {
 			b.Fatalf("empty selection")
 		}
+	}
+}
+
+// TestAdapterSupportsJsoupPseudoClasses 覆盖 R1：cascadia 不支持的 jsoup 扩展伪类
+// :eq(n)/:gt(n)/:lt(n)（0-based；gt 不含 n、lt 含 n-1），578 语料真实书源命中。
+func TestAdapterSupportsJsoupPseudoClasses(t *testing.T) {
+	adapter, err := New(`<div><i>零</i><i>一</i><i>二</i><i>三</i></div><ul><li>列表</li></ul>`)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	tests := []struct {
+		name string
+		rule string
+		want []string
+	}{
+		{name: "eq first", rule: "i:eq(0)@text", want: []string{"零"}},
+		{name: "eq last", rule: "i:eq(-1)@text", want: []string{"三"}},
+		{name: "gt", rule: "i:gt(1)@text", want: []string{"二", "三"}},
+		{name: "lt", rule: "i:lt(2)@text", want: []string{"零", "一"}},
+		{name: "eq with attr selects nothing (no style attr)", rule: "div[style]:eq(0)@html", want: []string{}},
+		{name: "gt inside chain selects nothing (single ul)", rule: "ul:gt(0)@li@text", want: []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := adapter.Strings(tt.rule)
+			if err != nil {
+				t.Fatalf("Strings(%q) error = %v", tt.rule, err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Strings(%q) = %#v, want %#v", tt.rule, got, tt.want)
+			}
+		})
+	}
+	// gt 全越界返回空集；多个伪类叠加按出现顺序依次套用。
+	if got, err := adapter.Strings("i:gt(9)@text"); err != nil || len(got) != 0 {
+		t.Fatalf("gt out of range = %#v, %v", got, err)
+	}
+	if got, err := adapter.Strings("i:lt(3):eq(1)@text"); err != nil || !reflect.DeepEqual(got, []string{"一"}) {
+		t.Fatalf("stacked pseudo = %#v, %v", got, err)
+	}
+}
+
+// TestAdapterReturnsErrorForInvalidSelector 覆盖 R1：非法选择器不再静默返回空集。
+func TestAdapterReturnsErrorForInvalidSelector(t *testing.T) {
+	adapter, err := New(searchHTML)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := adapter.Strings("div:foo@text"); !errors.Is(err, ErrInvalidSelector) {
+		t.Fatalf("error = %v, want ErrInvalidSelector", err)
 	}
 }

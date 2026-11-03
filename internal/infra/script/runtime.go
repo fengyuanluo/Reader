@@ -913,26 +913,40 @@ func (r *Runtime) javaBindings(vm *goja.Runtime, runCtx evalContext) map[string]
 				err  error
 			}
 			results := make([]fetchResult, len(urls))
+			// goja.Runtime 非并发安全：请求物化（模板展开、header 求值、URL 选项解析）
+			// 必须全部在 VM goroutine 内完成（R4），goroutine 只做网络请求。
+			type fetchTask struct {
+				req fetch.Request
+				err error
+			}
+			tasks := make([]fetchTask, len(urls))
+			for i, rawURL := range urls {
+				callCtx, cancel := scriptCallContext(runCtx.ctx, call, timeoutIndex)
+				urlCtx := runCtx
+				urlCtx.ctx = callCtx
+				req, err := r.buildScriptRequest(urlCtx, vm, rawURL, nil)
+				if err == nil {
+					req.SkipRateLimit = skipRate
+				}
+				tasks[i] = fetchTask{req: req, err: err}
+				cancel()
+			}
 			// 并发度：与 Legado JsExtensions ajaxAll 一致全并发，但每个请求的 ctx 仍受 Eval 总超时约束。
 			sem := make(chan struct{}, maxAjaxTestAllConcurrency)
-			for i, rawURL := range urls {
+			for i := range tasks {
+				if tasks[i].err != nil {
+					results[i].err = tasks[i].err
+					continue
+				}
 				wg.Add(1)
-				go func(i int, rawURL string) {
+				go func(i int, req fetch.Request) {
 					defer wg.Done()
 					sem <- struct{}{}
 					defer func() { <-sem }()
 					callCtx, cancel := scriptCallContext(runCtx.ctx, call, timeoutIndex)
 					defer cancel()
-					urlCtx := runCtx
-					urlCtx.ctx = callCtx
-					req, err := r.buildScriptRequest(urlCtx, vm, rawURL, nil)
-					if err == nil {
-						req.SkipRateLimit = skipRate
-						results[i].resp, results[i].err = requestoption.Fetch(callCtx, r.policy.Fetcher, req, vmRequestEvaluator(r, vm))
-					} else {
-						results[i].err = err
-					}
-				}(i, rawURL)
+					results[i].resp, results[i].err = requestoption.Fetch(callCtx, r.policy.Fetcher, req, nil)
+				}(i, tasks[i].req)
 			}
 			wg.Wait()
 			// goja.Runtime 非并发安全：响应包装回 VM goroutine 后再构造。
@@ -2083,7 +2097,8 @@ func sourceUserAgent(src *domainsource.BookSource) string {
 			}
 		}
 	}
-	return "Reader/0.1.0"
+	// R5：对齐 Legado 同形稳定 Chrome UA，与 config.Load / fetcher 默认值一致。
+	return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 }
 
 func scriptAnalyzerBaseURL(vm *goja.Runtime) string {

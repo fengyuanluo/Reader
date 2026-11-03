@@ -1398,3 +1398,27 @@ type fetcherFunc func(context.Context, fetch.Request) (*fetch.Response, error)
 func (f fetcherFunc) Fetch(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
 	return f(ctx, req)
 }
+
+// TestRuntimeAjaxTestAllConcurrentScriptHeaders 覆盖 R4：ajaxTestAll 并发请求的
+// 参数物化（@js: header 模板展开）原先在并发 goroutine 内访问共享 *goja.Runtime，
+// 数据竞争。-race 下必须通过。
+func TestRuntimeAjaxTestAllConcurrentScriptHeaders(t *testing.T) {
+	fetcher := fetcherFunc(func(ctx context.Context, req fetch.Request) (*fetch.Response, error) {
+		if req.Headers["X-Seq"] == "" {
+			t.Fatalf("X-Seq header missing: %#v", req.Headers)
+		}
+		return &fetch.Response{StatusCode: 200, Body: []byte(req.Headers["X-Seq"]), URL: req.URL}, nil
+	})
+	src := &source.BookSource{BookSourceURL: "https://source.example.test", Header: `@js:JSON.stringify({"X-Seq":"seq"})`}
+	runtime := NewRuntime(Policy{SourceKey: src.BookSourceURL, BaseURL: src.BookSourceURL, Source: src, Fetcher: fetcher})
+	got, err := runtime.Eval(context.Background(), `
+var all = java.ajaxTestAll(['/a','/b','/c','/d'], 5000);
+[all[0].body(), all[1].body(), all[2].body(), all[3].body()].join('|')
+`, nil)
+	if err != nil {
+		t.Fatalf("Eval() error = %v", err)
+	}
+	if got != "seq|seq|seq|seq" {
+		t.Fatalf("got = %#v", got)
+	}
+}

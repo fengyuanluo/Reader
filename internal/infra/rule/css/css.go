@@ -2,6 +2,7 @@ package css
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -57,23 +58,72 @@ var regexAttrSelectorPattern = regexp.MustCompile(`\[\s*([A-Za-z_][-A-Za-z0-9_:.
 const selectorCacheSize = 1024
 
 var (
-	matcherCache       = lru.New[string, goquery.Matcher](selectorCacheSize)
+	matcherCache       = lru.New[string, compiledMatcher](selectorCacheSize)
 	parsedCache        = lru.New[string, parsedSelector](selectorCacheSize)
 	regexAttrCache     = lru.New[string, regexAttrSelectors](selectorCacheSize)
 	matchNothing       = cascadia.Selector(func(*html.Node) bool { return false })
-	matchAnyElement    = compileMatcher("*")
+	matchAnyElement, _ = compileMatcher("*")
 	selectorKeywordSet = []string{"text", "children"}
 )
 
-// compileMatcher 返回缓存的 cascadia 选择器；非法选择器与 goquery 一致视为不匹配任何节点。
-func compileMatcher(selector string) goquery.Matcher {
-	return matcherCache.GetOrCompute(selector, func() goquery.Matcher {
-		compiled, err := cascadia.Compile(selector)
+// compiledMatcher 缓存编译结果与 error 两者：非法选择器不再静默 matchNothing（R1），
+// 错误沿调用链向上传播为规则错误。
+type compiledMatcher struct {
+	m   goquery.Matcher
+	err error
+}
+
+// ErrInvalidSelector 选择器无法编译为有效匹配器时返回（R1：原先静默返回空集）。
+var ErrInvalidSelector = errors.New("invalid css selector")
+
+// compileMatcher 返回缓存的 cascadia 选择器；非法选择器返回 ErrInvalidSelector。
+func compileMatcher(selector string) (goquery.Matcher, error) {
+	compiled := matcherCache.GetOrCompute(selector, func() compiledMatcher {
+		m, err := cascadia.Compile(selector)
 		if err != nil {
-			return matchNothing
+			return compiledMatcher{err: fmt.Errorf("%w %q: %v", ErrInvalidSelector, selector, err)}
 		}
-		return compiled
+		return compiledMatcher{m: m}
 	})
+	return compiled.m, compiled.err
+}
+
+// pseudoClassPattern 匹配 jsoup 扩展伪类 :eq(n)/:gt(n)/:lt(n)（cascadia 不支持，R1）。
+var pseudoClassPattern = regexp.MustCompile(`:(eq|gt|lt)\(\s*(-?\d+)\s*\)`)
+
+// extractPseudoIndexes 剥离选择器中的 jsoup 扩展伪类，翻译为索引表达式（jsoup 0-based）：
+// :eq(n) 取第 n 个；:gt(n) 取 n+1 之后；:lt(n) 取 n-1 之前。
+// 返回清理后的选择器与按出现顺序排列的索引表达式。
+func extractPseudoIndexes(selector string) (string, []selectorIndexExpr, bool) {
+	if !strings.Contains(selector, ":") {
+		return selector, nil, false
+	}
+	exprs := []selectorIndexExpr{}
+	cleaned := pseudoClassPattern.ReplaceAllStringFunc(selector, func(token string) string {
+		match := pseudoClassPattern.FindStringSubmatch(token)
+		if len(match) != 3 {
+			return token
+		}
+		n, err := strconv.Atoi(match[2])
+		if err != nil {
+			return token
+		}
+		switch match[1] {
+		case "eq":
+			exprs = append(exprs, selectorIndexExpr{single: &n})
+		case "gt":
+			start := n + 1
+			exprs = append(exprs, selectorIndexExpr{rng: &selectorRange{start: &start}})
+		case "lt":
+			end := n - 1
+			exprs = append(exprs, selectorIndexExpr{rng: &selectorRange{end: &end}})
+		}
+		return ""
+	})
+	if len(exprs) == 0 {
+		return selector, nil, false
+	}
+	return strings.TrimSpace(cleaned), exprs, true
 }
 
 func emptySelection(selection *goquery.Selection) *goquery.Selection {
@@ -167,7 +217,11 @@ func extractStep(root *goquery.Selection, rule string) ([]string, error) {
 		if selector == "" {
 			return nil, ErrEmptySelector
 		}
-		current = findSelection(current, selector)
+		var err error
+		current, err = findSelection(current, selector)
+		if err != nil {
+			return nil, err
+		}
 	}
 	last := normalizeSelectorToken(chain.Steps[len(chain.Steps)-1].Raw)
 	if last == "" {
@@ -182,7 +236,10 @@ func extractStep(root *goquery.Selection, rule string) ([]string, error) {
 		}
 		return values, nil
 	}
-	selected := findSelection(current, last)
+	selected, err := findSelection(current, last)
+	if err != nil {
+		return nil, err
+	}
 	return extractFromSelection(selected, "text"), nil
 }
 
@@ -230,7 +287,11 @@ func selectStep(root *goquery.Selection, rule string) (*goquery.Selection, error
 		if selector == "" {
 			return nil, ErrEmptySelector
 		}
-		current = findSelection(current, selector)
+		var err error
+		current, err = findSelection(current, selector)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return current, nil
 }
@@ -387,22 +448,95 @@ func normalizeSelectorToken(raw string) string {
 
 // findSelection 对齐 Legado ElementsSingle.getElementsSingle：先剥离尾随索引（.N/!N/[...]），
 // 再按前置规则取元素，最后按索引筛选。
-func findSelection(root *goquery.Selection, selector string) *goquery.Selection {
+func findSelection(root *goquery.Selection, selector string) (*goquery.Selection, error) {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
-		return emptySelection(root)
+		return emptySelection(root), nil
 	}
-	parsed := parseSelector(selector)
-	selected := selectRule(root, parsed.beforeRule)
+	pseudo, exprs, hasPseudo := extractPseudoIndexes(selector)
+	if hasPseudo && pseudo == "" {
+		// 整个 token 是伪类（如 :eq(0)），作用于上一层选中的元素集合：
+		// 这里没有上层集合，退化到按原 token 处理（call 端 selectStep 已按步骤切分）。
+		pseudo = selector
+	}
+	parsed := parseSelector(pseudo)
+	selected, err := selectRule(root, parsed.beforeRule)
+	if err != nil {
+		return nil, err
+	}
 	if selected.Length() == 0 {
-		return selected
+		return selected, nil
 	}
-	return applySelectorIndexes(selected, parsed)
+	if hasPseudo {
+		// jsoup 扩展伪类按出现顺序套用到当前选中集合（Legado AnalyzeByJSoup 索引语义）。
+		for _, expr := range exprs {
+			indexes := expandSingleSelectorIndex(expr, selected.Length())
+			if len(indexes) == 0 {
+				return emptySelection(selected), nil
+			}
+			var out *goquery.Selection
+			for _, idx := range indexes {
+				item := selected.Eq(idx)
+				if out == nil {
+					out = item
+				} else {
+					out = out.AddSelection(item)
+				}
+			}
+			selected = out
+		}
+	}
+	return applySelectorIndexes(selected, parsed), nil
+}
+
+// expandSingleSelectorIndex 展开单个伪类索引表达式为有效下标（越界剔除、负数转正）。
+func expandSingleSelectorIndex(expr selectorIndexExpr, length int) []int {
+	if length <= 0 {
+		return nil
+	}
+	if expr.single != nil {
+		idx := *expr.single
+		if idx < 0 {
+			idx += length
+		}
+		if idx < 0 || idx >= length {
+			return nil
+		}
+		return []int{idx}
+	}
+	if expr.rng == nil {
+		return nil
+	}
+	start := 0
+	if expr.rng.start != nil {
+		start = *expr.rng.start
+	}
+	if start < 0 {
+		start += length
+	}
+	if start < 0 || start >= length {
+		return nil
+	}
+	end := length - 1
+	if expr.rng.end != nil {
+		end = *expr.rng.end
+	}
+	if end < 0 {
+		end += length
+	}
+	if end >= length {
+		end = length - 1
+	}
+	out := []int{}
+	for idx := start; idx <= end; idx++ {
+		out = append(out, idx)
+	}
+	return out
 }
 
 // selectRule 处理逗号分组：各分支独立选取（允许单个分支非法或自带索引），
 // 合并去重后按文档序排列，与 jsoup select("a,b") 一致。text./children 前缀规则不按逗号拆分。
-func selectRule(root *goquery.Selection, rule string) *goquery.Selection {
+func selectRule(root *goquery.Selection, rule string) (*goquery.Selection, error) {
 	rule = strings.TrimSpace(rule)
 	if hasSelectorKeyword(rule) {
 		return selectBase(root, rule)
@@ -417,9 +551,13 @@ func selectRule(root *goquery.Selection, rule string) *goquery.Selection {
 		if part == "" {
 			continue
 		}
-		nodes = append(nodes, findSelection(root, part).Nodes...)
+		selected, err := findSelection(root, part)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, selected.Nodes...)
 	}
-	return emptySelection(root).AddNodes(sortDocumentOrder(nodes)...)
+	return emptySelection(root).AddNodes(sortDocumentOrder(nodes)...), nil
 }
 
 // hasSelectorKeyword 判断规则首个 "." 分段是否为 Legado 关键字（text/children）。
@@ -467,43 +605,67 @@ func sortDocumentOrder(nodes []*html.Node) []*html.Node {
 	return out
 }
 
-func selectBase(root *goquery.Selection, rule string) *goquery.Selection {
+func selectBase(root *goquery.Selection, rule string) (*goquery.Selection, error) {
 	rule = strings.TrimSpace(rule)
 	// 对齐 Legado：前置规则为空或首段为 children 时取直接子元素（其余分段被忽略）。
 	if head, _, _ := strings.Cut(rule, "."); rule == "" || strings.EqualFold(head, "children") {
-		return root.ChildrenMatcher(matchAnyElement)
+		return root.ChildrenMatcher(matchAnyElement), nil
 	}
 	if parsed := parseRegexAttrSelectors(rule); parsed.ok {
-		selected := root.FindMatcher(compileMatcher(parsed.broadRule))
+		broad, err := compileMatcher(parsed.broadRule)
+		if err != nil {
+			return nil, err
+		}
+		selected := root.FindMatcher(broad)
 		return withSelfMatches(root, filterSelectionByRegexAttrs(selected, parsed.filters), parsed.broadRule)
 	}
 	var selected *goquery.Selection
 	switch {
 	case strings.HasPrefix(strings.ToLower(rule), "class."):
 		// 对齐 Legado getElementsSingle：class. 只按第一段匹配（getElementsByClass(rules[1])）。
-		selected = root.FindMatcher(compileMatcher(selectorTokenWithIndex(rule, 6, true)))
+		m, err := compileMatcher(selectorTokenWithIndex(rule, 6, true))
+		if err != nil {
+			return nil, err
+		}
+		selected = root.FindMatcher(m)
 	case strings.HasPrefix(strings.ToLower(rule), "tag."):
 		// 对齐 Legado getElementsByTag(rules[1])：tag. 只按第一段匹配。
-		selected = root.FindMatcher(compileMatcher(selectorTokenWithIndex(rule, 4, false)))
+		m, err := compileMatcher(selectorTokenWithIndex(rule, 4, false))
+		if err != nil {
+			return nil, err
+		}
+		selected = root.FindMatcher(m)
 	case strings.HasPrefix(strings.ToLower(rule), "id."):
-		selected = root.FindMatcher(compileMatcher("#" + strings.TrimSpace(rule[3:])))
+		m, err := compileMatcher("#" + strings.TrimSpace(rule[3:]))
+		if err != nil {
+			return nil, err
+		}
+		selected = root.FindMatcher(m)
 	case strings.HasPrefix(strings.ToLower(rule), "text."):
-		return filterDeepestTextMatch(root, strings.TrimSpace(rule[5:]))
+		return filterDeepestTextMatch(root, strings.TrimSpace(rule[5:])), nil
 	default:
-		selected = root.FindMatcher(compileMatcher(rule))
+		m, err := compileMatcher(rule)
+		if err != nil {
+			return nil, err
+		}
+		selected = root.FindMatcher(m)
 	}
 	return withSelfMatches(root, selected, rule)
 }
 
-func withSelfMatches(root *goquery.Selection, selected *goquery.Selection, rule string) *goquery.Selection {
+func withSelfMatches(root *goquery.Selection, selected *goquery.Selection, rule string) (*goquery.Selection, error) {
 	if selected != nil && selected.Length() > 0 {
-		return selected
+		return selected, nil
 	}
-	self := root.FilterMatcher(compileMatcher(rule))
+	m, err := compileMatcher(rule)
+	if err != nil {
+		return nil, err
+	}
+	self := root.FilterMatcher(m)
 	if self.Length() > 0 {
-		return self
+		return self, nil
 	}
-	return selected
+	return selected, nil
 }
 
 func applySelectorIndexes(selection *goquery.Selection, parsed parsedSelector) *goquery.Selection {
@@ -855,7 +1017,9 @@ func extractFromSelection(selection *goquery.Selection, extractor string) []stri
 			value = strings.TrimSpace(ownText(item))
 		case "html":
 			clone := item.Clone()
-			clone.FindMatcher(compileMatcher("script,style")).Remove()
+			if sm, smErr := compileMatcher("script,style"); smErr == nil {
+				clone.FindMatcher(sm).Remove()
+			}
 			value, _ = goquery.OuterHtml(clone)
 			value = strings.TrimSpace(value)
 		case "all":
@@ -900,7 +1064,11 @@ func fallbackExtractorSelection(selection *goquery.Selection) *goquery.Selection
 	if selection.Nodes[0].Type != html.DocumentNode {
 		return nil
 	}
-	body := selection.FindMatcher(compileMatcher("body")).First()
+	bodyMatcher, bodyErr := compileMatcher("body")
+	if bodyErr != nil {
+		return nil
+	}
+	body := selection.FindMatcher(bodyMatcher).First()
 	if body.Length() == 1 {
 		children := body.ChildrenMatcher(matchAnyElement)
 		if children.Length() == 1 {

@@ -67,10 +67,12 @@ func FromMap(values map[string]string) Source {
 
 func Load(source Source) (Config, error) {
 	cfg := Config{
-		Addr:                        "127.0.0.1:8080",
-		DataDir:                     "data",
-		Env:                         EnvDevelopment,
-		DefaultUserAgent:            "Reader/0.1.0",
+		Addr:    "127.0.0.1:8080",
+		DataDir: "data",
+		Env:     EnvDevelopment,
+		// R5：对齐 Legado 同形稳定 Chrome UA（79.9% 书源依赖默认 UA），
+		// 避免默认 UA 扭曲 403 归因；READER_DEFAULT_USER_AGENT 可覆盖。
+		DefaultUserAgent:            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 		FetchTimeout:                30 * time.Second,
 		FetchMaxBodyBytes:           10 * 1024 * 1024,
 		FetchMaxRedirects:           5,

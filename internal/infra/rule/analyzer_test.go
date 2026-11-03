@@ -753,13 +753,13 @@ func TestAnalyzerRegexStepSeesRawTextFromLazyInput(t *testing.T) {
 
 // S06-01：@put 值含嵌套花括号时按平衡括号完整提取，不在第一个 `}` 处截断（对齐 Legado 平衡组语义）。
 func TestAnalyzerPutBalancedBracesValue(t *testing.T) {
-	// 对齐 Legado 语义：@put 值按平衡括号完整提取（{k:1}），剩余文本作主规则原样参与求值
-	// （顶层 `{rule}` 包裹在 Legado JSoup select 中同样无效，主规则不报语法错误）。
+	// 对齐 Legado 语义：@put 值按平衡括号完整提取（{k:1}），剩余文本作主规则原样参与求值。
+	// R1：顶层 `{rule}` 包裹在 cascadia 中为非法选择器，错误向上传播（原先静默 matchNothing）。
 	analyzer := NewAnalyzer(Context{})
 	input := `<div class="t">T</div>`
 	_, err := analyzer.GetString(context.Background(), `@put:{a:{k:1}}{class.t@text}`, input)
-	if err != nil {
-		t.Fatalf("GetString() error = %v", err)
+	if !strings.Contains(fmt.Sprint(err), "invalid css selector") {
+		t.Fatalf("GetString() error = %v, want invalid css selector", err)
 	}
 	if v := analyzer.Variables()["a"]; v != "{k:1}" {
 		t.Fatalf("put value = %q, want {k:1}", v)
@@ -944,5 +944,30 @@ func TestAnalyzerAppliesReplacePerItemOnAnySlice(t *testing.T) {
 	}
 	if got != "AB" {
 		t.Fatalf("GetString() = %q", got)
+	}
+}
+
+// TestSplitTopLevelChainConsecutiveSeparators 覆盖 R2：连续分隔符（a|||b / a%%%%b）
+// 在旧 range 循环下 partStart 追上 i 导致 rule[partStart:i] 越界 panic。
+// 语义与 Legado RuleAnalyzer.splitRule 一致：尾部剩余分隔符并入最后一段。
+func TestSplitTopLevelChainConsecutiveSeparators(t *testing.T) {
+	cases := []struct {
+		rule  string
+		parts []string
+	}{
+		{"a|||b", []string{"a", "|b"}},
+		{"a||||b", []string{"a", "", "b"}},
+		{"a%%%%b", []string{"a", "", "b"}},
+		{"a||b", []string{"a", "b"}},
+		{"a%%b", []string{"a", "b"}},
+	}
+	for _, c := range cases {
+		parts, _, ok := splitTopLevelChain(c.rule)
+		if !ok {
+			t.Fatalf("splitTopLevelChain(%q) ok = false", c.rule)
+		}
+		if !reflect.DeepEqual(parts, c.parts) {
+			t.Fatalf("splitTopLevelChain(%q) parts = %q, want %q", c.rule, parts, c.parts)
+		}
 	}
 }

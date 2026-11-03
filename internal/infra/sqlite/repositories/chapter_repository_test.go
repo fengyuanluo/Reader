@@ -102,3 +102,37 @@ func TestReplaceByBookClearsContentCache(t *testing.T) {
 		t.Fatalf("GetContent() after reorder = %v, %v, want miss", ok, err)
 	}
 }
+
+// TestReplaceByBookDuplicateURLs 覆盖 R3 迁移后语义：同一 book 允许多章同 URL
+// （原 (book_id,url) 主键会冲突导致真实目录写库失败），全部按 chapter_index 落库。
+func TestReplaceByBookDuplicateURLs(t *testing.T) {
+	ctx := context.Background()
+	db := openRepoTestDB(t)
+	books := NewBookRepository(db)
+	chapters := NewChapterRepository(db)
+	b := testBook("https://example.test/book/dup")
+	if err := books.Save(ctx, b); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	bookID := bookIDFromURL(b.BookURL)
+	sameURL := "https://example.test/c/dup"
+	if err := chapters.ReplaceByBook(ctx, bookID, []*book.BookChapter{
+		{BookURL: b.BookURL, URL: sameURL, Title: "第一章", Index: 0},
+		{BookURL: b.BookURL, URL: sameURL, Title: "第二章", Index: 1},
+		{BookURL: b.BookURL, URL: sameURL, Title: "第三章", Index: 2},
+	}); err != nil {
+		t.Fatalf("ReplaceByBook() error = %v", err)
+	}
+	got, err := chapters.ListByBook(ctx, bookID)
+	if err != nil {
+		t.Fatalf("ListByBook() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("ListByBook() rows = %d, want 3", len(got))
+	}
+	for i, want := range []string{"第一章", "第二章", "第三章"} {
+		if got[i].Index != i || got[i].Title != want {
+			t.Fatalf("row %d = (%d, %q), want (%d, %q)", i, got[i].Index, got[i].Title, i, want)
+		}
+	}
+}
