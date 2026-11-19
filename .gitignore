@@ -27,3 +27,23 @@ data/
 *.db-wal
 
 # Real E2E reports are versioned snapshots and can be regenerated in place.
+
+*.pyc
+__pycache__/
+node_modules/
+.venv/
+venv/
+*.har
+*.apk
+*.dex
+.gradle/
+build/
+.dart_tool/
+.worktrees/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+release/
+calibre-bin/
+*.sqlite*
+cards_index_new.csv
